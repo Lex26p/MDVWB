@@ -20,6 +20,10 @@
 #include <string_view>
 #include <vector>
 
+#ifndef MDVWB_VERSION
+#define MDVWB_VERSION "development"
+#endif
+
 namespace {
 
 using mdv::RequestFrame;
@@ -1434,6 +1438,9 @@ bool TestApplicationConfiguration()
         manual.config.manualControl->value == 24 &&
         !manual.config.readOnly;
 
+    const auto version = Parse({"MDVWB", "--version"});
+    const bool versionOk = version.action == mdv::CommandLineAction::Version;
+
     bool duplicateRejected = false;
     bool timingRejected = false;
     bool tooFastRejected = false;
@@ -1490,6 +1497,7 @@ bool TestApplicationConfiguration()
     return Check(legacyOk, "legacy launch format parsed") &&
         Check(namedOk, "named launch options parsed") &&
         Check(manualOk, "manual hardware test command parsed") &&
+        Check(versionOk, "version option parsed") &&
         Check(duplicateRejected, "duplicate addresses rejected") &&
         Check(timingRejected, "unsafe timing rejected") &&
         Check(tooFastRejected, "period faster than 150 ms rejected") &&
@@ -1546,7 +1554,7 @@ int RunProtocolSelfTest()
         return 1;
     }
 
-    std::cout << "MDV protocol, cache, serial, polling, command, MQTT, system status, configuration, read-only and manual control self-test: OK\n";
+    std::cout << "MDVWB 1.0 protocol, cache, serial, polling, command, MQTT, system status, configuration and hardware-test self-test: OK\n";
     return 0;
 }
 
@@ -1826,6 +1834,9 @@ int main(int argc, char* argv[])
             return RunProtocolSelfTest();
         case mdv::CommandLineAction::Help:
             std::cout << mdv::BuildHelpText(argc > 0 ? argv[0] : "MDVWB");
+            return 0;
+        case mdv::CommandLineAction::Version:
+            std::cout << "MDVWB " << MDVWB_VERSION << '\n';
             return 0;
         case mdv::CommandLineAction::Run:
             if (commandLine.config.manualControl.has_value()) {

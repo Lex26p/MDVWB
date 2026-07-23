@@ -41,6 +41,7 @@ enum class CommandLineAction {
     Run,
     SelfTest,
     Help,
+    Version,
 };
 
 struct CommandLineResult {

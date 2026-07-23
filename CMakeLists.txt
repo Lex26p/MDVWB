@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(MDVWB VERSION 0.13.0 LANGUAGES CXX)
+project(MDVWB VERSION 1.0.0 LANGUAGES CXX)
 
 add_executable(MDVWB
     MDVWB.cpp
@@ -22,6 +22,7 @@ add_executable(MDVWB
 )
 
 target_compile_features(MDVWB PRIVATE cxx_std_20)
+target_compile_definitions(MDVWB PRIVATE MDVWB_VERSION="${PROJECT_VERSION}")
 
 option(MDVWB_REQUIRE_MOSQUITTO "Fail configuration when libmosquitto is unavailable" OFF)
 

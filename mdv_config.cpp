@@ -334,6 +334,12 @@ CommandLineResult ParseCommandLine(int argc, char* argv[])
         }
         return CommandLineResult{.action = CommandLineAction::Help};
     }
+    if (first == "--version") {
+        if (argc != 2) {
+            throw std::invalid_argument("--version does not accept other arguments");
+        }
+        return CommandLineResult{.action = CommandLineAction::Version};
+    }
 
     CommandLineResult result;
     result.action = CommandLineAction::Run;
@@ -378,6 +384,7 @@ std::string BuildHelpText(std::string_view executableName)
         << "  --publish-poll-address    Publish sist-<bus>/GanGetID each slot\n\n"
         << "Other:\n"
         << "  --self-test               Run internal tests\n"
+        << "  --version                 Show driver version\n"
         << "  --help, -h                Show this help\n";
     return output.str();
 }
