@@ -1,0 +1,92 @@
+name: Build ARM64 Offline Package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "*.cpp"
+      - "*.h"
+      - "CMakeLists.txt"
+      - "deploy/**"
+      - ".github/workflows/build-arm64-offline.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Enable ARM64 emulation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build and test on Debian 11 ARM64
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD:/src" \
+            -w /src \
+            debian:bullseye \
+            bash -lc '
+              set -eux
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                build-essential \
+                ca-certificates \
+                cmake \
+                libmosquitto-dev
+
+              rm -rf out/build/arm64-release
+              cmake -S . -B out/build/arm64-release \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DMDVWB_REQUIRE_MOSQUITTO=ON \
+                -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+              cmake --build out/build/arm64-release --parallel 2
+              ctest --test-dir out/build/arm64-release --output-on-failure
+              ./out/build/arm64-release/MDVWB --version
+              ./out/build/arm64-release/MDVWB --self-test
+            '
+
+      - name: Create offline installation archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf dist
+          mkdir -p dist/MDVWB-arm64
+
+          install -m 0755 out/build/arm64-release/MDVWB dist/MDVWB-arm64/MDVWB
+          install -m 0755 deploy/mdvwb-run dist/MDVWB-arm64/mdvwb-run
+          install -m 0755 deploy/offline-install.sh dist/MDVWB-arm64/offline-install.sh
+          install -m 0644 deploy/mdvwb.service dist/MDVWB-arm64/mdvwb.service
+          install -m 0640 deploy/mdvwb.env dist/MDVWB-arm64/mdvwb.env
+
+          file dist/MDVWB-arm64/MDVWB
+          readelf -h dist/MDVWB-arm64/MDVWB | grep -E "Class:|Machine:"
+
+          (
+            cd dist/MDVWB-arm64
+            sha256sum MDVWB mdvwb-run mdvwb.service mdvwb.env offline-install.sh > SHA256SUMS
+          )
+
+          tar -C dist -czf dist/MDVWB-arm64-offline.tar.gz MDVWB-arm64
+          sha256sum dist/MDVWB-arm64-offline.tar.gz > dist/MDVWB-arm64-offline.tar.gz.sha256
+
+      - name: Upload offline package
+        uses: actions/upload-artifact@v4
+        with:
+          name: MDVWB-arm64-offline
+          path: |
+            dist/MDVWB-arm64-offline.tar.gz
+            dist/MDVWB-arm64-offline.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
