@@ -1,7 +1,10 @@
 #include "mdv_mqtt.h"
 
 #include <charconv>
+#include <cmath>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -135,6 +138,124 @@ struct ParsedDeviceName {
     default:
         throw std::invalid_argument("Speed must be in range 1..4");
     }
+}
+
+
+[[nodiscard]] int ModeToMqtt(Mode mode)
+{
+    switch (mode) {
+    case Mode::Cool:
+        return 0;
+    case Mode::Heat:
+        return 1;
+    case Mode::Dry:
+        return 2;
+    case Mode::Fan:
+        return 3;
+    case Mode::Auto:
+        return 4;
+    }
+    throw std::invalid_argument("unknown MDV mode");
+}
+
+[[nodiscard]] int SpeedToMqtt(FanSpeed speed)
+{
+    switch (speed) {
+    case FanSpeed::Low:
+        return 1;
+    case FanSpeed::Medium:
+        return 2;
+    case FanSpeed::High:
+        return 3;
+    case FanSpeed::Auto:
+        return 4;
+    }
+    throw std::invalid_argument("unknown MDV fan speed");
+}
+
+[[nodiscard]] std::optional<Mode> ModeFromCachedFrame(const RequestFrame& frame) noexcept
+{
+    switch (frame[6] & 0x1FU) {
+    case static_cast<std::uint8_t>(Mode::Cool):
+        return Mode::Cool;
+    case static_cast<std::uint8_t>(Mode::Heat):
+        return Mode::Heat;
+    case static_cast<std::uint8_t>(Mode::Dry):
+        return Mode::Dry;
+    case static_cast<std::uint8_t>(Mode::Fan):
+        return Mode::Fan;
+    case static_cast<std::uint8_t>(Mode::Auto):
+        return Mode::Auto;
+    default:
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] std::optional<FanSpeed> SpeedFromCachedFrame(const RequestFrame& frame) noexcept
+{
+    switch (frame[7]) {
+    case static_cast<std::uint8_t>(FanSpeed::Low):
+        return FanSpeed::Low;
+    case static_cast<std::uint8_t>(FanSpeed::Medium):
+        return FanSpeed::Medium;
+    case static_cast<std::uint8_t>(FanSpeed::High):
+        return FanSpeed::High;
+    case static_cast<std::uint8_t>(FanSpeed::Auto):
+        return FanSpeed::Auto;
+    default:
+        return std::nullopt;
+    }
+}
+
+[[nodiscard]] int FirstAlarmCode(const DeviceState& state) noexcept
+{
+    for (int bit = 0; bit < 8; ++bit) {
+        if ((state.errorsE0E7 & (1U << bit)) != 0) {
+            return bit + 1;
+        }
+    }
+    for (int bit = 0; bit < 8; ++bit) {
+        if ((state.errorsE8EF & (1U << bit)) != 0) {
+            return bit + 9;
+        }
+    }
+    return 0;
+}
+
+[[nodiscard]] int DeviceStatus(const DeviceState& state)
+{
+    if (FirstAlarmCode(state) != 0) {
+        return 6;
+    }
+    if (!state.power) {
+        return 0;
+    }
+
+    const auto mode = state.mode.value_or(Mode::Auto);
+    switch (mode) {
+    case Mode::Cool:
+        return 1;
+    case Mode::Heat:
+        return 2;
+    case Mode::Dry:
+        return 3;
+    case Mode::Fan:
+        return 4;
+    case Mode::Auto:
+        return 5;
+    }
+    return 0;
+}
+
+[[nodiscard]] std::string FormatNumber(double value)
+{
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(1) << value;
+    auto text = stream.str();
+    if (text.ends_with(".0")) {
+        text.resize(text.size() - 2);
+    }
+    return text;
 }
 
 [[nodiscard]] bool BoolFromMqtt(int value, std::string_view control)
@@ -331,6 +452,129 @@ std::optional<MqttCommandResult> MqttCommandService::ProcessOne()
 std::size_t MqttCommandService::PendingCount() const
 {
     return inbox_.Size();
+}
+
+
+MqttStatePublisher::MqttStatePublisher(int busNumber, IMqttClient& client)
+    : busNumber_(busNumber), client_(client)
+{
+    if (busNumber_ < 0) {
+        throw std::invalid_argument("MQTT bus number cannot be negative");
+    }
+}
+
+void MqttStatePublisher::PublishAfter(
+    const MdvDriver& driver,
+    const DriverResult& result)
+{
+    if (result.operation != DriverOperation::PollRead &&
+        result.operation != DriverOperation::ConfirmRead) {
+        return;
+    }
+
+    const auto& runtime = driver.DeviceByAddress(result.address);
+    if (result.outcome == DriverOutcome::Success) {
+        PublishDevice(runtime);
+    }
+    else {
+        PublishOffline(result.address, false);
+    }
+}
+
+void MqttStatePublisher::PublishDevice(
+    const DeviceRuntime& runtime,
+    bool force)
+{
+    const auto address = runtime.device.Address();
+    if (!runtime.online || !runtime.device.HasActualState()) {
+        PublishOffline(address, force);
+        return;
+    }
+
+    const auto& state = runtime.device.ActualState();
+    const auto& cached = runtime.device.CachedSetFrame();
+    auto& previous = published_[address];
+
+    const auto mode = state.mode.has_value()
+        ? state.mode
+        : ModeFromCachedFrame(cached);
+    const auto speed = state.fanSpeed.has_value()
+        ? state.fanSpeed
+        : SpeedFromCachedFrame(cached);
+    const auto setTemperature = state.setTemperature >= 16 && state.setTemperature <= 32
+        ? state.setTemperature
+        : cached[8];
+    const auto alarmCode = FirstAlarmCode(state);
+    const auto alarm = alarmCode == 0 ? 0 : 1;
+
+    PublishInteger(address, "Power", state.power ? 1 : 0, previous.power, force);
+    if (mode.has_value()) {
+        PublishInteger(address, "Mode", ModeToMqtt(*mode), previous.mode, force);
+    }
+    if (speed.has_value()) {
+        PublishInteger(address, "Speed", SpeedToMqtt(*speed), previous.speed, force);
+    }
+    PublishInteger(
+        address, "SetTemp", static_cast<int>(setTemperature),
+        previous.setTemperature, force);
+    if (state.roomTemperature.has_value()) {
+        PublishNumber(
+            address, "Temp", *state.roomTemperature,
+            previous.roomTemperature, force);
+    }
+    PublishInteger(address, "Blinds", state.blinds ? 1 : 0, previous.blinds, force);
+    PublishInteger(address, "Blok", state.modeLocked ? 1 : 0, previous.blocked, force);
+    PublishInteger(address, "Alarm", alarm, previous.alarm, force);
+    PublishInteger(address, "AlarmCode", alarmCode, previous.alarmCode, force);
+    PublishInteger(address, "Status", DeviceStatus(state), previous.status, force);
+}
+
+void MqttStatePublisher::Reset() noexcept
+{
+    published_ = {};
+}
+
+void MqttStatePublisher::PublishOffline(std::uint8_t address, bool force)
+{
+    auto& previous = published_[address];
+    PublishInteger(address, "Alarm", 2, previous.alarm, force);
+    PublishInteger(address, "Status", 7, previous.status, force);
+}
+
+void MqttStatePublisher::PublishInteger(
+    std::uint8_t address,
+    std::string_view control,
+    int value,
+    std::optional<int>& previous,
+    bool force)
+{
+    if (!force && previous.has_value() && *previous == value) {
+        return;
+    }
+    client_.Publish(Topic(address, control), std::to_string(value), false);
+    previous = value;
+}
+
+void MqttStatePublisher::PublishNumber(
+    std::uint8_t address,
+    std::string_view control,
+    double value,
+    std::optional<double>& previous,
+    bool force)
+{
+    if (!force && previous.has_value() && std::abs(*previous - value) < 0.0001) {
+        return;
+    }
+    client_.Publish(Topic(address, control), FormatNumber(value), false);
+    previous = value;
+}
+
+std::string MqttStatePublisher::Topic(
+    std::uint8_t address,
+    std::string_view control) const
+{
+    return "/devices/Fan-" + std::to_string(busNumber_) + "_" +
+        std::to_string(address) + "/controls/" + std::string(control) + "/on";
 }
 
 } // namespace mdv

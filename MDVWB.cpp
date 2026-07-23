@@ -5,6 +5,7 @@
 #include "mdv_protocol.h"
 #include "mdv_serial.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -415,7 +416,10 @@ ResponseFrame MakeDriverResponse(
     std::uint8_t modeByte = 0x88,
     std::uint8_t speedByte = 0x84,
     std::uint8_t setTemperature = 23,
-    std::uint8_t additionalFunctions = 0)
+    std::uint8_t additionalFunctions = 0,
+    std::uint8_t roomTemperatureRaw = 0x58,
+    std::uint8_t errorsE0E7 = 0,
+    std::uint8_t errorsE8EF = 0)
 {
     ResponseFrame response{
         0xAA, 0xC0, 0x80, 0x00, 0x00, 0x00, 0xE0, 0x14,
@@ -428,7 +432,10 @@ ResponseFrame MakeDriverResponse(
     response[8] = modeByte;
     response[9] = speedByte;
     response[10] = setTemperature;
+    response[11] = roomTemperatureRaw;
     response[20] = additionalFunctions;
+    response[22] = errorsE0E7;
+    response[23] = errorsE8EF;
 
     std::uint8_t sum = 0;
     for (std::size_t index = 1; index <= 29; ++index) {
@@ -822,6 +829,18 @@ public:
         subscriptions.emplace_back(topicFilter);
     }
 
+    void Publish(
+        std::string_view topic,
+        std::string_view payload,
+        bool retained) override
+    {
+        publications.push_back(mdv::MqttPublication{
+            .topic = std::string(topic),
+            .payload = std::string(payload),
+            .retained = retained,
+        });
+    }
+
     void Emit(std::string topic, std::string payload, bool retained = false)
     {
         if (!handler_) {
@@ -835,6 +854,7 @@ public:
     }
 
     std::vector<std::string> subscriptions;
+    std::vector<mdv::MqttPublication> publications;
 
 private:
     MessageHandler handler_;
@@ -890,6 +910,167 @@ bool TestMqttCommandQueueAndRouting()
         Check(runtime.blockPending && runtime.desiredBlocked,
               "MQTT Blok mapping") &&
         Check(driver.HasQueuedWork(), "MQTT commands queue RS-485 work");
+}
+
+bool TestMqttStatePublishingOnlyChanges()
+{
+    ScriptedTransport transport({
+        SuccessfulTransaction(MakeDriverResponse(11)),
+        SuccessfulTransaction(MakeDriverResponse(11)),
+        SuccessfulTransaction(MakeDriverResponse(
+            11, mdv::Command::Read, 0x88, 0x84, 23, 0, 0x5A)),
+    });
+    mdv::MdvDriver driver({11}, transport);
+    FakeMqttClient client;
+    mdv::MqttStatePublisher publisher(1, client);
+
+    const auto first = driver.ProcessNext();
+    publisher.PublishAfter(driver, first);
+    const auto initialCount = client.publications.size();
+
+    const auto unchanged = driver.ProcessNext();
+    publisher.PublishAfter(driver, unchanged);
+    const auto unchangedCount = client.publications.size();
+
+    const auto changed = driver.ProcessNext();
+    publisher.PublishAfter(driver, changed);
+
+    const bool initialTopics = initialCount == 10 &&
+        client.publications[0].topic == "/devices/Fan-1_11/controls/Power/on" &&
+        client.publications[0].payload == "1" &&
+        client.publications[1].topic == "/devices/Fan-1_11/controls/Mode/on" &&
+        client.publications[1].payload == "0" &&
+        client.publications[2].topic == "/devices/Fan-1_11/controls/Speed/on" &&
+        client.publications[2].payload == "4" &&
+        client.publications[3].topic == "/devices/Fan-1_11/controls/SetTemp/on" &&
+        client.publications[3].payload == "23" &&
+        client.publications[4].topic == "/devices/Fan-1_11/controls/Temp/on" &&
+        client.publications[4].payload == "24" &&
+        client.publications[5].topic == "/devices/Fan-1_11/controls/Blinds/on" &&
+        client.publications[6].topic == "/devices/Fan-1_11/controls/Blok/on" &&
+        client.publications[7].topic == "/devices/Fan-1_11/controls/Alarm/on" &&
+        client.publications[8].topic == "/devices/Fan-1_11/controls/AlarmCode/on" &&
+        client.publications[9].topic == "/devices/Fan-1_11/controls/Status/on" &&
+        client.publications[9].payload == "1";
+
+    const auto& last = client.publications.back();
+    const bool allNonRetained = std::all_of(
+        client.publications.begin(), client.publications.end(),
+        [](const mdv::MqttPublication& publication) {
+            return !publication.retained;
+        });
+
+    return Check(first.outcome == mdv::DriverOutcome::Success,
+                 "first C0 is available for MQTT state") &&
+        Check(initialTopics, "first C0 publishes all supported /on values") &&
+        Check(unchangedCount == initialCount,
+              "unchanged C0 produces no MQTT publications") &&
+        Check(client.publications.size() == initialCount + 1 &&
+                  last.topic == "/devices/Fan-1_11/controls/Temp/on" &&
+                  last.payload == "25",
+              "only changed temperature is published") &&
+        Check(allNonRetained, "state /on publications are not retained");
+}
+
+bool TestMqttAlarmOfflineAndRecovery()
+{
+    ScriptedTransport transport({
+        SuccessfulTransaction(MakeDriverResponse(12)),
+        SuccessfulTransaction(MakeDriverResponse(
+            12, mdv::Command::Read, 0x88, 0x84, 23, 0, 0x58, 0x04)),
+        mdv::TransactionResult{
+            .status = mdv::TransactionStatus::Timeout,
+            .response = std::nullopt,
+            .error = "poll timeout",
+        },
+        mdv::TransactionResult{
+            .status = mdv::TransactionStatus::Timeout,
+            .response = std::nullopt,
+            .error = "poll timeout",
+        },
+        SuccessfulTransaction(MakeDriverResponse(12)),
+    });
+    mdv::MdvDriver driver({12}, transport);
+    FakeMqttClient client;
+    mdv::MqttStatePublisher publisher(1, client);
+
+    auto result = driver.ProcessNext();
+    publisher.PublishAfter(driver, result);
+    client.publications.clear();
+
+    result = driver.ProcessNext();
+    publisher.PublishAfter(driver, result);
+    const auto alarmCount = client.publications.size();
+
+    result = driver.ProcessNext();
+    publisher.PublishAfter(driver, result);
+    const auto offlineCount = client.publications.size();
+
+    result = driver.ProcessNext();
+    publisher.PublishAfter(driver, result);
+    const auto repeatedOfflineCount = client.publications.size();
+
+    result = driver.ProcessNext();
+    publisher.PublishAfter(driver, result);
+
+    const bool alarmPublications = alarmCount == 3 &&
+        client.publications[0].topic.ends_with("/Alarm/on") &&
+        client.publications[0].payload == "1" &&
+        client.publications[1].topic.ends_with("/AlarmCode/on") &&
+        client.publications[1].payload == "3" &&
+        client.publications[2].topic.ends_with("/Status/on") &&
+        client.publications[2].payload == "6";
+
+    const bool offlinePublications = offlineCount == alarmCount + 2 &&
+        client.publications[3].topic.ends_with("/Alarm/on") &&
+        client.publications[3].payload == "2" &&
+        client.publications[4].topic.ends_with("/Status/on") &&
+        client.publications[4].payload == "7";
+
+    const bool recoveryPublications = client.publications.size() == offlineCount + 3 &&
+        client.publications[5].topic.ends_with("/Alarm/on") &&
+        client.publications[5].payload == "0" &&
+        client.publications[6].topic.ends_with("/AlarmCode/on") &&
+        client.publications[6].payload == "0" &&
+        client.publications[7].topic.ends_with("/Status/on") &&
+        client.publications[7].payload == "1";
+
+    return Check(alarmPublications, "E2 publishes Alarm=1, AlarmCode=3 and Status=6") &&
+        Check(offlinePublications, "timeout publishes Alarm=2 and Status=7") &&
+        Check(repeatedOfflineCount == offlineCount,
+              "repeated timeout does not repeat offline state") &&
+        Check(recoveryPublications,
+              "recovery publishes cleared alarm and working status");
+}
+
+bool TestMqttBlockDoesNotReplaceStatus()
+{
+    ScriptedTransport transport({
+        SuccessfulTransaction(MakeDriverResponse(
+            13, mdv::Command::Read, 0xA8, 0x84, 23)),
+    });
+    mdv::MdvDriver driver({13}, transport);
+    FakeMqttClient client;
+    mdv::MqttStatePublisher publisher(1, client);
+
+    const auto result = driver.ProcessNext();
+    publisher.PublishAfter(driver, result);
+
+    const auto blocked = std::find_if(
+        client.publications.begin(), client.publications.end(),
+        [](const mdv::MqttPublication& publication) {
+            return publication.topic.ends_with("/Blok/on");
+        });
+    const auto status = std::find_if(
+        client.publications.begin(), client.publications.end(),
+        [](const mdv::MqttPublication& publication) {
+            return publication.topic.ends_with("/Status/on");
+        });
+
+    return Check(blocked != client.publications.end() && blocked->payload == "1",
+                 "Blok is published separately") &&
+        Check(status != client.publications.end() && status->payload == "1",
+              "Blok does not replace Cool status");
 }
 
 bool TestMqttValidation()
@@ -956,13 +1137,16 @@ int RunProtocolSelfTest()
         TestDriverRejectsCommandBeforeFirstRead() &&
         TestBlockQueueAndConfirmation() &&
         TestMqttCommandQueueAndRouting() &&
+        TestMqttStatePublishingOnlyChanges() &&
+        TestMqttAlarmOfflineAndRecovery() &&
+        TestMqttBlockDoesNotReplaceStatus() &&
         TestMqttValidation();
 
     if (!ok) {
         return 1;
     }
 
-    std::cout << "MDV protocol, cache, serial, polling, command and MQTT self-test: OK\n";
+    std::cout << "MDV protocol, cache, serial, polling, command and MQTT state self-test: OK\n";
     return 0;
 }
 
@@ -972,7 +1156,7 @@ int main(int argc, char* argv[])
         return RunProtocolSelfTest();
     }
 
-    std::cout << "MDVWB step 5: queued C3 commands and confirmation reads are ready.\n"
+    std::cout << "MDVWB step 7: changed-only MQTT state publishing is ready.\n"
                  "Run with --self-test to verify known MDV behavior.\n";
     return 0;
 }
