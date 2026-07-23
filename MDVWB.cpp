@@ -1246,6 +1246,7 @@ bool TestApplicationConfiguration()
         "--mqtt-reconnect", "2",
         "--mqtt-reconnect-max", "20",
         "--publish-poll-address",
+        "--read-only",
     });
     const bool namedOk = named.config.addresses ==
             std::vector<std::uint8_t>({0, 17, 63}) &&
@@ -1262,7 +1263,8 @@ bool TestApplicationConfiguration()
         named.config.mqtt.reconnectDelaySeconds == 2 &&
         named.config.mqtt.reconnectDelayMaxSeconds == 20 &&
         named.config.mqtt.clientId == "mdvwb-3" &&
-        named.config.publishPollAddress;
+        named.config.publishPollAddress &&
+        named.config.readOnly;
 
     bool duplicateRejected = false;
     bool timingRejected = false;
@@ -1342,7 +1344,7 @@ int RunProtocolSelfTest()
         return 1;
     }
 
-    std::cout << "MDV protocol, cache, serial, polling, command, MQTT, system status and configuration self-test: OK\n";
+    std::cout << "MDV protocol, cache, serial, polling, command, MQTT, system status, configuration and read-only mode self-test: OK\n";
     return 0;
 }
 
@@ -1353,6 +1355,71 @@ volatile std::sig_atomic_t gStopRequested = 0;
 void RequestStop(int) noexcept
 {
     gStopRequested = 1;
+}
+
+class ConsoleStateClient final : public mdv::IMqttClient {
+public:
+    void SetMessageHandler(MessageHandler) override
+    {
+    }
+
+    void Subscribe(std::string_view) override
+    {
+    }
+
+    void Publish(
+        std::string_view topic,
+        std::string_view payload,
+        bool) override
+    {
+        std::cout << topic << " = " << payload << '\n';
+    }
+};
+
+int RunReadOnlyApplication(const mdv::ApplicationConfig& config)
+{
+    mdv::MdvSerialTransport transport(config.timing);
+    transport.Open(config.serialPort);
+
+    mdv::MdvDriver driver(config.addresses, transport, config.masterId);
+    ConsoleStateClient console;
+    mdv::MqttStatePublisher statePublisher(config.busNumber, console);
+
+    std::signal(SIGINT, RequestStop);
+    std::signal(SIGTERM, RequestStop);
+
+    std::cout
+        << "MDVWB read-only test started: port=" << config.serialPort
+        << ", bus=" << config.busNumber
+        << ", addresses=" << mdv::FormatAddressList(config.addresses)
+        << ", period=" << config.timing.transactionPeriod.count() << " ms"
+        << ", response-timeout=" << config.timing.responseTimeout.count() << " ms\n"
+        << "Safety: only C0 requests are enabled; MQTT, C3, CC and CD are disabled.\n"
+        << "Press Ctrl+C to stop.\n";
+
+    std::string lastError;
+    while (gStopRequested == 0) {
+        const auto result = driver.ProcessNext();
+        statePublisher.PublishAfter(driver, result);
+
+        if (result.outcome == mdv::DriverOutcome::IoError ||
+            result.outcome == mdv::DriverOutcome::InvalidResponse) {
+            if (result.error != lastError) {
+                std::cerr
+                    << "Fan-" << config.busNumber << '_'
+                    << static_cast<int>(result.address)
+                    << ": " << result.error << '\n';
+                lastError = result.error;
+            }
+        }
+        else if (result.outcome == mdv::DriverOutcome::Success) {
+            lastError.clear();
+        }
+    }
+
+    transport.Close();
+    std::cout << "MDVWB read-only test stopped.\n";
+    return 0;
 }
 
 int RunApplication(const mdv::ApplicationConfig& config)
@@ -1428,7 +1495,9 @@ int main(int argc, char* argv[])
             std::cout << mdv::BuildHelpText(argc > 0 ? argv[0] : "MDVWB");
             return 0;
         case mdv::CommandLineAction::Run:
-            return RunApplication(commandLine.config);
+            return commandLine.config.readOnly
+                ? RunReadOnlyApplication(commandLine.config)
+                : RunApplication(commandLine.config);
         }
     }
     catch (const std::invalid_argument& error) {

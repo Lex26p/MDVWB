@@ -18,6 +18,7 @@ struct ApplicationConfig {
     TimingSettings timing{};
     MqttConnectionOptions mqtt{};
     bool publishPollAddress = false;
+    bool readOnly = false;
 };
 
 enum class CommandLineAction {

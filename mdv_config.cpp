@@ -224,6 +224,9 @@ void ValidateConfig(ApplicationConfig& config)
         else if (option == "--publish-poll-address") {
             config.publishPollAddress = true;
         }
+        else if (option == "--read-only") {
+            config.readOnly = true;
+        }
         else {
             throw std::invalid_argument(
                 "unknown command-line option: " + std::string(option));
@@ -291,6 +294,8 @@ std::string BuildHelpText(std::string_view executableName)
         << "  --mqtt-keepalive SEC      Default 60\n"
         << "  --mqtt-reconnect SEC      Default 1\n"
         << "  --mqtt-reconnect-max SEC  Default 10\n\n"
+        << "Safe hardware test:\n"
+        << "  --read-only               Poll C0 only; no MQTT and no write commands\n\n"
         << "Diagnostics:\n"
         << "  --publish-poll-address    Publish sist-<bus>/GanGetID each slot\n\n"
         << "Other:\n"

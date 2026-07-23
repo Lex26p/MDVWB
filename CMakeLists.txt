@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(MDVWB VERSION 0.11.0 LANGUAGES CXX)
+project(MDVWB VERSION 0.12.0 LANGUAGES CXX)
 
 add_executable(MDVWB
     MDVWB.cpp
