@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(MDVWB VERSION 0.9.0 LANGUAGES CXX)
+project(MDVWB VERSION 0.10.0 LANGUAGES CXX)
 
 add_executable(MDVWB
     MDVWB.cpp
@@ -40,7 +40,7 @@ else()
 endif()
 
 if(MSVC)
-    target_compile_options(MDVWB PRIVATE /W4 /permissive-)
+    target_compile_options(MDVWB PRIVATE /W4 /permissive- /utf-8)
 else()
     target_compile_options(MDVWB PRIVATE -Wall -Wextra -Wpedantic)
 endif()

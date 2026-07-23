@@ -578,3 +578,90 @@ std::string MqttStatePublisher::Topic(
 }
 
 } // namespace mdv
+
+namespace mdv {
+
+MqttSystemPublisher::MqttSystemPublisher(
+    int busNumber,
+    IMqttClient& client,
+    bool publishPollAddress)
+    : busNumber_(busNumber),
+      client_(client),
+      publishPollAddress_(publishPollAddress)
+{
+    if (busNumber_ < 0) {
+        throw std::invalid_argument("MQTT bus number cannot be negative");
+    }
+}
+
+void MqttSystemPublisher::PublishSerial(std::string_view value, bool force)
+{
+    PublishText("Serial", value, serial_, force);
+}
+
+void MqttSystemPublisher::PublishError(std::string_view value, bool force)
+{
+    PublishText("Error", value, error_, force);
+}
+
+void MqttSystemPublisher::PublishAfter(const DriverResult& result)
+{
+    if (publishPollAddress_) {
+        PublishInteger("GanGetID", static_cast<int>(result.address), pollAddress_, false);
+    }
+
+    switch (result.outcome) {
+    case DriverOutcome::Success:
+        PublishError("");
+        break;
+    case DriverOutcome::Timeout:
+        // Per-device Alarm=2 and Status=7 already describe a normal timeout.
+        // Do not overwrite the system Error topic on every missing fan coil.
+        break;
+    case DriverOutcome::IoError:
+    case DriverOutcome::InvalidResponse:
+        PublishError(result.error);
+        break;
+    }
+}
+
+void MqttSystemPublisher::Reset() noexcept
+{
+    serial_.reset();
+    error_.reset();
+    pollAddress_.reset();
+}
+
+void MqttSystemPublisher::PublishText(
+    std::string_view control,
+    std::string_view value,
+    std::optional<std::string>& previous,
+    bool force)
+{
+    if (!force && previous.has_value() && *previous == value) {
+        return;
+    }
+    client_.Publish(Topic(control), value, false);
+    previous = std::string(value);
+}
+
+void MqttSystemPublisher::PublishInteger(
+    std::string_view control,
+    int value,
+    std::optional<int>& previous,
+    bool force)
+{
+    if (!force && previous.has_value() && *previous == value) {
+        return;
+    }
+    client_.Publish(Topic(control), std::to_string(value), false);
+    previous = value;
+}
+
+std::string MqttSystemPublisher::Topic(std::string_view control) const
+{
+    return "/devices/sist-" + std::to_string(busNumber_) +
+        "/controls/" + std::string(control);
+}
+
+} // namespace mdv

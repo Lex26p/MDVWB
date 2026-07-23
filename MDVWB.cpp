@@ -1153,6 +1153,64 @@ bool TestMqttValidation()
 }
 
 
+
+bool TestMqttSystemStatusPublishing()
+{
+    FakeMqttClient client;
+    mdv::MqttSystemPublisher publisher(2, client, true);
+
+    publisher.PublishSerial("Порт открыт");
+    publisher.PublishSerial("Порт открыт");
+    publisher.PublishError("");
+    publisher.PublishError("");
+    publisher.PublishAfter(mdv::DriverResult{
+        .address = 3,
+        .operation = mdv::DriverOperation::PollRead,
+        .outcome = mdv::DriverOutcome::Success,
+        .error = {},
+    });
+    publisher.PublishAfter(mdv::DriverResult{
+        .address = 4,
+        .operation = mdv::DriverOperation::PollRead,
+        .outcome = mdv::DriverOutcome::InvalidResponse,
+        .error = "bad frame",
+    });
+    publisher.PublishAfter(mdv::DriverResult{
+        .address = 5,
+        .operation = mdv::DriverOperation::PollRead,
+        .outcome = mdv::DriverOutcome::Timeout,
+        .error = "timeout",
+    });
+
+    const bool exactTopics = client.publications.size() == 6 &&
+        client.publications[0].topic == "/devices/sist-2/controls/Serial" &&
+        client.publications[0].payload == "Порт открыт" &&
+        client.publications[1].topic == "/devices/sist-2/controls/Error" &&
+        client.publications[1].payload.empty() &&
+        client.publications[2].topic == "/devices/sist-2/controls/GanGetID" &&
+        client.publications[2].payload == "3" &&
+        client.publications[3].topic == "/devices/sist-2/controls/GanGetID" &&
+        client.publications[3].payload == "4" &&
+        client.publications[4].topic == "/devices/sist-2/controls/Error" &&
+        client.publications[4].payload == "bad frame" &&
+        client.publications[5].topic == "/devices/sist-2/controls/GanGetID" &&
+        client.publications[5].payload == "5";
+
+    FakeMqttClient quietClient;
+    mdv::MqttSystemPublisher quietPublisher(1, quietClient, false);
+    quietPublisher.PublishAfter(mdv::DriverResult{
+        .address = 7,
+        .operation = mdv::DriverOperation::PollRead,
+        .outcome = mdv::DriverOutcome::Timeout,
+        .error = "timeout",
+    });
+
+    return Check(exactTopics,
+                 "system Serial, Error and optional GanGetID topics") &&
+        Check(quietClient.publications.empty(),
+              "GanGetID is disabled by default and timeout is not a system error");
+}
+
 bool TestApplicationConfiguration()
 {
     auto Parse = [](std::vector<std::string> values) {
@@ -1187,6 +1245,7 @@ bool TestApplicationConfiguration()
         "--mqtt-keepalive", "45",
         "--mqtt-reconnect", "2",
         "--mqtt-reconnect-max", "20",
+        "--publish-poll-address",
     });
     const bool namedOk = named.config.addresses ==
             std::vector<std::uint8_t>({0, 17, 63}) &&
@@ -1202,7 +1261,8 @@ bool TestApplicationConfiguration()
         named.config.mqtt.keepAliveSeconds == 45 &&
         named.config.mqtt.reconnectDelaySeconds == 2 &&
         named.config.mqtt.reconnectDelayMaxSeconds == 20 &&
-        named.config.mqtt.clientId == "mdvwb-3";
+        named.config.mqtt.clientId == "mdvwb-3" &&
+        named.config.publishPollAddress;
 
     bool duplicateRejected = false;
     bool timingRejected = false;
@@ -1275,13 +1335,14 @@ int RunProtocolSelfTest()
         TestMqttBlockDoesNotReplaceStatus() &&
         TestMosquittoClientBuffering() &&
         TestMqttValidation() &&
+        TestMqttSystemStatusPublishing() &&
         TestApplicationConfiguration();
 
     if (!ok) {
         return 1;
     }
 
-    std::cout << "MDV protocol, cache, serial, polling, command, MQTT and configuration self-test: OK\n";
+    std::cout << "MDV protocol, cache, serial, polling, command, MQTT, system status and configuration self-test: OK\n";
     return 0;
 }
 
@@ -1309,9 +1370,13 @@ int RunApplication(const mdv::ApplicationConfig& config)
     mdv::MqttCommandRouter router(config.busNumber, driver);
     mdv::MqttCommandService commandService(mqtt, router);
     mdv::MqttStatePublisher statePublisher(config.busNumber, mqtt);
+    mdv::MqttSystemPublisher systemPublisher(
+        config.busNumber, mqtt, config.publishPollAddress);
 
     commandService.Start();
     mqtt.Start();
+    systemPublisher.PublishSerial("Порт открыт", true);
+    systemPublisher.PublishError("", true);
 
     std::signal(SIGINT, RequestStop);
     std::signal(SIGTERM, RequestStop);
@@ -1340,8 +1405,10 @@ int RunApplication(const mdv::ApplicationConfig& config)
 
         const auto result = driver.ProcessNext();
         statePublisher.PublishAfter(driver, result);
+        systemPublisher.PublishAfter(result);
     }
 
+    systemPublisher.PublishSerial("Порт закрыт");
     mqtt.Stop();
     transport.Close();
     std::cout << "MDVWB stopped.\n";

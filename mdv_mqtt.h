@@ -149,4 +149,41 @@ private:
     std::array<PublishedState, kMaxDeviceAddress + 1> published_{};
 };
 
+// Publishes the separate system device used by the existing Wiren Board
+// script. Serial and Error use the original base topics without /on.
+// GanGetID is optional because publishing every 150 ms creates unnecessary
+// MQTT traffic during normal operation.
+class MqttSystemPublisher {
+public:
+    MqttSystemPublisher(
+        int busNumber,
+        IMqttClient& client,
+        bool publishPollAddress = false);
+
+    void PublishSerial(std::string_view value, bool force = false);
+    void PublishError(std::string_view value, bool force = false);
+    void PublishAfter(const DriverResult& result);
+    void Reset() noexcept;
+
+private:
+    void PublishText(
+        std::string_view control,
+        std::string_view value,
+        std::optional<std::string>& previous,
+        bool force);
+    void PublishInteger(
+        std::string_view control,
+        int value,
+        std::optional<int>& previous,
+        bool force);
+    [[nodiscard]] std::string Topic(std::string_view control) const;
+
+    int busNumber_ = 0;
+    IMqttClient& client_;
+    bool publishPollAddress_ = false;
+    std::optional<std::string> serial_;
+    std::optional<std::string> error_;
+    std::optional<int> pollAddress_;
+};
+
 } // namespace mdv

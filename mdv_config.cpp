@@ -221,6 +221,9 @@ void ValidateConfig(ApplicationConfig& config)
             config.mqtt.reconnectDelayMaxSeconds = ParseUnsigned(
                 RequireValue(argc, argv, index, option), option);
         }
+        else if (option == "--publish-poll-address") {
+            config.publishPollAddress = true;
+        }
         else {
             throw std::invalid_argument(
                 "unknown command-line option: " + std::string(option));
@@ -288,6 +291,8 @@ std::string BuildHelpText(std::string_view executableName)
         << "  --mqtt-keepalive SEC      Default 60\n"
         << "  --mqtt-reconnect SEC      Default 1\n"
         << "  --mqtt-reconnect-max SEC  Default 10\n\n"
+        << "Diagnostics:\n"
+        << "  --publish-poll-address    Publish sist-<bus>/GanGetID each slot\n\n"
         << "Other:\n"
         << "  --self-test               Run internal tests\n"
         << "  --help, -h                Show this help\n";

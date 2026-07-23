@@ -17,6 +17,7 @@ struct ApplicationConfig {
     std::uint8_t masterId = 0;
     TimingSettings timing{};
     MqttConnectionOptions mqtt{};
+    bool publishPollAddress = false;
 };
 
 enum class CommandLineAction {
