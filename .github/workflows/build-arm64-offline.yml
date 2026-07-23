@@ -52,7 +52,7 @@ jobs:
                 -DMDVWB_REQUIRE_MOSQUITTO=ON \
                 -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
               cmake --build out/build/arm64-release --parallel 2
-              ctest --test-dir out/build/arm64-release --output-on-failure
+              (cd out/build/arm64-release && ctest --output-on-failure)
               ./out/build/arm64-release/MDVWB --version
               ./out/build/arm64-release/MDVWB --self-test
             '
