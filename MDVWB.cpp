@@ -1763,6 +1763,16 @@ int RunReadOnlyApplication(const mdv::ApplicationConfig& config)
     return 0;
 }
 
+[[nodiscard]] std::chrono::milliseconds InitialSnapshotDelay(
+    const mdv::ApplicationConfig& config)
+{
+    const auto oneFullPoll = config.timing.transactionPeriod *
+        static_cast<std::int64_t>(config.addresses.size());
+    return std::max(
+        std::chrono::milliseconds{3000},
+        oneFullPoll + std::chrono::milliseconds{1000});
+}
+
 int RunApplication(const mdv::ApplicationConfig& config)
 {
     if (!mdv::MosquittoMqttClient::IsSupported()) {
@@ -1797,7 +1807,20 @@ int RunApplication(const mdv::ApplicationConfig& config)
         << ", response-timeout=" << config.timing.responseTimeout.count() << " ms"
         << ", MQTT=" << config.mqtt.host << ':' << config.mqtt.port << '\n';
 
+    bool mqttWasConnected = false;
+    std::optional<std::chrono::steady_clock::time_point> initialSnapshotAt;
+    const auto initialSnapshotDelay = InitialSnapshotDelay(config);
+
     while (gStopRequested == 0) {
+        const bool mqttConnected = mqtt.IsConnected();
+        if (mqttConnected && !mqttWasConnected) {
+            // /on state messages are intentionally non-retained. Publish one
+            // additional complete snapshot after wb-rules has had time to
+            // create its virtual controls, and repeat this after reconnects.
+            initialSnapshotAt =
+                std::chrono::steady_clock::now() + initialSnapshotDelay;
+        }
+        mqttWasConnected = mqttConnected;
         // Limit command processing per slot so an MQTT flood cannot stop C0/C3
         // transactions. All physical requests still run from this one thread.
         for (int count = 0; count < 64; ++count) {
@@ -1814,6 +1837,18 @@ int RunApplication(const mdv::ApplicationConfig& config)
         const auto result = driver.ProcessNext();
         statePublisher.PublishAfter(driver, result);
         systemPublisher.PublishAfter(result);
+
+        if (mqtt.IsConnected() && initialSnapshotAt.has_value() &&
+            std::chrono::steady_clock::now() >= *initialSnapshotAt) {
+            for (const auto address : config.addresses) {
+                statePublisher.PublishDevice(
+                    driver.DeviceByAddress(address), true);
+            }
+            systemPublisher.PublishSerial("Порт открыт", true);
+            systemPublisher.PublishError("", true);
+            initialSnapshotAt.reset();
+            std::cout << "MQTT initial state snapshot published.\n";
+        }
     }
 
     systemPublisher.PublishSerial("Порт закрыт");

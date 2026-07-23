@@ -1,7 +1,7 @@
 [Unit]
 Description=MDV individual fan-coil MQTT driver
-Wants=network-online.target mosquitto.service
-After=network-online.target mosquitto.service
+Wants=network-online.target mosquitto.service wb-rules.service
+After=network-online.target mosquitto.service wb-rules.service
 
 [Service]
 Type=simple
