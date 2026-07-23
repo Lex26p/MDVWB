@@ -1211,6 +1211,161 @@ bool TestMqttSystemStatusPublishing()
               "GanGetID is disabled by default and timeout is not a system error");
 }
 
+
+mdv::Mode ManualModeFromValue(int value)
+{
+    switch (value) {
+    case 0:
+        return mdv::Mode::Cool;
+    case 1:
+        return mdv::Mode::Heat;
+    case 2:
+        return mdv::Mode::Dry;
+    case 3:
+        return mdv::Mode::Fan;
+    case 4:
+        return mdv::Mode::Auto;
+    default:
+        throw std::invalid_argument("Mode must be in range 0..4");
+    }
+}
+
+mdv::FanSpeed ManualSpeedFromValue(int value)
+{
+    switch (value) {
+    case 1:
+        return mdv::FanSpeed::Low;
+    case 2:
+        return mdv::FanSpeed::Medium;
+    case 3:
+        return mdv::FanSpeed::High;
+    case 4:
+        return mdv::FanSpeed::Auto;
+    default:
+        throw std::invalid_argument("Speed must be in range 1..4");
+    }
+}
+
+std::string_view ManualControlName(mdv::ManualControlKind kind) noexcept
+{
+    switch (kind) {
+    case mdv::ManualControlKind::Power:
+        return "Power";
+    case mdv::ManualControlKind::Mode:
+        return "Mode";
+    case mdv::ManualControlKind::Speed:
+        return "Speed";
+    case mdv::ManualControlKind::SetTemperature:
+        return "SetTemp";
+    case mdv::ManualControlKind::Blinds:
+        return "Blinds";
+    case mdv::ManualControlKind::Block:
+        return "Blok";
+    }
+    return "Unknown";
+}
+
+void ApplyManualControl(
+    mdv::MdvDriver& driver,
+    std::uint8_t address,
+    const mdv::ManualControlCommand& command)
+{
+    switch (command.kind) {
+    case mdv::ManualControlKind::Power:
+        driver.SetPower(address, command.value != 0);
+        break;
+    case mdv::ManualControlKind::Mode:
+        driver.SetMode(address, ManualModeFromValue(command.value));
+        break;
+    case mdv::ManualControlKind::Speed:
+        driver.SetFanSpeed(address, ManualSpeedFromValue(command.value));
+        break;
+    case mdv::ManualControlKind::SetTemperature:
+        driver.SetTemperature(
+            address, static_cast<std::uint8_t>(command.value));
+        break;
+    case mdv::ManualControlKind::Blinds:
+        driver.SetBlinds(address, command.value != 0);
+        break;
+    case mdv::ManualControlKind::Block:
+        driver.SetBlocked(address, command.value != 0);
+        break;
+    }
+}
+
+bool IsManualControlConfirmed(
+    const mdv::DeviceRuntime& runtime,
+    const mdv::ManualControlCommand& command)
+{
+    if (!runtime.device.HasActualState()) {
+        return false;
+    }
+
+    const auto& state = runtime.device.ActualState();
+    switch (command.kind) {
+    case mdv::ManualControlKind::Power:
+        return !runtime.device.HasPendingField(mdv::PendingField::Power) &&
+            state.power == (command.value != 0);
+    case mdv::ManualControlKind::Mode:
+        return !runtime.device.HasPendingField(mdv::PendingField::Mode) &&
+            state.mode == ManualModeFromValue(command.value);
+    case mdv::ManualControlKind::Speed:
+        return !runtime.device.HasPendingField(mdv::PendingField::Speed) &&
+            state.fanSpeed == ManualSpeedFromValue(command.value);
+    case mdv::ManualControlKind::SetTemperature:
+        return !runtime.device.HasPendingField(
+                   mdv::PendingField::SetTemperature) &&
+            state.setTemperature == command.value;
+    case mdv::ManualControlKind::Blinds:
+        return !runtime.device.HasPendingField(mdv::PendingField::Blinds) &&
+            state.blinds == (command.value != 0);
+    case mdv::ManualControlKind::Block:
+        return !runtime.blockPending &&
+            state.modeLocked == (command.value != 0);
+    }
+    return false;
+}
+
+bool TestManualControlCommand()
+{
+    ScriptedTransport transport({
+        SuccessfulTransaction(MakeDriverResponse(
+            12, mdv::Command::Read, 0x88, 0x84, 23)),
+        SuccessfulTransaction(MakeDriverResponse(
+            12, mdv::Command::Set, 0x88, 0x84, 23)),
+        SuccessfulTransaction(MakeDriverResponse(
+            12, mdv::Command::Read, 0x88, 0x84, 24)),
+    });
+    mdv::MdvDriver driver({12}, transport);
+
+    const auto initial = driver.ProcessNext();
+    const mdv::ManualControlCommand command{
+        .kind = mdv::ManualControlKind::SetTemperature,
+        .value = 24,
+    };
+    ApplyManualControl(driver, 12, command);
+    const auto write = driver.ProcessNext();
+    const auto confirm = driver.ProcessNext();
+
+    const bool requestOrder = transport.requests.size() == 3 &&
+        transport.requests[0][1] == static_cast<std::uint8_t>(mdv::Command::Read) &&
+        transport.requests[1][1] == static_cast<std::uint8_t>(mdv::Command::Set) &&
+        transport.requests[1][8] == 24 &&
+        transport.requests[2][1] == static_cast<std::uint8_t>(mdv::Command::Read);
+
+    return Check(initial.outcome == mdv::DriverOutcome::Success,
+                 "manual test initializes device with C0") &&
+        Check(write.operation == mdv::DriverOperation::SetState &&
+                  write.outcome == mdv::DriverOutcome::Success,
+              "manual test sends one C3") &&
+        Check(confirm.operation == mdv::DriverOperation::ConfirmRead &&
+                  confirm.outcome == mdv::DriverOutcome::Success,
+              "manual test confirms with C0") &&
+        Check(requestOrder, "manual test request order C0 C3 C0") &&
+        Check(IsManualControlConfirmed(driver.DeviceByAddress(12), command),
+              "manual test command confirmed");
+}
+
 bool TestApplicationConfiguration()
 {
     auto Parse = [](std::vector<std::string> values) {
@@ -1266,9 +1421,25 @@ bool TestApplicationConfiguration()
         named.config.publishPollAddress &&
         named.config.readOnly;
 
+    const auto manual = Parse({
+        "MDVWB",
+        "--addresses", "18",
+        "--port", "COM9",
+        "--bus", "1",
+        "--test-command", "SetTemp=24",
+    });
+    const bool manualOk = manual.config.manualControl.has_value() &&
+        manual.config.manualControl->kind ==
+            mdv::ManualControlKind::SetTemperature &&
+        manual.config.manualControl->value == 24 &&
+        !manual.config.readOnly;
+
     bool duplicateRejected = false;
     bool timingRejected = false;
+    bool tooFastRejected = false;
     bool unknownRejected = false;
+    bool multipleManualAddressesRejected = false;
+    bool readOnlyManualRejected = false;
     try {
         (void)Parse({"MDVWB", "1,1", "COM4", "1"});
     }
@@ -1286,6 +1457,30 @@ bool TestApplicationConfiguration()
     try {
         (void)Parse({
             "MDVWB", "--addresses", "1", "--port", "COM4", "--bus", "1",
+            "--period-ms", "149"});
+    }
+    catch (const std::invalid_argument&) {
+        tooFastRejected = true;
+    }
+    try {
+        (void)Parse({
+            "MDVWB", "--addresses", "1,2", "--port", "COM4", "--bus", "1",
+            "--test-command", "Power=1"});
+    }
+    catch (const std::invalid_argument&) {
+        multipleManualAddressesRejected = true;
+    }
+    try {
+        (void)Parse({
+            "MDVWB", "--addresses", "1", "--port", "COM4", "--bus", "1",
+            "--read-only", "--test-command", "Power=1"});
+    }
+    catch (const std::invalid_argument&) {
+        readOnlyManualRejected = true;
+    }
+    try {
+        (void)Parse({
+            "MDVWB", "--addresses", "1", "--port", "COM4", "--bus", "1",
             "--unknown", "value"});
     }
     catch (const std::invalid_argument&) {
@@ -1294,8 +1489,14 @@ bool TestApplicationConfiguration()
 
     return Check(legacyOk, "legacy launch format parsed") &&
         Check(namedOk, "named launch options parsed") &&
+        Check(manualOk, "manual hardware test command parsed") &&
         Check(duplicateRejected, "duplicate addresses rejected") &&
         Check(timingRejected, "unsafe timing rejected") &&
+        Check(tooFastRejected, "period faster than 150 ms rejected") &&
+        Check(multipleManualAddressesRejected,
+              "manual command requires one address") &&
+        Check(readOnlyManualRejected,
+              "read-only and manual command cannot be combined") &&
         Check(unknownRejected, "unknown launch option rejected") &&
         Check(mdv::FormatAddressList(named.config.addresses) == "0,17,63",
               "address list formatted");
@@ -1338,13 +1539,14 @@ int RunProtocolSelfTest()
         TestMosquittoClientBuffering() &&
         TestMqttValidation() &&
         TestMqttSystemStatusPublishing() &&
+        TestManualControlCommand() &&
         TestApplicationConfiguration();
 
     if (!ok) {
         return 1;
     }
 
-    std::cout << "MDV protocol, cache, serial, polling, command, MQTT, system status, configuration and read-only mode self-test: OK\n";
+    std::cout << "MDV protocol, cache, serial, polling, command, MQTT, system status, configuration, read-only and manual control self-test: OK\n";
     return 0;
 }
 
@@ -1375,6 +1577,137 @@ public:
         std::cout << topic << " = " << payload << '\n';
     }
 };
+
+
+std::string_view DriverOperationName(mdv::DriverOperation operation) noexcept
+{
+    switch (operation) {
+    case mdv::DriverOperation::PollRead:
+        return "C0 poll";
+    case mdv::DriverOperation::SetState:
+        return "C3 set";
+    case mdv::DriverOperation::Lock:
+        return "CC lock";
+    case mdv::DriverOperation::Unlock:
+        return "CD unlock";
+    case mdv::DriverOperation::ConfirmRead:
+        return "C0 confirm";
+    }
+    return "unknown";
+}
+
+int RunManualControlApplication(const mdv::ApplicationConfig& config)
+{
+    const auto command = *config.manualControl;
+    const auto address = config.addresses.front();
+
+    mdv::MdvSerialTransport transport(config.timing);
+    transport.Open(config.serialPort);
+
+    mdv::MdvDriver driver(config.addresses, transport, config.masterId);
+    ConsoleStateClient console;
+    mdv::MqttStatePublisher statePublisher(config.busNumber, console);
+
+    std::signal(SIGINT, RequestStop);
+    std::signal(SIGTERM, RequestStop);
+
+    std::cout
+        << "MDVWB manual control test started: port=" << config.serialPort
+        << ", address=" << static_cast<int>(address)
+        << ", command=" << ManualControlName(command.kind)
+        << '=' << command.value
+        << ", period=" << config.timing.transactionPeriod.count() << " ms\n"
+        << "Safety: one configured address, one requested command, "
+           "initial C0 required, confirmation by C0 required, MQTT disabled.\n"
+        << "Press Ctrl+C to stop.\n";
+
+    constexpr int kInitialReadAttempts = 20;
+    bool initialized = false;
+    std::string lastError;
+    for (int attempt = 0;
+         attempt < kInitialReadAttempts && gStopRequested == 0;
+         ++attempt) {
+        const auto result = driver.ProcessNext();
+        statePublisher.PublishAfter(driver, result);
+
+        if (result.outcome == mdv::DriverOutcome::Success &&
+            driver.DeviceByAddress(address).device.IsInitialized()) {
+            initialized = true;
+            break;
+        }
+
+        if (!result.error.empty() && result.error != lastError) {
+            std::cerr
+                << "Initial C0 attempt " << (attempt + 1)
+                << ": " << result.error << '\n';
+            lastError = result.error;
+        }
+    }
+
+    if (!initialized) {
+        transport.Close();
+        if (gStopRequested != 0) {
+            std::cout << "MDVWB manual control test stopped before write.\n";
+            return 0;
+        }
+        std::cerr
+            << "Manual control aborted: no valid C0 response after "
+            << kInitialReadAttempts << " attempts. No write command was sent.\n";
+        return 4;
+    }
+
+    ApplyManualControl(driver, address, command);
+    std::cout
+        << "Initial state received. Queued "
+        << ManualControlName(command.kind) << '=' << command.value << ".\n";
+
+    constexpr int kCommandSlots = 40;
+    bool writeAttempted = false;
+    for (int slot = 0; slot < kCommandSlots && gStopRequested == 0; ++slot) {
+        const auto result = driver.ProcessNext();
+        statePublisher.PublishAfter(driver, result);
+
+        if (result.operation == mdv::DriverOperation::SetState ||
+            result.operation == mdv::DriverOperation::Lock ||
+            result.operation == mdv::DriverOperation::Unlock) {
+            writeAttempted = true;
+        }
+
+        if (result.operation != mdv::DriverOperation::PollRead) {
+            std::cout
+                << DriverOperationName(result.operation) << ": "
+                << (result.outcome == mdv::DriverOutcome::Success
+                        ? "response received"
+                        : result.error)
+                << '\n';
+        }
+
+        if (writeAttempted &&
+            result.operation == mdv::DriverOperation::ConfirmRead &&
+            result.outcome == mdv::DriverOutcome::Success &&
+            IsManualControlConfirmed(
+                driver.DeviceByAddress(address), command)) {
+            transport.Close();
+            std::cout
+                << "Manual control confirmed by C0: "
+                << ManualControlName(command.kind)
+                << '=' << command.value << ".\n";
+            return 0;
+        }
+    }
+
+    transport.Close();
+    if (gStopRequested != 0) {
+        std::cout << "MDVWB manual control test stopped.\n";
+        return 0;
+    }
+
+    std::cerr
+        << "Manual control was not confirmed within "
+        << kCommandSlots
+        << " transaction slots. Stop testing and inspect the wiring/log.\n";
+    return 5;
+}
 
 int RunReadOnlyApplication(const mdv::ApplicationConfig& config)
 {
@@ -1495,6 +1828,9 @@ int main(int argc, char* argv[])
             std::cout << mdv::BuildHelpText(argc > 0 ? argv[0] : "MDVWB");
             return 0;
         case mdv::CommandLineAction::Run:
+            if (commandLine.config.manualControl.has_value()) {
+                return RunManualControlApplication(commandLine.config);
+            }
             return commandLine.config.readOnly
                 ? RunReadOnlyApplication(commandLine.config)
                 : RunApplication(commandLine.config);

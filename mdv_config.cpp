@@ -45,6 +45,69 @@ namespace {
     return static_cast<unsigned int>(value);
 }
 
+
+[[nodiscard]] ManualControlCommand ParseManualControl(
+    std::string_view text)
+{
+    const auto separator = text.find('=');
+    if (separator == std::string_view::npos ||
+        separator == 0 ||
+        separator + 1 >= text.size() ||
+        text.find('=', separator + 1) != std::string_view::npos) {
+        throw std::invalid_argument(
+            "--test-command must use NAME=VALUE");
+    }
+
+    const auto name = text.substr(0, separator);
+    const auto value = ParseInteger(
+        text.substr(separator + 1), "--test-command");
+
+    ManualControlCommand command;
+    if (name == "Power") {
+        if (value < 0 || value > 1) {
+            throw std::invalid_argument("Power must be 0 or 1");
+        }
+        command.kind = ManualControlKind::Power;
+    }
+    else if (name == "Mode") {
+        if (value < 0 || value > 4) {
+            throw std::invalid_argument("Mode must be in range 0..4");
+        }
+        command.kind = ManualControlKind::Mode;
+    }
+    else if (name == "Speed") {
+        if (value < 1 || value > 4) {
+            throw std::invalid_argument("Speed must be in range 1..4");
+        }
+        command.kind = ManualControlKind::Speed;
+    }
+    else if (name == "SetTemp") {
+        if (value < 16 || value > 32) {
+            throw std::invalid_argument("SetTemp must be in range 16..32");
+        }
+        command.kind = ManualControlKind::SetTemperature;
+    }
+    else if (name == "Blinds") {
+        if (value < 0 || value > 1) {
+            throw std::invalid_argument("Blinds must be 0 or 1");
+        }
+        command.kind = ManualControlKind::Blinds;
+    }
+    else if (name == "Blok") {
+        if (value < 0 || value > 1) {
+            throw std::invalid_argument("Blok must be 0 or 1");
+        }
+        command.kind = ManualControlKind::Block;
+    }
+    else {
+        throw std::invalid_argument(
+            "--test-command name must be Power, Mode, Speed, SetTemp, Blinds or Blok");
+    }
+
+    command.value = value;
+    return command;
+}
+
 [[nodiscard]] std::vector<std::uint8_t> ParseAddresses(
     std::string_view text)
 {
@@ -99,8 +162,9 @@ void ValidateConfig(ApplicationConfig& config)
     if (config.masterId > kMaxDeviceAddress) {
         throw std::invalid_argument("master ID must be in range 0..63");
     }
-    if (config.timing.transactionPeriod.count() <= 0) {
-        throw std::invalid_argument("transaction period must be positive");
+    if (config.timing.transactionPeriod < std::chrono::milliseconds(150)) {
+        throw std::invalid_argument(
+            "transaction period must be at least 150 ms");
     }
     if (config.timing.responseTimeout.count() <= 0 ||
         config.timing.responseTimeout >= config.timing.transactionPeriod) {
@@ -126,6 +190,14 @@ void ValidateConfig(ApplicationConfig& config)
     }
     if (config.mqtt.clientId.empty()) {
         config.mqtt.clientId = "mdvwb-" + std::to_string(config.busNumber);
+    }
+    if (config.readOnly && config.manualControl.has_value()) {
+        throw std::invalid_argument(
+            "--read-only cannot be combined with --test-command");
+    }
+    if (config.manualControl.has_value() && config.addresses.size() != 1) {
+        throw std::invalid_argument(
+            "--test-command requires exactly one fan coil address");
     }
 }
 
@@ -227,6 +299,10 @@ void ValidateConfig(ApplicationConfig& config)
         else if (option == "--read-only") {
             config.readOnly = true;
         }
+        else if (option == "--test-command") {
+            config.manualControl = ParseManualControl(
+                RequireValue(argc, argv, index, option));
+        }
         else {
             throw std::invalid_argument(
                 "unknown command-line option: " + std::string(option));
@@ -295,7 +371,9 @@ std::string BuildHelpText(std::string_view executableName)
         << "  --mqtt-reconnect SEC      Default 1\n"
         << "  --mqtt-reconnect-max SEC  Default 10\n\n"
         << "Safe hardware test:\n"
-        << "  --read-only               Poll C0 only; no MQTT and no write commands\n\n"
+        << "  --read-only               Poll C0 only; no MQTT and no write commands\n"
+        << "  --test-command NAME=VALUE Read state, send one command, confirm by C0\n"
+        << "                             Names: Power, Mode, Speed, SetTemp, Blinds, Blok\n\n"
         << "Diagnostics:\n"
         << "  --publish-poll-address    Publish sist-<bus>/GanGetID each slot\n\n"
         << "Other:\n"

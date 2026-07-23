@@ -4,11 +4,26 @@
 #include "mdv_serial.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace mdv {
+
+enum class ManualControlKind {
+    Power,
+    Mode,
+    Speed,
+    SetTemperature,
+    Blinds,
+    Block,
+};
+
+struct ManualControlCommand {
+    ManualControlKind kind = ManualControlKind::Power;
+    int value = 0;
+};
 
 struct ApplicationConfig {
     std::vector<std::uint8_t> addresses;
@@ -19,6 +34,7 @@ struct ApplicationConfig {
     MqttConnectionOptions mqtt{};
     bool publishPollAddress = false;
     bool readOnly = false;
+    std::optional<ManualControlCommand> manualControl;
 };
 
 enum class CommandLineAction {
