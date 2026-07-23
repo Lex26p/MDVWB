@@ -20,7 +20,7 @@ if ! ldconfig -p 2>/dev/null | grep -q 'libmosquitto\.so\.1'; then
     exit 3
 fi
 
-for required in MDVWB mdvwb-run mdvwb.service mdvwb.env SHA256SUMS; do
+for required in MDVWB mdvwb-run mdvwb.service mdvwb.env mdvwb-service-control.js SHA256SUMS; do
     if [ ! -e "$SCRIPT_DIR/$required" ]; then
         echo "Offline package is incomplete: missing $required" >&2
         exit 4
@@ -38,10 +38,11 @@ if systemctl is-active --quiet mdvwb.service 2>/dev/null; then
     systemctl stop mdvwb.service
 fi
 
-install -d -m 0755 /usr/local/bin /usr/local/lib/mdvwb /etc/default /etc/systemd/system
+install -d -m 0755 /usr/local/bin /usr/local/lib/mdvwb /etc/default /etc/systemd/system /etc/wb-rules
 install -m 0755 "$SCRIPT_DIR/MDVWB" /usr/local/bin/MDVWB
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" /usr/local/lib/mdvwb/mdvwb-run
 install -m 0644 "$SCRIPT_DIR/mdvwb.service" /etc/systemd/system/mdvwb.service
+install -m 0644 "$SCRIPT_DIR/mdvwb-service-control.js" /etc/wb-rules/mdvwb-service-control.js
 
 if [ ! -e /etc/default/mdvwb ]; then
     install -m 0640 "$SCRIPT_DIR/mdvwb.env" /etc/default/mdvwb
@@ -63,4 +64,11 @@ else
     echo "Edit /etc/default/mdvwb, then run: systemctl enable --now mdvwb.service"
 fi
 
+systemctl restart wb-rules.service
+if ! systemctl is-active --quiet wb-rules.service; then
+    echo "wb-rules failed to restart after installing service controls." >&2
+    exit 5
+fi
+
+echo "Installed Wiren Board service controls: MDVWB-Service-1"
 echo "View logs with: journalctl -u mdvwb.service -f"

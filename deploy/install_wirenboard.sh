@@ -20,12 +20,13 @@ cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" \
     -DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX" \
     -DMDVWB_REQUIRE_MOSQUITTO=ON
 cmake --build "$BUILD_DIR" --parallel 1
-ctest --test-dir "$BUILD_DIR" --output-on-failure
+(cd "$BUILD_DIR" && ctest --output-on-failure)
 cmake --install "$BUILD_DIR"
 
-install -d -m 0755 /usr/local/lib/mdvwb /etc/default /etc/systemd/system
+install -d -m 0755 /usr/local/lib/mdvwb /etc/default /etc/systemd/system /etc/wb-rules
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" /usr/local/lib/mdvwb/mdvwb-run
 install -m 0644 "$SCRIPT_DIR/mdvwb.service" /etc/systemd/system/mdvwb.service
+install -m 0644 "$SCRIPT_DIR/mdvwb-service-control.js" /etc/wb-rules/mdvwb-service-control.js
 
 if [ ! -e /etc/default/mdvwb ]; then
     install -m 0640 "$SCRIPT_DIR/mdvwb.env" /etc/default/mdvwb
@@ -35,7 +36,9 @@ else
 fi
 
 systemctl daemon-reload
+systemctl restart wb-rules.service
 
+echo "Installed Wiren Board service controls: MDVWB-Service-1"
 echo "MDVWB installed but not started."
 echo "Edit /etc/default/mdvwb, then run: systemctl enable --now mdvwb"
 echo "View logs with: journalctl -u mdvwb -f"

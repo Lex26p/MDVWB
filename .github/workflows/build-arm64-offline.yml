@@ -69,13 +69,14 @@ jobs:
           install -m 0755 deploy/offline-install.sh dist/MDVWB-arm64/offline-install.sh
           install -m 0644 deploy/mdvwb.service dist/MDVWB-arm64/mdvwb.service
           install -m 0640 deploy/mdvwb.env dist/MDVWB-arm64/mdvwb.env
+          install -m 0644 deploy/mdvwb-service-control.js dist/MDVWB-arm64/mdvwb-service-control.js
 
           file dist/MDVWB-arm64/MDVWB
           readelf -h dist/MDVWB-arm64/MDVWB | grep -E "Class:|Machine:"
 
           (
             cd dist/MDVWB-arm64
-            sha256sum MDVWB mdvwb-run mdvwb.service mdvwb.env offline-install.sh > SHA256SUMS
+            sha256sum MDVWB mdvwb-run mdvwb.service mdvwb.env mdvwb-service-control.js offline-install.sh > SHA256SUMS
           )
 
           tar -C dist -czf dist/MDVWB-arm64-offline.tar.gz MDVWB-arm64
