@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(MDVWB VERSION 0.10.0 LANGUAGES CXX)
+project(MDVWB VERSION 0.11.0 LANGUAGES CXX)
 
 add_executable(MDVWB
     MDVWB.cpp
@@ -23,6 +23,8 @@ add_executable(MDVWB
 
 target_compile_features(MDVWB PRIVATE cxx_std_20)
 
+option(MDVWB_REQUIRE_MOSQUITTO "Fail configuration when libmosquitto is unavailable" OFF)
+
 find_package(Threads REQUIRED)
 target_link_libraries(MDVWB PRIVATE Threads::Threads)
 
@@ -36,6 +38,10 @@ if(MOSQUITTO_INCLUDE_DIR AND MOSQUITTO_LIBRARY)
     target_link_libraries(MDVWB PRIVATE ${MOSQUITTO_LIBRARY})
     message(STATUS "MDVWB: libmosquitto support enabled")
 else()
+    if(MDVWB_REQUIRE_MOSQUITTO)
+        message(FATAL_ERROR
+            "MDVWB: libmosquitto is required for this build. Install libmosquitto-dev and configure again.")
+    endif()
     message(STATUS "MDVWB: libmosquitto not found; protocol self-test remains available")
 endif()
 
@@ -47,3 +53,6 @@ endif()
 
 enable_testing()
 add_test(NAME mdv_protocol_self_test COMMAND MDVWB --self-test)
+
+include(GNUInstallDirs)
+install(TARGETS MDVWB RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

@@ -1,0 +1,17 @@
+[Unit]
+Description=MDV individual fan-coil MQTT driver
+Wants=network-online.target mosquitto.service
+After=network-online.target mosquitto.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/mdvwb/mdvwb-run
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
