@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 
-project(MDVWB VERSION 1.0.1 LANGUAGES CXX)
+project(MDVWB VERSION 1.1.0 LANGUAGES CXX)
 
 add_executable(MDVWB
     MDVWB.cpp
@@ -13,6 +13,8 @@ add_executable(MDVWB
     mdv_serial.h
     mdv_driver.cpp
     mdv_driver.h
+    mdv_discovery.cpp
+    mdv_discovery.h
     mdv_mqtt.cpp
     mdv_mqtt.h
     mdv_mosquitto.cpp

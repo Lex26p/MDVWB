@@ -2,6 +2,7 @@
 #include "mdv_config.h"
 #include "mdv_device.h"
 #include "mdv_driver.h"
+#include "mdv_discovery.h"
 #include "mdv_mqtt.h"
 #include "mdv_mosquitto.h"
 #include "mdv_protocol.h"
@@ -459,6 +460,90 @@ mdv::TransactionResult SuccessfulTransaction(ResponseFrame response)
         .response = std::move(response),
         .error = {},
     };
+}
+
+
+class DiscoveryTestTransport final : public mdv::ITransactionTransport {
+public:
+    mdv::TransactionResult Execute(const RequestFrame& request) override
+    {
+        requests.push_back(request);
+        const auto address = request[2];
+        const auto probeIndex = requests.size() - 1;
+        const auto pass = static_cast<int>(probeIndex / 64);
+
+        // Address 2 answers only during pass 1, address 17 only during pass 2,
+        // and address 63 during every pass. Any one valid answer is enough.
+        if ((address == 2 && pass == 0) ||
+            (address == 17 && pass == 1) ||
+            address == 63) {
+            return SuccessfulTransaction(MakeDriverResponse(address));
+        }
+
+        // A wrong-command frame must not count as a discovered C0 device.
+        if (address == 9 && pass == 0) {
+            return SuccessfulTransaction(
+                MakeDriverResponse(address, mdv::Command::Set));
+        }
+
+        // A corrupted response must also be ignored.
+        if (address == 10 && pass == 0) {
+            auto response = MakeDriverResponse(address);
+            response[11] ^= 0x01;
+            return SuccessfulTransaction(response);
+        }
+
+        return mdv::TransactionResult{
+            .status = mdv::TransactionStatus::Timeout,
+            .response = std::nullopt,
+            .error = "timeout",
+        };
+    }
+
+    std::vector<RequestFrame> requests;
+};
+
+bool TestDeviceDiscovery()
+{
+    DiscoveryTestTransport transport;
+    std::vector<int> startedPasses;
+
+    const auto result = mdv::DiscoverDevices(
+        transport,
+        0,
+        3,
+        {},
+        [&startedPasses](int pass, int totalPasses) {
+            if (totalPasses == 3) {
+                startedPasses.push_back(pass);
+            }
+        });
+
+    const bool requestOrder =
+        transport.requests.size() == 64U * 3U &&
+        transport.requests.front()[2] == 0 &&
+        transport.requests[63][2] == 63 &&
+        transport.requests[64][2] == 0 &&
+        transport.requests.back()[2] == 63;
+
+    return Check(
+               result.addresses ==
+                   std::vector<std::uint8_t>({2, 17, 63}),
+               "discovery returns sorted unique responding addresses") &&
+        Check(result.completedPasses == 3 && !result.cancelled,
+              "discovery completes exactly three passes") &&
+        Check(result.probes == 192, "discovery probes all 64 addresses three times") &&
+        Check(result.validResponses == 5,
+              "discovery counts all valid responses across passes") &&
+        Check(result.invalidResponses == 2,
+              "discovery rejects wrong-command and corrupted frames") &&
+        Check(result.timeouts == 185,
+              "discovery counts non-responding addresses") &&
+        Check(startedPasses == std::vector<int>({1, 2, 3}),
+              "discovery reports pass progress") &&
+        Check(requestOrder, "discovery request order is 0..63 for every pass") &&
+        Check(mdv::FormatAddressList(result.addresses) == "2,17,63",
+              "discovery output uses comma-separated addresses");
 }
 
 bool TestRoundRobinPolling()
@@ -1438,6 +1523,20 @@ bool TestApplicationConfiguration()
         manual.config.manualControl->value == 24 &&
         !manual.config.readOnly;
 
+    const auto discovery = Parse({
+        "MDVWB",
+        "--discover",
+        "--port", "/dev/ttyRS485-1",
+        "--master-id", "3",
+    });
+    const bool discoveryOk = discovery.action == mdv::CommandLineAction::Run &&
+        discovery.config.discover &&
+        discovery.config.addresses.empty() &&
+        discovery.config.serialPort == "/dev/ttyRS485-1" &&
+        discovery.config.masterId == 3 &&
+        !discovery.config.readOnly &&
+        !discovery.config.manualControl.has_value();
+
     const auto version = Parse({"MDVWB", "--version"});
     const bool versionOk = version.action == mdv::CommandLineAction::Version;
 
@@ -1447,6 +1546,8 @@ bool TestApplicationConfiguration()
     bool unknownRejected = false;
     bool multipleManualAddressesRejected = false;
     bool readOnlyManualRejected = false;
+    bool discoveryAddressesRejected = false;
+    bool discoveryManualRejected = false;
     try {
         (void)Parse({"MDVWB", "1,1", "COM4", "1"});
     }
@@ -1487,6 +1588,22 @@ bool TestApplicationConfiguration()
     }
     try {
         (void)Parse({
+            "MDVWB", "--discover", "--addresses", "1",
+            "--port", "COM4"});
+    }
+    catch (const std::invalid_argument&) {
+        discoveryAddressesRejected = true;
+    }
+    try {
+        (void)Parse({
+            "MDVWB", "--discover", "--port", "COM4",
+            "--test-command", "Power=1"});
+    }
+    catch (const std::invalid_argument&) {
+        discoveryManualRejected = true;
+    }
+    try {
+        (void)Parse({
             "MDVWB", "--addresses", "1", "--port", "COM4", "--bus", "1",
             "--unknown", "value"});
     }
@@ -1497,6 +1614,7 @@ bool TestApplicationConfiguration()
     return Check(legacyOk, "legacy launch format parsed") &&
         Check(namedOk, "named launch options parsed") &&
         Check(manualOk, "manual hardware test command parsed") &&
+        Check(discoveryOk, "device discovery launch options parsed") &&
         Check(versionOk, "version option parsed") &&
         Check(duplicateRejected, "duplicate addresses rejected") &&
         Check(timingRejected, "unsafe timing rejected") &&
@@ -1505,6 +1623,10 @@ bool TestApplicationConfiguration()
               "manual command requires one address") &&
         Check(readOnlyManualRejected,
               "read-only and manual command cannot be combined") &&
+        Check(discoveryAddressesRejected,
+              "discovery cannot use a configured address list") &&
+        Check(discoveryManualRejected,
+              "discovery cannot be combined with a write command") &&
         Check(unknownRejected, "unknown launch option rejected") &&
         Check(mdv::FormatAddressList(named.config.addresses) == "0,17,63",
               "address list formatted");
@@ -1531,6 +1653,7 @@ int RunProtocolSelfTest()
         TestTransactionTiming() &&
         TestInvalidTimingRejected() &&
         TestPortNameNormalization() &&
+        TestDeviceDiscovery() &&
         TestRoundRobinPolling() &&
         TestPollingContinuesAfterTimeout() &&
         TestInvalidPollingResponses() &&
@@ -1554,7 +1677,7 @@ int RunProtocolSelfTest()
         return 1;
     }
 
-    std::cout << "MDVWB 1.0 protocol, cache, serial, polling, command, MQTT, system status, configuration and hardware-test self-test: OK\n";
+    std::cout << "MDVWB 1.1 protocol, discovery, cache, serial, polling, command, MQTT, system status, configuration and hardware-test self-test: OK\n";
     return 0;
 }
 
@@ -1602,6 +1725,63 @@ std::string_view DriverOperationName(mdv::DriverOperation operation) noexcept
         return "C0 confirm";
     }
     return "unknown";
+}
+
+
+int RunDiscoveryApplication(const mdv::ApplicationConfig& config)
+{
+    mdv::MdvSerialTransport transport(config.timing);
+    transport.Open(config.serialPort);
+
+    std::signal(SIGINT, RequestStop);
+    std::signal(SIGTERM, RequestStop);
+
+    constexpr int kDiscoveryPasses = 3;
+    std::cout
+        << "MDVWB device discovery started: port=" << config.serialPort
+        << ", addresses=0..63"
+        << ", passes=" << kDiscoveryPasses
+        << ", period=" << config.timing.transactionPeriod.count() << " ms"
+        << ", response-timeout=" << config.timing.responseTimeout.count() << " ms\n"
+        << "Safety: only C0 requests are sent; MQTT, C3, CC and CD are disabled.\n";
+
+    const auto result = mdv::DiscoverDevices(
+        transport,
+        config.masterId,
+        kDiscoveryPasses,
+        [] {
+            return gStopRequested != 0;
+        },
+        [](int pass, int totalPasses) {
+            std::cout
+                << "Discovery pass " << pass << '/' << totalPasses
+                << " started.\n";
+        });
+
+    transport.Close();
+
+    const auto addresses = mdv::FormatAddressList(result.addresses);
+    std::cout
+        << (result.cancelled
+                ? "MDVWB device discovery cancelled.\n"
+                : "MDVWB device discovery completed.\n")
+        << "Completed passes: " << result.completedPasses
+        << ", probes: " << result.probes
+        << ", valid responses: " << result.validResponses
+        << ", timeouts: " << result.timeouts
+        << ", I/O errors: " << result.ioErrors
+        << ", invalid responses: " << result.invalidResponses << '\n';
+
+    if (result.addresses.empty()) {
+        std::cout << "No MDV fan coils found.\n";
+    }
+    else {
+        std::cout << "Found MDV addresses: " << addresses << '\n';
+    }
+
+    // Machine-readable final line for wb-rules and shell integration.
+    std::cout << "FOUND_ADDRESSES=" << addresses << '\n';
+    return result.cancelled ? 4 : 0;
 }
 
 int RunManualControlApplication(const mdv::ApplicationConfig& config)
@@ -1874,6 +2054,9 @@ int main(int argc, char* argv[])
             std::cout << "MDVWB " << MDVWB_VERSION << '\n';
             return 0;
         case mdv::CommandLineAction::Run:
+            if (commandLine.config.discover) {
+                return RunDiscoveryApplication(commandLine.config);
+            }
             if (commandLine.config.manualControl.has_value()) {
                 return RunManualControlApplication(commandLine.config);
             }

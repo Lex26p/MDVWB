@@ -34,6 +34,7 @@ struct ApplicationConfig {
     MqttConnectionOptions mqtt{};
     bool publishPollAddress = false;
     bool readOnly = false;
+    bool discover = false;
     std::optional<ManualControlCommand> manualControl;
 };
 

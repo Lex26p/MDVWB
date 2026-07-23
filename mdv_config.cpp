@@ -150,8 +150,12 @@ namespace {
 
 void ValidateConfig(ApplicationConfig& config)
 {
-    if (config.addresses.empty()) {
+    if (!config.discover && config.addresses.empty()) {
         throw std::invalid_argument("at least one fan coil address is required");
+    }
+    if (config.discover && !config.addresses.empty()) {
+        throw std::invalid_argument(
+            "--discover cannot be combined with --addresses");
     }
     if (config.serialPort.empty()) {
         throw std::invalid_argument("serial port cannot be empty");
@@ -194,6 +198,14 @@ void ValidateConfig(ApplicationConfig& config)
     if (config.readOnly && config.manualControl.has_value()) {
         throw std::invalid_argument(
             "--read-only cannot be combined with --test-command");
+    }
+    if (config.discover && config.readOnly) {
+        throw std::invalid_argument(
+            "--discover cannot be combined with --read-only");
+    }
+    if (config.discover && config.manualControl.has_value()) {
+        throw std::invalid_argument(
+            "--discover cannot be combined with --test-command");
     }
     if (config.manualControl.has_value() && config.addresses.size() != 1) {
         throw std::invalid_argument(
@@ -299,6 +311,9 @@ void ValidateConfig(ApplicationConfig& config)
         else if (option == "--read-only") {
             config.readOnly = true;
         }
+        else if (option == "--discover") {
+            config.discover = true;
+        }
         else if (option == "--test-command") {
             config.manualControl = ParseManualControl(
                 RequireValue(argc, argv, index, option));
@@ -378,6 +393,7 @@ std::string BuildHelpText(std::string_view executableName)
         << "  --mqtt-reconnect-max SEC  Default 10\n\n"
         << "Safe hardware test:\n"
         << "  --read-only               Poll C0 only; no MQTT and no write commands\n"
+        << "  --discover                Scan addresses 0..63 three complete passes\n"
         << "  --test-command NAME=VALUE Read state, send one command, confirm by C0\n"
         << "                             Names: Power, Mode, Speed, SetTemp, Blinds, Blok\n\n"
         << "Diagnostics:\n"
