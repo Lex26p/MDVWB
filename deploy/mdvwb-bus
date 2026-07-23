@@ -1,0 +1,195 @@
+#!/bin/sh
+set -eu
+
+TEMPLATE=/usr/local/lib/mdvwb/mdvwb.env
+BINARY=/usr/local/bin/MDVWB
+
+usage() {
+    cat <<'USAGE'
+Usage:
+  mdvwb-bus init BUS [PORT]
+  mdvwb-bus set-addresses BUS ADDRESS_LIST
+  mdvwb-bus show BUS
+  mdvwb-bus start BUS
+  mdvwb-bus stop BUS
+  mdvwb-bus restart BUS
+  mdvwb-bus status BUS
+  mdvwb-bus enable BUS
+  mdvwb-bus disable BUS
+  mdvwb-bus discover BUS
+
+Examples:
+  mdvwb-bus init 2 /dev/ttyRS485-2
+  mdvwb-bus set-addresses 2 1,2,3
+  mdvwb-bus enable 2
+USAGE
+}
+
+fail() {
+    echo "$*" >&2
+    exit 2
+}
+
+require_root() {
+    [ "$(id -u)" -eq 0 ] || fail "Run as root."
+}
+
+validate_bus() {
+    case "$1" in
+        ''|*[!0-9]*) fail "Bus number must be a positive integer." ;;
+    esac
+    [ "$1" -ge 1 ] || fail "Bus number must be at least 1."
+    [ "$1" -le 32 ] || fail "Bus number must not exceed 32."
+}
+
+canonical_addresses() {
+    compact=$(printf '%s' "$1" | tr -d '[:space:]')
+    [ -n "$compact" ] || fail "Address list is empty."
+
+    result=$(printf '%s\n' "$compact" | awk -F, '
+        BEGIN { bad = 0 }
+        {
+            if (NF < 1) bad = 1
+            for (i = 1; i <= NF; ++i) {
+                if ($i !~ /^[0-9]+$/) { bad = 1; continue }
+                n = $i + 0
+                if (n < 0 || n > 63 || seen[n]) { bad = 1; continue }
+                seen[n] = 1
+            }
+        }
+        END {
+            if (bad) exit 1
+            first = 1
+            for (i = 0; i <= 63; ++i) {
+                if (seen[i]) {
+                    if (!first) printf ","
+                    printf "%d", i
+                    first = 0
+                }
+            }
+            printf "\n"
+        }
+    ') || fail "Addresses must be unique numbers from 0 to 63, separated by commas."
+
+    [ -n "$result" ] || fail "Address list is empty."
+    printf '%s\n' "$result"
+}
+
+load_config() {
+    CONFIG=/etc/default/mdvwb-$BUS
+    [ -r "$CONFIG" ] || fail "Configuration does not exist: $CONFIG. Run: mdvwb-bus init $BUS"
+    # shellcheck disable=SC1090
+    . "$CONFIG"
+}
+
+set_config_value() {
+    key=$1
+    value=$2
+    file=$3
+    tmp=$(mktemp)
+    awk -v key="$key" -v value="$value" '
+        BEGIN { changed = 0 }
+        index($0, key "=") == 1 {
+            print key "=\"" value "\""
+            changed = 1
+            next
+        }
+        { print }
+        END {
+            if (!changed) print key "=\"" value "\""
+        }
+    ' "$file" > "$tmp"
+    install -m 0640 "$tmp" "$file"
+    rm -f "$tmp"
+}
+
+[ "$#" -ge 1 ] || { usage; exit 2; }
+ACTION=$1
+shift
+
+case "$ACTION" in
+    init)
+        [ "$#" -ge 1 ] && [ "$#" -le 2 ] || { usage; exit 2; }
+        require_root
+        BUS=$1
+        validate_bus "$BUS"
+        PORT=${2:-/dev/ttyRS485-$BUS}
+        CONFIG=/etc/default/mdvwb-$BUS
+        [ -r "$TEMPLATE" ] || fail "Configuration template is missing: $TEMPLATE"
+        if [ ! -e "$CONFIG" ]; then
+            install -m 0640 "$TEMPLATE" "$CONFIG"
+        fi
+        set_config_value MDVWB_BUS "$BUS" "$CONFIG"
+        set_config_value MDVWB_PORT "$PORT" "$CONFIG"
+        echo "Configured bus $BUS: $CONFIG, port $PORT"
+        ;;
+
+    set-addresses)
+        [ "$#" -eq 2 ] || { usage; exit 2; }
+        require_root
+        BUS=$1
+        validate_bus "$BUS"
+        CONFIG=/etc/default/mdvwb-$BUS
+        [ -r "$CONFIG" ] || fail "Configuration does not exist: $CONFIG. Run: mdvwb-bus init $BUS"
+        ADDRESSES=$(canonical_addresses "$2")
+        set_config_value MDVWB_ADDRESSES "$ADDRESSES" "$CONFIG"
+        echo "$ADDRESSES"
+        ;;
+
+    show)
+        [ "$#" -eq 1 ] || { usage; exit 2; }
+        BUS=$1
+        validate_bus "$BUS"
+        load_config
+        echo "BUS=$BUS"
+        echo "SERVICE=mdvwb@$BUS.service"
+        echo "CONFIG=$CONFIG"
+        echo "PORT=${MDVWB_PORT:-}"
+        echo "ADDRESSES=${MDVWB_ADDRESSES:-}"
+        echo "STATE=$(systemctl is-active mdvwb@$BUS.service 2>/dev/null || true)"
+        echo "AUTOSTART=$(systemctl is-enabled mdvwb@$BUS.service 2>/dev/null || true)"
+        ;;
+
+    start|stop|restart|enable|disable)
+        [ "$#" -eq 1 ] || { usage; exit 2; }
+        require_root
+        BUS=$1
+        validate_bus "$BUS"
+        load_config
+        case "$ACTION" in
+            enable) systemctl enable --now "mdvwb@$BUS.service" ;;
+            disable) systemctl disable --now "mdvwb@$BUS.service" ;;
+            *) systemctl "$ACTION" "mdvwb@$BUS.service" ;;
+        esac
+        ;;
+
+    status)
+        [ "$#" -eq 1 ] || { usage; exit 2; }
+        BUS=$1
+        validate_bus "$BUS"
+        systemctl status "mdvwb@$BUS.service" --no-pager
+        ;;
+
+    discover)
+        [ "$#" -eq 1 ] || { usage; exit 2; }
+        require_root
+        BUS=$1
+        validate_bus "$BUS"
+        load_config
+        systemctl stop "mdvwb@$BUS.service" 2>/dev/null || true
+        exec "$BINARY" --discover \
+            --port "${MDVWB_PORT:-/dev/ttyRS485-$BUS}" \
+            --master-id "${MDVWB_MASTER_ID:-0}" \
+            --period-ms "${MDVWB_PERIOD_MS:-150}" \
+            --response-timeout-ms "${MDVWB_RESPONSE_TIMEOUT_MS:-130}"
+        ;;
+
+    -h|--help|help)
+        usage
+        ;;
+
+    *)
+        usage
+        exit 2
+        ;;
+esac

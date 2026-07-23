@@ -1,8 +1,8 @@
 (function () {
     var DEVICE_ID = "MDVWB-Service-1";
-    var SERVICE_NAME = "mdvwb.service";
+    var SERVICE_NAME = "mdvwb@1.service";
     var DRIVER_PATH = "/usr/local/bin/MDVWB";
-    var CONFIG_PATH = "/etc/default/mdvwb";
+    var CONFIG_PATH = "/etc/default/mdvwb-1";
     var commandRunning = false;
 
     defineVirtualDevice(DEVICE_ID, {

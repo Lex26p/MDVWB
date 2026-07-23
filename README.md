@@ -212,3 +212,23 @@ DiscoveryDetails
 ## Исправление отображения поиска
 
 Поиск остаётся в виртуальном устройстве `MDVWB-Service-1`. В веб-интерфейсе оставлены кнопка `Найти устройства` и одно поле `Результат поиска`. После завершения поле содержит только краткий итог, например `На связи: 1, 5, 18`. Служебный stdout сканера, журнал и промежуточные сообщения в результат поиска не выводятся. Если устройств нет, отображается `На связи: нет устройств`. После поиска сервис остаётся остановленным.
+
+## Unified multi-bus service management
+
+Each RS-485 line now uses the same systemd template:
+
+```text
+mdvwb@1.service -> /etc/default/mdvwb-1 -> /dev/ttyRS485-1 -> Fan-1_*
+mdvwb@2.service -> /etc/default/mdvwb-2 -> /dev/ttyRS485-2 -> Fan-2_*
+```
+
+Use the installed helper instead of manually copying service files:
+
+```sh
+mdvwb-bus init 2 /dev/ttyRS485-2
+mdvwb-bus set-addresses 2 1,2,3
+mdvwb-bus enable 2
+mdvwb-bus show 2
+```
+
+The helper validates addresses as unique values from 0 through 63 and stores a canonical comma-separated list. `mdvwb-bus discover BUS` stops only the selected bus and does not restart it after scanning.

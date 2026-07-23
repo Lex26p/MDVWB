@@ -23,22 +23,28 @@ cmake --build "$BUILD_DIR" --parallel 1
 (cd "$BUILD_DIR" && ctest --output-on-failure)
 cmake --install "$BUILD_DIR"
 
-install -d -m 0755 /usr/local/lib/mdvwb /etc/default /etc/systemd/system /etc/wb-rules
+install -d -m 0755 /usr/local/bin /usr/local/lib/mdvwb /etc/default /etc/systemd/system /etc/wb-rules
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" /usr/local/lib/mdvwb/mdvwb-run
-install -m 0644 "$SCRIPT_DIR/mdvwb.service" /etc/systemd/system/mdvwb.service
+install -m 0755 "$SCRIPT_DIR/mdvwb-bus" /usr/local/bin/mdvwb-bus
+install -m 0640 "$SCRIPT_DIR/mdvwb.env" /usr/local/lib/mdvwb/mdvwb.env
+install -m 0644 "$SCRIPT_DIR/mdvwb@.service" /etc/systemd/system/mdvwb@.service
 install -m 0644 "$SCRIPT_DIR/mdvwb-service-control.js" /etc/wb-rules/mdvwb-service-control.js
 
-if [ ! -e /etc/default/mdvwb ]; then
-    install -m 0640 "$SCRIPT_DIR/mdvwb.env" /etc/default/mdvwb
-    echo "Created /etc/default/mdvwb from the safe one-device example."
-else
-    echo "Kept existing /etc/default/mdvwb unchanged."
+if [ ! -e /etc/default/mdvwb-1 ]; then
+    if [ -r /etc/default/mdvwb ]; then
+        install -m 0640 /etc/default/mdvwb /etc/default/mdvwb-1
+    else
+        install -m 0640 "$SCRIPT_DIR/mdvwb.env" /etc/default/mdvwb-1
+    fi
 fi
+/usr/local/bin/mdvwb-bus init 1 /dev/ttyRS485-1
 
+systemctl disable --now mdvwb.service 2>/dev/null || true
+rm -f /etc/systemd/system/mdvwb.service /etc/systemd/system/mdvwb-2.service
 systemctl daemon-reload
 systemctl restart wb-rules.service
 
-echo "Installed Wiren Board service controls: MDVWB-Service-1"
-echo "MDVWB installed but not started."
-echo "Edit /etc/default/mdvwb, then run: systemctl enable --now mdvwb"
-echo "View logs with: journalctl -u mdvwb -f"
+echo "Installed unified service template: mdvwb@<bus>.service"
+echo "Start bus 1 with: mdvwb-bus enable 1"
+echo "Create bus 2 with: mdvwb-bus init 2 /dev/ttyRS485-2"
+echo "View bus 1 logs with: journalctl -u mdvwb@1.service -f"
