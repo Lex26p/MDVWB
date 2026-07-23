@@ -46,8 +46,7 @@ struct SetState {
     FanSpeed fanSpeed = FanSpeed::Auto;
     std::uint8_t setTemperature = 21;
 
-    // Only bits 0..3 are known by the protocol. The driver will control
-    // Blinds (bit 2), while preserving the other known bits read from MDV.
+    // Only bits 0..3 are known. Blinds are bit 2.
     std::uint8_t additionalFunctions = 0;
 };
 
@@ -84,7 +83,10 @@ struct ParseResult {
 
 [[nodiscard]] bool IsKnownCommand(std::uint8_t value) noexcept;
 [[nodiscard]] std::uint8_t CalculateRequestChecksum(const RequestFrame& frame) noexcept;
+[[nodiscard]] bool HasValidRequestChecksum(const RequestFrame& frame) noexcept;
 [[nodiscard]] bool HasValidResponseChecksum(const ResponseFrame& frame) noexcept;
+
+void RefreshRequestChecksum(RequestFrame& frame) noexcept;
 
 [[nodiscard]] RequestFrame BuildReadRequest(std::uint8_t address, std::uint8_t masterId = 0);
 [[nodiscard]] RequestFrame BuildSetRequest(
@@ -92,13 +94,21 @@ struct ParseResult {
     const SetState& state,
     std::uint8_t masterId = 0);
 
+// Safe modifications of an already initialized C3 frame. Each function changes
+// only its own field and then refreshes checksum.
+void SetRequestPower(RequestFrame& frame, bool power);
+void SetRequestMode(RequestFrame& frame, Mode mode);
+void SetRequestFanSpeed(RequestFrame& frame, FanSpeed speed);
+void SetRequestTemperature(RequestFrame& frame, std::uint8_t temperature);
+void SetRequestBlinds(RequestFrame& frame, bool enabled);
+
 [[nodiscard]] ParseResult ParseResponse(
     const ResponseFrame& frame,
     std::optional<std::uint8_t> expectedAddress = std::nullopt,
     std::uint8_t expectedMasterId = 0);
 
-// Collects exactly 32 bytes beginning with 0xAA. Bytes such as 0xFE or 0x00
-// outside a frame are ignored. A 0x55 inside payload does not end the frame.
+// Collects exactly 32 bytes beginning with 0xAA. Bytes outside a frame are
+// ignored. A 0x55 inside payload does not end the frame.
 class ResponseFrameCollector {
 public:
     [[nodiscard]] std::optional<ResponseFrame> Push(std::uint8_t byte) noexcept;

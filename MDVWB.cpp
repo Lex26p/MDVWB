@@ -1,4 +1,5 @@
 #include "MDVWB.h"
+#include "mdv_device.h"
 #include "mdv_protocol.h"
 
 #include <array>
@@ -31,6 +32,29 @@ bool CheckFrame(
     std::string_view message)
 {
     return Check(actual == expected, message);
+}
+
+mdv::DeviceState MakeReadState(
+    std::uint8_t address,
+    bool power,
+    std::optional<mdv::Mode> mode,
+    std::optional<mdv::FanSpeed> speed,
+    std::uint8_t setTemperature,
+    std::uint8_t additionalFunctions = 0)
+{
+    mdv::DeviceState state;
+    state.command = mdv::Command::Read;
+    state.address = address;
+    state.masterId = 0;
+    state.power = power;
+    state.mode = mode;
+    state.activeMode = mode;
+    state.fanSpeed = speed;
+    state.activeFanSpeed = speed;
+    state.setTemperature = setTemperature;
+    state.additionalFunctions = additionalFunctions;
+    state.blinds = (additionalFunctions & 0x04) != 0;
+    return state;
 }
 
 bool TestReadRequests()
@@ -136,8 +160,124 @@ bool TestStreamCollector()
         CheckFrame(*extracted, response, "stream extracted frame content");
 }
 
-bool TestInvalidDataIsRejected()
+bool TestCachedSetFrame()
 {
+    mdv::DeviceContext device(0x18);
+    auto state = MakeReadState(
+        0x18, true, mdv::Mode::Auto, mdv::FanSpeed::Auto, 23, 0x04);
+    device.SynchronizeReadState(state);
+
+    const auto& frame = device.CachedSetFrame();
+    return Check(device.IsInitialized(), "device cache initialized") &&
+        Check(frame[1] == 0xC3 && frame[2] == 0x18, "cached C3 address") &&
+        Check(frame[6] == 0x90, "cached Power and Auto mode") &&
+        Check(frame[7] == 0x80, "cached Auto speed") &&
+        Check(frame[8] == 23, "cached SetTemp") &&
+        Check(frame[9] == 0x04, "cached Blinds") &&
+        Check(mdv::HasValidRequestChecksum(frame), "cached checksum");
+}
+
+bool TestSingleFieldModification()
+{
+    mdv::DeviceContext device(1);
+    device.SynchronizeReadState(MakeReadState(
+        1, true, mdv::Mode::Cool, mdv::FanSpeed::Auto, 23));
+
+    const auto before = device.CachedSetFrame();
+    device.ApplySetTemperature(24);
+    const auto after = device.CachedSetFrame();
+
+    bool onlyExpectedBytesChanged = true;
+    for (std::size_t index = 0; index < after.size(); ++index) {
+        if (index != 8 && index != 14 && before[index] != after[index]) {
+            onlyExpectedBytesChanged = false;
+        }
+    }
+
+    return Check(onlyExpectedBytesChanged, "SetTemp changes only payload byte and checksum") &&
+        Check(after[8] == 24, "cached SetTemp updated") &&
+        Check(device.HasPendingField(mdv::PendingField::SetTemperature), "SetTemp pending") &&
+        Check(device.IsSetCommandQueued(), "C3 queued") &&
+        Check(mdv::HasValidRequestChecksum(after), "updated checksum");
+}
+
+bool TestOldReadDoesNotOverwriteCommand()
+{
+    mdv::DeviceContext device(2);
+    auto state = MakeReadState(2, true, mdv::Mode::Cool, mdv::FanSpeed::Low, 23);
+    device.SynchronizeReadState(state);
+    device.ApplySetTemperature(24);
+
+    device.SynchronizeReadState(state); // fan coil still reports the old value
+    const bool oldValuePreserved = device.CachedSetFrame()[8] == 24 &&
+        device.HasPendingField(mdv::PendingField::SetTemperature);
+
+    state.setTemperature = 24;
+    device.SynchronizeReadState(state);
+
+    return Check(oldValuePreserved, "old C0 does not overwrite desired SetTemp") &&
+        Check(!device.HasPendingField(mdv::PendingField::SetTemperature), "new C0 confirms SetTemp");
+}
+
+bool TestLocalPanelSynchronizesFreeFields()
+{
+    mdv::DeviceContext device(3);
+    device.SynchronizeReadState(MakeReadState(
+        3, false, mdv::Mode::Auto, mdv::FanSpeed::Auto, 21));
+
+    device.SynchronizeReadState(MakeReadState(
+        3, true, mdv::Mode::Heat, mdv::FanSpeed::Medium, 25, 0x04));
+    const auto& frame = device.CachedSetFrame();
+
+    return Check(frame[6] == 0x84, "local Power and Heat synchronized") &&
+        Check(frame[7] == 0x02, "local Speed synchronized") &&
+        Check(frame[8] == 25, "local SetTemp synchronized") &&
+        Check(frame[9] == 0x04, "local Blinds synchronized") &&
+        Check(device.PendingFields() == mdv::PendingField::None, "local changes are not pending");
+}
+
+bool TestSafeFallbackAndRevision()
+{
+    mdv::DeviceContext device(4);
+    device.SynchronizeReadState(MakeReadState(4, false, std::nullopt, std::nullopt, 0));
+    const auto& fallback = device.CachedSetFrame();
+    const bool safeFallback = fallback[6] == 0x10 && fallback[7] == 0x80 && fallback[8] == 21;
+
+    device.ApplyPower(true);
+    const auto sending = device.PrepareSetFrameForSend();
+    const bool dequeued = !device.IsSetCommandQueued();
+
+    device.ApplySetTemperature(22);
+    device.FinishSetFrameSend(sending.revision);
+
+    return Check(safeFallback, "powered-off zero state gets safe C3 fallback") &&
+        Check(dequeued, "prepared C3 leaves queue") &&
+        Check(device.IsSetCommandQueued(), "newer MQTT change requeues C3") &&
+        Check(device.DesiredRevision() > sending.revision, "desired revision advanced");
+}
+
+bool TestUnsafeUseIsRejected()
+{
+    bool beforeReadRejected = false;
+    try {
+        mdv::DeviceContext device(5);
+        device.ApplyPower(true);
+    }
+    catch (const std::logic_error&) {
+        beforeReadRejected = true;
+    }
+
+    bool c3SyncRejected = false;
+    try {
+        mdv::DeviceContext device(6);
+        auto state = MakeReadState(6, false, mdv::Mode::Auto, mdv::FanSpeed::Auto, 21);
+        state.command = mdv::Command::Set;
+        device.SynchronizeReadState(state);
+    }
+    catch (const std::invalid_argument&) {
+        c3SyncRejected = true;
+    }
+
     bool badTemperatureRejected = false;
     try {
         auto state = mdv::SetState{};
@@ -156,8 +296,10 @@ bool TestInvalidDataIsRejected()
     auto corrupted = validResponse;
     corrupted[11] ^= 0x01;
 
-    return Check(badTemperatureRejected, "unsafe SetTemp is rejected") &&
-        Check(!mdv::ParseResponse(corrupted, 0).ok, "invalid response checksum is rejected");
+    return Check(beforeReadRejected, "C3 forbidden before first C0") &&
+        Check(c3SyncRejected, "C3 response cannot synchronize cache") &&
+        Check(badTemperatureRejected, "unsafe SetTemp rejected") &&
+        Check(!mdv::ParseResponse(corrupted, 0).ok, "invalid response checksum rejected");
 }
 
 } // namespace
@@ -169,13 +311,18 @@ int RunProtocolSelfTest()
         TestResponseParsing() &&
         TestAutoModeParsing() &&
         TestStreamCollector() &&
-        TestInvalidDataIsRejected();
+        TestCachedSetFrame() &&
+        TestSingleFieldModification() &&
+        TestOldReadDoesNotOverwriteCommand() &&
+        TestLocalPanelSynchronizesFreeFields() &&
+        TestSafeFallbackAndRevision() &&
+        TestUnsafeUseIsRejected();
 
     if (!ok) {
         return 1;
     }
 
-    std::cout << "MDV protocol self-test: OK\n";
+    std::cout << "MDV protocol and device-cache self-test: OK\n";
     return 0;
 }
 
@@ -185,7 +332,7 @@ int main(int argc, char* argv[])
         return RunProtocolSelfTest();
     }
 
-    std::cout << "MDVWB step 1: protocol module is ready.\n"
-                 "Run with --self-test to verify known MDV frames.\n";
+    std::cout << "MDVWB step 2: protocol and device cache are ready.\n"
+                 "Run with --self-test to verify known MDV behavior.\n";
     return 0;
 }

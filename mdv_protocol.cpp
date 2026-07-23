@@ -14,6 +14,42 @@ constexpr std::uint8_t kAutoSpeedBit = 0x80;
 constexpr std::uint8_t kKnownFunctionsMask = 0x0F;
 constexpr std::uint8_t kBlindsBit = 0x04;
 
+void ValidateSetFrame(const RequestFrame& frame)
+{
+    if (frame[0] != kFrameStart || frame[15] != kFrameEnd ||
+        frame[1] != static_cast<std::uint8_t>(Command::Set)) {
+        throw std::invalid_argument("frame is not an MDV C3 set request");
+    }
+}
+
+void ValidateMode(Mode mode)
+{
+    const auto value = static_cast<std::uint8_t>(mode);
+    if (std::popcount(static_cast<unsigned int>(value & kModeMask)) != 1 ||
+        (value & ~kModeMask) != 0) {
+        throw std::invalid_argument("MDV set frame must contain exactly one mode");
+    }
+}
+
+void ValidateFanSpeed(FanSpeed speed)
+{
+    const auto value = static_cast<std::uint8_t>(speed);
+    const bool valid = value == static_cast<std::uint8_t>(FanSpeed::High) ||
+        value == static_cast<std::uint8_t>(FanSpeed::Medium) ||
+        value == static_cast<std::uint8_t>(FanSpeed::Low) ||
+        value == static_cast<std::uint8_t>(FanSpeed::Auto);
+    if (!valid) {
+        throw std::invalid_argument("MDV set frame must contain exactly one fan speed");
+    }
+}
+
+void ValidateTemperature(std::uint8_t temperature)
+{
+    if (temperature < 16 || temperature > 32) {
+        throw std::invalid_argument("MDV set temperature must be in range 16..32");
+    }
+}
+
 [[nodiscard]] bool IsValidAddress(std::uint8_t address) noexcept
 {
     return address <= kMaxDeviceAddress;
@@ -139,24 +175,9 @@ constexpr std::uint8_t kBlindsBit = 0x04;
 
 void ValidateSetState(const SetState& state)
 {
-    const auto mode = static_cast<std::uint8_t>(state.mode);
-    const auto speed = static_cast<std::uint8_t>(state.fanSpeed);
-
-    if (std::popcount(static_cast<unsigned int>(mode & kModeMask)) != 1) {
-        throw std::invalid_argument("MDV set frame must contain exactly one mode");
-    }
-
-    const bool validSpeed = speed == static_cast<std::uint8_t>(FanSpeed::High) ||
-        speed == static_cast<std::uint8_t>(FanSpeed::Medium) ||
-        speed == static_cast<std::uint8_t>(FanSpeed::Low) ||
-        speed == static_cast<std::uint8_t>(FanSpeed::Auto);
-    if (!validSpeed) {
-        throw std::invalid_argument("MDV set frame must contain exactly one fan speed");
-    }
-
-    if (state.setTemperature < 16 || state.setTemperature > 32) {
-        throw std::invalid_argument("MDV set temperature must be in range 16..32");
-    }
+    ValidateMode(state.mode);
+    ValidateFanSpeed(state.fanSpeed);
+    ValidateTemperature(state.setTemperature);
 
     if ((state.additionalFunctions & ~kKnownFunctionsMask) != 0) {
         throw std::invalid_argument("MDV set frame contains reserved function bits");
@@ -206,6 +227,20 @@ std::uint8_t CalculateRequestChecksum(const RequestFrame& frame) noexcept
     return static_cast<std::uint8_t>(0U - sum);
 }
 
+bool HasValidRequestChecksum(const RequestFrame& frame) noexcept
+{
+    std::uint8_t sum = 0;
+    for (std::size_t index = 1; index <= 14; ++index) {
+        sum = static_cast<std::uint8_t>(sum + frame[index]);
+    }
+    return sum == 0;
+}
+
+void RefreshRequestChecksum(RequestFrame& frame) noexcept
+{
+    frame[14] = CalculateRequestChecksum(frame);
+}
+
 bool HasValidResponseChecksum(const ResponseFrame& frame) noexcept
 {
     std::uint8_t sum = 0;
@@ -218,7 +253,7 @@ bool HasValidResponseChecksum(const ResponseFrame& frame) noexcept
 RequestFrame BuildReadRequest(std::uint8_t address, std::uint8_t masterId)
 {
     auto frame = BuildRequestBase(Command::Read, address, masterId);
-    frame[14] = CalculateRequestChecksum(frame);
+    RefreshRequestChecksum(frame);
     return frame;
 }
 
@@ -234,8 +269,52 @@ RequestFrame BuildSetRequest(
     frame[7] = static_cast<std::uint8_t>(state.fanSpeed);
     frame[8] = state.setTemperature;
     frame[9] = static_cast<std::uint8_t>(state.additionalFunctions & kKnownFunctionsMask);
-    frame[14] = CalculateRequestChecksum(frame);
+    RefreshRequestChecksum(frame);
     return frame;
+}
+
+void SetRequestPower(RequestFrame& frame, bool power)
+{
+    ValidateSetFrame(frame);
+    frame[6] = power
+        ? static_cast<std::uint8_t>(frame[6] | kPowerBit)
+        : static_cast<std::uint8_t>(frame[6] & ~kPowerBit);
+    RefreshRequestChecksum(frame);
+}
+
+void SetRequestMode(RequestFrame& frame, Mode mode)
+{
+    ValidateSetFrame(frame);
+    ValidateMode(mode);
+    frame[6] = static_cast<std::uint8_t>(
+        (frame[6] & kPowerBit) | static_cast<std::uint8_t>(mode));
+    RefreshRequestChecksum(frame);
+}
+
+void SetRequestFanSpeed(RequestFrame& frame, FanSpeed speed)
+{
+    ValidateSetFrame(frame);
+    ValidateFanSpeed(speed);
+    frame[7] = static_cast<std::uint8_t>(speed);
+    RefreshRequestChecksum(frame);
+}
+
+void SetRequestTemperature(RequestFrame& frame, std::uint8_t temperature)
+{
+    ValidateSetFrame(frame);
+    ValidateTemperature(temperature);
+    frame[8] = temperature;
+    RefreshRequestChecksum(frame);
+}
+
+void SetRequestBlinds(RequestFrame& frame, bool enabled)
+{
+    ValidateSetFrame(frame);
+    frame[9] = enabled
+        ? static_cast<std::uint8_t>(frame[9] | kBlindsBit)
+        : static_cast<std::uint8_t>(frame[9] & ~kBlindsBit);
+    frame[9] = static_cast<std::uint8_t>(frame[9] & kKnownFunctionsMask);
+    RefreshRequestChecksum(frame);
 }
 
 ParseResult ParseResponse(
