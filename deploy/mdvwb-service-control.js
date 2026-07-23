@@ -2,6 +2,7 @@
     var DEVICE_ID = "MDVWB-Service-1";
     var SERVICE_NAME = "mdvwb.service";
     var DRIVER_PATH = "/usr/local/bin/MDVWB";
+    var CONFIG_PATH = "/etc/default/mdvwb";
     var commandRunning = false;
 
     defineVirtualDevice(DEVICE_ID, {
@@ -37,6 +38,12 @@
                 value: false,
                 forceDefault: true
             },
+            DiscoverDevices: {
+                title: "Найти устройства",
+                type: "pushbutton",
+                value: false,
+                forceDefault: true
+            },
             ServiceStatus: {
                 title: "Статус сервиса",
                 type: "text",
@@ -62,6 +69,13 @@
                 title: "Последние записи журнала",
                 type: "text",
                 value: "Журнал ещё не запрошен",
+                readonly: true,
+                forceDefault: true
+            },
+            DiscoveryDetails: {
+                title: "Результат поиска",
+                type: "text",
+                value: "Результат отсутствует",
                 readonly: true,
                 forceDefault: true
             },
@@ -228,6 +242,82 @@
         queryStatus("Статус обновлён");
     }
 
+    function extractFoundAddresses(output) {
+        var match = String(output || "").match(/(?:^|\n)FOUND_ADDRESSES=([0-9,]*)(?:\r?\n|$)/);
+
+        if (!match) {
+            return null;
+        }
+        return match[1];
+    }
+
+
+    function discoverDevices() {
+        var command;
+
+        if (commandRunning) {
+            setText("Result", "Другая команда уже выполняется");
+            return;
+        }
+
+        commandRunning = true;
+        setText("DiscoveryDetails", "Поиск выполняется...");
+        setText("Result", "Поиск устройств выполняется...");
+
+        command =
+            "service_before=$(systemctl is-active " + SERVICE_NAME + " 2>&1 || true); " +
+            "printf '__SERVICE_BEFORE__\\n%s\\n' \"$service_before\"; " +
+            "if [ \"$service_before\" = 'active' ] || [ \"$service_before\" = 'activating' ]; then " +
+                "systemctl stop " + SERVICE_NAME + " || exit 21; " +
+                "attempt=0; " +
+                "while systemctl is-active --quiet " + SERVICE_NAME + " && [ \"$attempt\" -lt 25 ]; do " +
+                    "sleep 0.2; attempt=$((attempt + 1)); " +
+                "done; " +
+                "if systemctl is-active --quiet " + SERVICE_NAME + "; then exit 22; fi; " +
+            "fi; " +
+            "if [ ! -r " + CONFIG_PATH + " ]; then echo 'Не найден файл " + CONFIG_PATH + "' >&2; exit 23; fi; " +
+            ". " + CONFIG_PATH + "; " +
+            "port=${MDVWB_PORT:-/dev/ttyRS485-1}; " +
+            "master_id=${MDVWB_MASTER_ID:-0}; " +
+            "period_ms=${MDVWB_PERIOD_MS:-150}; " +
+            "timeout_ms=${MDVWB_RESPONSE_TIMEOUT_MS:-130}; " +
+            "printf '__DISCOVERY_OUTPUT__\\n'; " +
+            DRIVER_PATH + " --discover --port \"$port\" --master-id \"$master_id\" " +
+                "--period-ms \"$period_ms\" --response-timeout-ms \"$timeout_ms\"; " +
+            "discovery_code=$?; " +
+            "printf '__DISCOVERY_EXIT__\\n%s\\n' \"$discovery_code\"; " +
+            "printf '__SERVICE_AFTER__\\n'; " +
+            "systemctl is-active " + SERVICE_NAME + " 2>&1 || true; " +
+            "exit \"$discovery_code\"";
+
+        runShellCommand(command, {
+            captureOutput: true,
+            captureErrorOutput: true,
+            exitCallback: function (exitCode, capturedOutput, capturedErrorOutput) {
+                var output = trimText(capturedOutput);
+                var discoveryOutput = getSection(output, "__DISCOVERY_OUTPUT__", "__DISCOVERY_EXIT__");
+                var serviceAfter = getSection(output, "__SERVICE_AFTER__", "");
+                var addresses = extractFoundAddresses(discoveryOutput);
+                var displayAddresses;
+                var result;
+
+                setText("ServiceStatus", formatStatus(serviceAfter));
+
+                if (exitCode === 0 && addresses !== null) {
+                    displayAddresses = addresses ? addresses.replace(/,/g, ", ") : "нет устройств";
+                    result = "На связи: " + displayAddresses;
+                    setText("DiscoveryDetails", result);
+                    setText("Result", result);
+                } else {
+                    result = "Ошибка поиска: код " + exitCode;
+                    setText("DiscoveryDetails", result);
+                    setText("Result", result);
+                }
+                commandRunning = false;
+            }
+        });
+    }
+
     function refreshDiagnostics() {
         var command;
 
@@ -307,6 +397,13 @@
         whenChanged: DEVICE_ID + "/RefreshDiagnostics",
         then: function () {
             refreshDiagnostics();
+        }
+    });
+
+    defineRule("mdvwb_device_discovery", {
+        whenChanged: DEVICE_ID + "/DiscoverDevices",
+        then: function () {
+            discoverDevices();
         }
     });
 

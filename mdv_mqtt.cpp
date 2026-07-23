@@ -551,7 +551,7 @@ void MqttStatePublisher::PublishInteger(
     if (!force && previous.has_value() && *previous == value) {
         return;
     }
-    client_.Publish(Topic(address, control), std::to_string(value), false);
+    client_.Publish(Topic(address, control), std::to_string(value), true);
     previous = value;
 }
 
@@ -565,7 +565,7 @@ void MqttStatePublisher::PublishNumber(
     if (!force && previous.has_value() && std::abs(*previous - value) < 0.0001) {
         return;
     }
-    client_.Publish(Topic(address, control), FormatNumber(value), false);
+    client_.Publish(Topic(address, control), FormatNumber(value), true);
     previous = value;
 }
 
@@ -574,7 +574,7 @@ std::string MqttStatePublisher::Topic(
     std::string_view control) const
 {
     return "/devices/Fan-" + std::to_string(busNumber_) + "_" +
-        std::to_string(address) + "/controls/" + std::string(control) + "/on";
+        std::to_string(address) + "/controls/" + std::string(control);
 }
 
 } // namespace mdv

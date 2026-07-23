@@ -1028,40 +1028,40 @@ bool TestMqttStatePublishingOnlyChanges()
     publisher.PublishAfter(driver, changed);
 
     const bool initialTopics = initialCount == 10 &&
-        client.publications[0].topic == "/devices/Fan-1_11/controls/Power/on" &&
+        client.publications[0].topic == "/devices/Fan-1_11/controls/Power" &&
         client.publications[0].payload == "1" &&
-        client.publications[1].topic == "/devices/Fan-1_11/controls/Mode/on" &&
+        client.publications[1].topic == "/devices/Fan-1_11/controls/Mode" &&
         client.publications[1].payload == "0" &&
-        client.publications[2].topic == "/devices/Fan-1_11/controls/Speed/on" &&
+        client.publications[2].topic == "/devices/Fan-1_11/controls/Speed" &&
         client.publications[2].payload == "4" &&
-        client.publications[3].topic == "/devices/Fan-1_11/controls/SetTemp/on" &&
+        client.publications[3].topic == "/devices/Fan-1_11/controls/SetTemp" &&
         client.publications[3].payload == "23" &&
-        client.publications[4].topic == "/devices/Fan-1_11/controls/Temp/on" &&
+        client.publications[4].topic == "/devices/Fan-1_11/controls/Temp" &&
         client.publications[4].payload == "24" &&
-        client.publications[5].topic == "/devices/Fan-1_11/controls/Blinds/on" &&
-        client.publications[6].topic == "/devices/Fan-1_11/controls/Blok/on" &&
-        client.publications[7].topic == "/devices/Fan-1_11/controls/Alarm/on" &&
-        client.publications[8].topic == "/devices/Fan-1_11/controls/AlarmCode/on" &&
-        client.publications[9].topic == "/devices/Fan-1_11/controls/Status/on" &&
+        client.publications[5].topic == "/devices/Fan-1_11/controls/Blinds" &&
+        client.publications[6].topic == "/devices/Fan-1_11/controls/Blok" &&
+        client.publications[7].topic == "/devices/Fan-1_11/controls/Alarm" &&
+        client.publications[8].topic == "/devices/Fan-1_11/controls/AlarmCode" &&
+        client.publications[9].topic == "/devices/Fan-1_11/controls/Status" &&
         client.publications[9].payload == "1";
 
     const auto& last = client.publications.back();
-    const bool allNonRetained = std::all_of(
+    const bool allRetained = std::all_of(
         client.publications.begin(), client.publications.end(),
         [](const mdv::MqttPublication& publication) {
-            return !publication.retained;
+            return publication.retained;
         });
 
     return Check(first.outcome == mdv::DriverOutcome::Success,
                  "first C0 is available for MQTT state") &&
-        Check(initialTopics, "first C0 publishes all supported /on values") &&
+        Check(initialTopics, "first C0 publishes all supported retained control values") &&
         Check(unchangedCount == initialCount,
               "unchanged C0 produces no MQTT publications") &&
         Check(client.publications.size() == initialCount + 1 &&
-                  last.topic == "/devices/Fan-1_11/controls/Temp/on" &&
+                  last.topic == "/devices/Fan-1_11/controls/Temp" &&
                   last.payload == "25",
               "only changed temperature is published") &&
-        Check(allNonRetained, "state /on publications are not retained");
+        Check(allRetained, "state publications are retained");
 }
 
 bool TestMqttAlarmOfflineAndRecovery()
@@ -1106,25 +1106,25 @@ bool TestMqttAlarmOfflineAndRecovery()
     publisher.PublishAfter(driver, result);
 
     const bool alarmPublications = alarmCount == 3 &&
-        client.publications[0].topic.ends_with("/Alarm/on") &&
+        client.publications[0].topic.ends_with("/Alarm") &&
         client.publications[0].payload == "1" &&
-        client.publications[1].topic.ends_with("/AlarmCode/on") &&
+        client.publications[1].topic.ends_with("/AlarmCode") &&
         client.publications[1].payload == "3" &&
-        client.publications[2].topic.ends_with("/Status/on") &&
+        client.publications[2].topic.ends_with("/Status") &&
         client.publications[2].payload == "6";
 
     const bool offlinePublications = offlineCount == alarmCount + 2 &&
-        client.publications[3].topic.ends_with("/Alarm/on") &&
+        client.publications[3].topic.ends_with("/Alarm") &&
         client.publications[3].payload == "2" &&
-        client.publications[4].topic.ends_with("/Status/on") &&
+        client.publications[4].topic.ends_with("/Status") &&
         client.publications[4].payload == "7";
 
     const bool recoveryPublications = client.publications.size() == offlineCount + 3 &&
-        client.publications[5].topic.ends_with("/Alarm/on") &&
+        client.publications[5].topic.ends_with("/Alarm") &&
         client.publications[5].payload == "0" &&
-        client.publications[6].topic.ends_with("/AlarmCode/on") &&
+        client.publications[6].topic.ends_with("/AlarmCode") &&
         client.publications[6].payload == "0" &&
-        client.publications[7].topic.ends_with("/Status/on") &&
+        client.publications[7].topic.ends_with("/Status") &&
         client.publications[7].payload == "1";
 
     return Check(alarmPublications, "E2 publishes Alarm=1, AlarmCode=3 and Status=6") &&
@@ -1151,12 +1151,12 @@ bool TestMqttBlockDoesNotReplaceStatus()
     const auto blocked = std::find_if(
         client.publications.begin(), client.publications.end(),
         [](const mdv::MqttPublication& publication) {
-            return publication.topic.ends_with("/Blok/on");
+            return publication.topic.ends_with("/Blok");
         });
     const auto status = std::find_if(
         client.publications.begin(), client.publications.end(),
         [](const mdv::MqttPublication& publication) {
-            return publication.topic.ends_with("/Status/on");
+            return publication.topic.ends_with("/Status");
         });
 
     return Check(blocked != client.publications.end() && blocked->payload == "1",
@@ -1176,9 +1176,9 @@ bool TestMosquittoClientBuffering()
 
     client.Subscribe(mdv::MqttCommandRouter::SubscriptionTopic());
     client.Subscribe(mdv::MqttCommandRouter::SubscriptionTopic());
-    client.Publish("/devices/Fan-1_1/controls/Power/on", "0", false);
-    client.Publish("/devices/Fan-1_1/controls/Power/on", "1", false);
-    client.Publish("/devices/Fan-1_1/controls/Mode/on", "4", false);
+    client.Publish("/devices/Fan-1_1/controls/Power", "0", true);
+    client.Publish("/devices/Fan-1_1/controls/Power", "1", true);
+    client.Publish("/devices/Fan-1_1/controls/Mode", "4", true);
 
     bool invalidHostRejected = false;
     bool invalidPortRejected = false;
@@ -1217,7 +1217,7 @@ bool TestMqttValidation()
     const auto wrongBus = router.Handle({
         "/devices/Fan-2_10/controls/Power/on1", "1", false});
     const auto loopTopic = router.Handle({
-        "/devices/Fan-1_10/controls/Power/on", "1", false});
+        "/devices/Fan-1_10/controls/Power", "1", false});
     const auto badPayload = router.Handle({
         "/devices/Fan-1_10/controls/Power/on1", "2", false});
     const auto retained = router.Handle({
@@ -1230,7 +1230,7 @@ bool TestMqttValidation()
     return Check(wrongBus.status == mdv::MqttCommandStatus::Ignored,
                  "other bus MQTT command ignored") &&
         Check(loopTopic.status == mdv::MqttCommandStatus::InvalidTopic,
-              "state /on topic is never treated as command") &&
+              "main state topic is never treated as command") &&
         Check(badPayload.status == mdv::MqttCommandStatus::InvalidPayload,
               "invalid boolean MQTT payload rejected") &&
         Check(retained.status == mdv::MqttCommandStatus::InvalidPayload,
@@ -1994,9 +1994,10 @@ int RunApplication(const mdv::ApplicationConfig& config)
     while (gStopRequested == 0) {
         const bool mqttConnected = mqtt.IsConnected();
         if (mqttConnected && !mqttWasConnected) {
-            // /on state messages are intentionally non-retained. Publish one
-            // additional complete snapshot after wb-rules has had time to
-            // create its virtual controls, and repeat this after reconnects.
+            // Retained state messages can still be overwritten by wb-rules defaults
+            // while virtual controls are being created. Publish one additional
+            // complete snapshot after that startup window, and repeat it after
+            // MQTT reconnects.
             initialSnapshotAt =
                 std::chrono::steady_clock::now() + initialSnapshotDelay;
         }

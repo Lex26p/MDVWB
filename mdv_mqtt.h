@@ -101,10 +101,11 @@ private:
     bool started_ = false;
 };
 
-// Publishes confirmed fan-coil values to /on topics. One previous value is
-// stored per control, therefore an unchanged C0 response produces no MQTT
-// traffic. C3/CC/CD replies are never published because they may contain stale
-// data; only a verified C0 updates state topics.
+// Publishes confirmed fan-coil values to the main Wiren Board control topics
+// with MQTT retain enabled. One previous value is stored per control, therefore
+// an unchanged C0 response produces no MQTT traffic. C3/CC/CD replies are never
+// published because they may contain stale data; only a verified C0 updates
+// retained state topics.
 class MqttStatePublisher {
 public:
     MqttStatePublisher(int busNumber, IMqttClient& client);

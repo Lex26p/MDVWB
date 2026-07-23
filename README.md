@@ -13,7 +13,7 @@
 - `Blinds`: `0` — выключено, `1` — включено;
 - `Blok`: `0` — разблокировать, `1` — заблокировать.
 
-Также публикуются `Temp`, `Alarm`, `AlarmCode` и общий `Status`. Значение `Blok` публикуется отдельно и не меняет общий `Status`.
+Также публикуются `Temp`, `Alarm`, `AlarmCode` и общий `Status`. Все фактические значения сохраняются брокером (`retain=true`), поэтому сразу отображаются в веб-интерфейсе Wiren Board и восстанавливаются после перезапуска интерфейса. Значение `Blok` публикуется отдельно и не меняет общий `Status`.
 
 ## MQTT-топики
 
@@ -28,19 +28,19 @@
 /devices/Fan-1_1/controls/Blok/on1
 ```
 
-Фактическое состояние публикуется только при изменении:
+Фактическое состояние публикуется в основные control-топики только при изменении и с `retain=true`:
 
 ```text
-/devices/Fan-1_1/controls/Power/on
-/devices/Fan-1_1/controls/Mode/on
-/devices/Fan-1_1/controls/Speed/on
-/devices/Fan-1_1/controls/SetTemp/on
-/devices/Fan-1_1/controls/Temp/on
-/devices/Fan-1_1/controls/Blinds/on
-/devices/Fan-1_1/controls/Blok/on
-/devices/Fan-1_1/controls/Alarm/on
-/devices/Fan-1_1/controls/AlarmCode/on
-/devices/Fan-1_1/controls/Status/on
+/devices/Fan-1_1/controls/Power
+/devices/Fan-1_1/controls/Mode
+/devices/Fan-1_1/controls/Speed
+/devices/Fan-1_1/controls/SetTemp
+/devices/Fan-1_1/controls/Temp
+/devices/Fan-1_1/controls/Blinds
+/devices/Fan-1_1/controls/Blok
+/devices/Fan-1_1/controls/Alarm
+/devices/Fan-1_1/controls/AlarmCode
+/devices/Fan-1_1/controls/Status
 ```
 
 Системные топики:
@@ -178,3 +178,37 @@ FOUND_ADDRESSES=1,5,18
 Адрес включается в результат после хотя бы одного полностью корректного
 ответа `C0` за три прохода. При отсутствии ответивших устройств последняя
 строка имеет вид `FOUND_ADDRESSES=`.
+
+
+## Поиск устройств из веб-интерфейса Wiren Board
+
+Файл `deploy/mdvwb-service-control.js` добавляет в устройство
+`MDVWB-Service-1` кнопку `Найти устройства` и текстовые контролы:
+
+```text
+DiscoveryStatus
+FoundAddresses
+DiscoveryDetails
+```
+
+При запуске поиска правило:
+
+1. Проверяет состояние `mdvwb.service`.
+2. Если сервис работает, останавливает его и ожидает освобождения RS-485.
+3. Читает порт, master ID и интервалы из `/etc/default/mdvwb`.
+4. Запускает `/usr/local/bin/MDVWB --discover`.
+5. Публикует адреса из строки `FOUND_ADDRESSES=` через запятую.
+6. Не запускает `mdvwb.service` после завершения поиска.
+
+Топик результата:
+
+```text
+/devices/MDVWB-Service-1/controls/FoundAddresses
+```
+
+Полный поиск занимает около 29 секунд при периоде транзакций 150 мс.
+
+
+## Исправление отображения поиска
+
+Поиск остаётся в виртуальном устройстве `MDVWB-Service-1`. В веб-интерфейсе оставлены кнопка `Найти устройства` и одно поле `Результат поиска`. После завершения поле содержит только краткий итог, например `На связи: 1, 5, 18`. Служебный stdout сканера, журнал и промежуточные сообщения в результат поиска не выводятся. Если устройств нет, отображается `На связи: нет устройств`. После поиска сервис остаётся остановленным.
