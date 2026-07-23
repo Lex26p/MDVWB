@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(MDVWB VERSION 0.2.0 LANGUAGES CXX)
+project(MDVWB VERSION 0.3.0 LANGUAGES CXX)
 
 add_executable(MDVWB
     MDVWB.cpp
@@ -9,6 +9,8 @@ add_executable(MDVWB
     mdv_protocol.h
     mdv_device.cpp
     mdv_device.h
+    mdv_serial.cpp
+    mdv_serial.h
 )
 
 target_compile_features(MDVWB PRIVATE cxx_std_20)

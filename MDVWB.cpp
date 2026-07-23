@@ -1,8 +1,10 @@
 #include "MDVWB.h"
 #include "mdv_device.h"
 #include "mdv_protocol.h"
+#include "mdv_serial.h"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <exception>
@@ -302,6 +304,80 @@ bool TestUnsafeUseIsRejected()
         Check(!mdv::ParseResponse(corrupted, 0).ok, "invalid response checksum rejected");
 }
 
+
+bool TestWireRequest()
+{
+    constexpr RequestFrame request{
+        0xAA, 0xC0, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x3F, 0x80, 0x55};
+    constexpr mdv::WireRequest expected{
+        0xFE, 0xAA, 0xC0, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x3F, 0x80, 0x55};
+
+    return CheckFrame(mdv::BuildWireRequest(request), expected, "wire request FE prefix");
+}
+
+bool TestTransactionTiming()
+{
+    const mdv::TimingSettings settings{
+        .transactionPeriod = std::chrono::milliseconds(150),
+        .responseTimeout = std::chrono::milliseconds(130),
+    };
+    const mdv::TransactionPacer pacer(settings);
+    const auto start = std::chrono::steady_clock::time_point{};
+
+    return Check(pacer.Settings().transactionPeriod == std::chrono::milliseconds(150),
+                 "transaction period is 150 ms") &&
+        Check(pacer.Settings().responseTimeout == std::chrono::milliseconds(130),
+              "response timeout is 130 ms") &&
+        Check(pacer.ResponseDeadline(start) == start + std::chrono::milliseconds(130),
+              "response deadline belongs to transaction slot") &&
+        Check(pacer.NextAllowedStart(start) == start + std::chrono::milliseconds(150),
+              "next request starts after full 150 ms period");
+}
+
+bool TestInvalidTimingRejected()
+{
+    bool equalTimeoutRejected = false;
+    try {
+        static_cast<void>(mdv::TransactionPacer({
+            .transactionPeriod = std::chrono::milliseconds(150),
+            .responseTimeout = std::chrono::milliseconds(150),
+        }));
+    }
+    catch (const std::invalid_argument&) {
+        equalTimeoutRejected = true;
+    }
+
+    bool longerTimeoutRejected = false;
+    try {
+        static_cast<void>(mdv::TransactionPacer({
+            .transactionPeriod = std::chrono::milliseconds(150),
+            .responseTimeout = std::chrono::milliseconds(200),
+        }));
+    }
+    catch (const std::invalid_argument&) {
+        longerTimeoutRejected = true;
+    }
+
+    return Check(equalTimeoutRejected, "response timeout cannot consume the full slot") &&
+        Check(longerTimeoutRejected, "response timeout cannot exceed the slot");
+}
+
+bool TestPortNameNormalization()
+{
+#ifdef _WIN32
+    return Check(mdv::SerialPort::NormalizePortName("COM3") == R"(\\.\COM3)",
+                 "Windows COM port normalization") &&
+        Check(mdv::SerialPort::NormalizePortName(R"(\\.\COM12)") == R"(\\.\COM12)",
+              "normalized Windows COM port remains unchanged");
+#else
+    return Check(mdv::SerialPort::NormalizePortName("/dev/ttyRS485-1") ==
+                     "/dev/ttyRS485-1",
+                 "Linux serial path remains unchanged");
+#endif
+}
+
 } // namespace
 
 int RunProtocolSelfTest()
@@ -316,13 +392,17 @@ int RunProtocolSelfTest()
         TestOldReadDoesNotOverwriteCommand() &&
         TestLocalPanelSynchronizesFreeFields() &&
         TestSafeFallbackAndRevision() &&
-        TestUnsafeUseIsRejected();
+        TestUnsafeUseIsRejected() &&
+        TestWireRequest() &&
+        TestTransactionTiming() &&
+        TestInvalidTimingRejected() &&
+        TestPortNameNormalization();
 
     if (!ok) {
         return 1;
     }
 
-    std::cout << "MDV protocol and device-cache self-test: OK\n";
+    std::cout << "MDV protocol, device-cache and serial self-test: OK\n";
     return 0;
 }
 
@@ -332,7 +412,7 @@ int main(int argc, char* argv[])
         return RunProtocolSelfTest();
     }
 
-    std::cout << "MDVWB step 2: protocol and device cache are ready.\n"
+    std::cout << "MDVWB step 3: serial transport and 150 ms pacing are ready.\n"
                  "Run with --self-test to verify known MDV behavior.\n";
     return 0;
 }
