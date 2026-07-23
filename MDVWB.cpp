@@ -408,10 +408,13 @@ private:
     std::size_t nextResult_ = 0;
 };
 
-ResponseFrame MakePollingResponse(
+ResponseFrame MakeDriverResponse(
     std::uint8_t address,
     mdv::Command command = mdv::Command::Read,
-    std::uint8_t setTemperature = 23)
+    std::uint8_t modeByte = 0x88,
+    std::uint8_t speedByte = 0x84,
+    std::uint8_t setTemperature = 23,
+    std::uint8_t additionalFunctions = 0)
 {
     ResponseFrame response{
         0xAA, 0xC0, 0x80, 0x00, 0x00, 0x00, 0xE0, 0x14,
@@ -421,7 +424,10 @@ ResponseFrame MakePollingResponse(
 
     response[1] = static_cast<std::uint8_t>(command);
     response[4] = address;
+    response[8] = modeByte;
+    response[9] = speedByte;
     response[10] = setTemperature;
+    response[20] = additionalFunctions;
 
     std::uint8_t sum = 0;
     for (std::size_t index = 1; index <= 29; ++index) {
@@ -443,17 +449,17 @@ mdv::TransactionResult SuccessfulTransaction(ResponseFrame response)
 bool TestRoundRobinPolling()
 {
     ScriptedTransport transport({
-        SuccessfulTransaction(MakePollingResponse(1)),
-        SuccessfulTransaction(MakePollingResponse(2)),
-        SuccessfulTransaction(MakePollingResponse(3)),
-        SuccessfulTransaction(MakePollingResponse(1, mdv::Command::Read, 24)),
+        SuccessfulTransaction(MakeDriverResponse(1)),
+        SuccessfulTransaction(MakeDriverResponse(2)),
+        SuccessfulTransaction(MakeDriverResponse(3)),
+        SuccessfulTransaction(MakeDriverResponse(1, mdv::Command::Read, 0x88, 0x84, 24)),
     });
-    mdv::MdvPollingDriver driver({1, 2, 3}, transport);
+    mdv::MdvDriver driver({1, 2, 3}, transport);
 
-    const auto first = driver.PollNext();
-    const auto second = driver.PollNext();
-    const auto third = driver.PollNext();
-    const auto fourth = driver.PollNext();
+    const auto first = driver.ProcessNext();
+    const auto second = driver.ProcessNext();
+    const auto third = driver.ProcessNext();
+    const auto fourth = driver.ProcessNext();
 
     const bool requestOrder = transport.requests.size() == 4 &&
         transport.requests[0][2] == 1 &&
@@ -461,22 +467,23 @@ bool TestRoundRobinPolling()
         transport.requests[2][2] == 3 &&
         transport.requests[3][2] == 1;
 
-    return Check(first.outcome == mdv::PollOutcome::Success && first.address == 1,
+    return Check(first.operation == mdv::DriverOperation::PollRead &&
+                     first.outcome == mdv::DriverOutcome::Success && first.address == 1,
                  "round-robin first device") &&
-        Check(second.outcome == mdv::PollOutcome::Success && second.address == 2,
+        Check(second.outcome == mdv::DriverOutcome::Success && second.address == 2,
               "round-robin second device") &&
-        Check(third.outcome == mdv::PollOutcome::Success && third.address == 3,
+        Check(third.outcome == mdv::DriverOutcome::Success && third.address == 3,
               "round-robin third device") &&
-        Check(fourth.outcome == mdv::PollOutcome::Success && fourth.address == 1,
+        Check(fourth.outcome == mdv::DriverOutcome::Success && fourth.address == 1,
               "round-robin wraps to first device") &&
         Check(requestOrder, "round-robin C0 request order") &&
-        Check(driver.NextAddress() == 2, "next round-robin address") &&
+        Check(driver.NextPollAddress() == 2, "next round-robin address") &&
         Check(driver.DeviceByAddress(1).device.IsInitialized(),
               "first valid C0 initializes cached C3") &&
         Check(driver.DeviceByAddress(1).device.ActualState().setTemperature == 24,
               "later C0 updates actual state") &&
-        Check(driver.DeviceByAddress(1).successfulPolls == 2,
-              "successful poll counter") &&
+        Check(driver.DeviceByAddress(1).successfulReads == 2,
+              "successful read counter") &&
         Check(driver.DeviceByAddress(1).online, "successful device is online");
 }
 
@@ -488,50 +495,51 @@ bool TestPollingContinuesAfterTimeout()
             .response = std::nullopt,
             .error = "timeout",
         },
-        SuccessfulTransaction(MakePollingResponse(5)),
-        SuccessfulTransaction(MakePollingResponse(4)),
+        SuccessfulTransaction(MakeDriverResponse(5)),
+        SuccessfulTransaction(MakeDriverResponse(4)),
     });
-    mdv::MdvPollingDriver driver({4, 5}, transport);
+    mdv::MdvDriver driver({4, 5}, transport);
 
-    const auto timeout = driver.PollNext();
-    const auto nextDevice = driver.PollNext();
-    const auto recovered = driver.PollNext();
+    const auto timeout = driver.ProcessNext();
+    const auto nextDevice = driver.ProcessNext();
+    const auto recovered = driver.ProcessNext();
     const auto& device4 = driver.DeviceByAddress(4);
 
-    return Check(timeout.outcome == mdv::PollOutcome::Timeout && timeout.address == 4,
+    return Check(timeout.outcome == mdv::DriverOutcome::Timeout && timeout.address == 4,
                  "poll timeout result") &&
-        Check(nextDevice.outcome == mdv::PollOutcome::Success && nextDevice.address == 5,
+        Check(nextDevice.outcome == mdv::DriverOutcome::Success && nextDevice.address == 5,
               "timeout does not stop round-robin polling") &&
-        Check(recovered.outcome == mdv::PollOutcome::Success && recovered.address == 4,
+        Check(recovered.outcome == mdv::DriverOutcome::Success && recovered.address == 4,
               "timed-out device is polled again") &&
         Check(device4.online, "device returns online after valid response") &&
-        Check(device4.failedPolls == 1 && device4.successfulPolls == 1,
+        Check(device4.failedReads == 1 && device4.successfulReads == 1,
               "communication counters survive recovery") &&
-        Check(device4.consecutiveFailures == 0, "recovery clears consecutive failures");
+        Check(device4.consecutiveReadFailures == 0,
+              "recovery clears consecutive failures");
 }
 
 bool TestInvalidPollingResponses()
 {
-    auto corrupted = MakePollingResponse(6);
+    auto corrupted = MakeDriverResponse(6);
     corrupted[11] ^= 0x01;
 
     ScriptedTransport transport({
         SuccessfulTransaction(corrupted),
-        SuccessfulTransaction(MakePollingResponse(6, mdv::Command::Set)),
+        SuccessfulTransaction(MakeDriverResponse(6, mdv::Command::Set)),
     });
-    mdv::MdvPollingDriver driver({6}, transport);
+    mdv::MdvDriver driver({6}, transport);
 
-    const auto badChecksum = driver.PollNext();
-    const auto wrongCommand = driver.PollNext();
+    const auto badChecksum = driver.ProcessNext();
+    const auto wrongCommand = driver.ProcessNext();
     const auto& runtime = driver.DeviceByAddress(6);
 
-    return Check(badChecksum.outcome == mdv::PollOutcome::InvalidResponse,
+    return Check(badChecksum.outcome == mdv::DriverOutcome::InvalidResponse,
                  "poll rejects bad response checksum") &&
-        Check(wrongCommand.outcome == mdv::PollOutcome::InvalidResponse,
+        Check(wrongCommand.outcome == mdv::DriverOutcome::InvalidResponse,
               "poll rejects C3 response while expecting C0") &&
         Check(!runtime.device.IsInitialized(),
               "invalid polling responses do not initialize cached frame") &&
-        Check(runtime.failedPolls == 2 && !runtime.online,
+        Check(runtime.failedReads == 2 && !runtime.online,
               "invalid responses update communication state");
 }
 
@@ -541,7 +549,7 @@ bool TestPollingAddressValidation()
 
     bool emptyRejected = false;
     try {
-        static_cast<void>(mdv::MdvPollingDriver({}, transport));
+        static_cast<void>(mdv::MdvDriver({}, transport));
     }
     catch (const std::invalid_argument&) {
         emptyRejected = true;
@@ -549,7 +557,7 @@ bool TestPollingAddressValidation()
 
     bool duplicateRejected = false;
     try {
-        static_cast<void>(mdv::MdvPollingDriver({1, 1}, transport));
+        static_cast<void>(mdv::MdvDriver({1, 1}, transport));
     }
     catch (const std::invalid_argument&) {
         duplicateRejected = true;
@@ -557,7 +565,7 @@ bool TestPollingAddressValidation()
 
     bool invalidAddressRejected = false;
     try {
-        static_cast<void>(mdv::MdvPollingDriver({0x40}, transport));
+        static_cast<void>(mdv::MdvDriver({0x40}, transport));
     }
     catch (const std::out_of_range&) {
         invalidAddressRejected = true;
@@ -566,6 +574,162 @@ bool TestPollingAddressValidation()
     return Check(emptyRejected, "empty polling list rejected") &&
         Check(duplicateRejected, "duplicate polling address rejected") &&
         Check(invalidAddressRejected, "out-of-range polling address rejected");
+}
+
+bool TestSetQueueAndConfirmation()
+{
+    ScriptedTransport transport({
+        SuccessfulTransaction(MakeDriverResponse(1)),
+        SuccessfulTransaction(MakeDriverResponse(2)),
+        SuccessfulTransaction(MakeDriverResponse(2, mdv::Command::Set)),
+        SuccessfulTransaction(MakeDriverResponse(2)),
+        SuccessfulTransaction(MakeDriverResponse(2, mdv::Command::Set)),
+        SuccessfulTransaction(MakeDriverResponse(
+            2, mdv::Command::Read, 0x88, 0x84, 24)),
+        SuccessfulTransaction(MakeDriverResponse(1)),
+    });
+    mdv::MdvDriver driver({1, 2}, transport);
+
+    static_cast<void>(driver.ProcessNext());
+    static_cast<void>(driver.ProcessNext());
+    driver.SetTemperature(2, 24);
+
+    const auto set1 = driver.ProcessNext();
+    const auto confirmOld = driver.ProcessNext();
+    const bool oldStatePreserved =
+        driver.DeviceByAddress(2).device.CachedSetFrame()[8] == 24 &&
+        driver.DeviceByAddress(2).device.HasPendingField(
+            mdv::PendingField::SetTemperature);
+    const auto set2 = driver.ProcessNext();
+    const auto confirmNew = driver.ProcessNext();
+    const auto normalPoll = driver.ProcessNext();
+
+    const bool order = transport.requests.size() == 7 &&
+        transport.requests[2][1] == static_cast<std::uint8_t>(mdv::Command::Set) &&
+        transport.requests[2][2] == 2 && transport.requests[2][8] == 24 &&
+        transport.requests[3][1] == static_cast<std::uint8_t>(mdv::Command::Read) &&
+        transport.requests[3][2] == 2 &&
+        transport.requests[4][1] == static_cast<std::uint8_t>(mdv::Command::Set) &&
+        transport.requests[5][1] == static_cast<std::uint8_t>(mdv::Command::Read) &&
+        transport.requests[6][2] == 1;
+
+    return Check(set1.operation == mdv::DriverOperation::SetState &&
+                     set1.outcome == mdv::DriverOutcome::Success,
+                 "queued C3 has priority over ordinary poll") &&
+        Check(confirmOld.operation == mdv::DriverOperation::ConfirmRead,
+              "C3 is followed by confirmation C0") &&
+        Check(oldStatePreserved, "old confirmation does not erase desired value") &&
+        Check(set2.operation == mdv::DriverOperation::SetState,
+              "old confirmation requeues cached C3") &&
+        Check(confirmNew.operation == mdv::DriverOperation::ConfirmRead &&
+                  confirmNew.outcome == mdv::DriverOutcome::Success,
+              "new value is confirmed by C0") &&
+        Check(!driver.DeviceByAddress(2).device.HasPendingField(
+                  mdv::PendingField::SetTemperature),
+              "confirmed field leaves pending mask") &&
+        Check(normalPoll.operation == mdv::DriverOperation::PollRead &&
+                  normalPoll.address == 1,
+              "round-robin resumes after command sequence") &&
+        Check(order, "C3 and C0 transaction order");
+}
+
+bool TestMultipleCommandsMergeIntoOneFrame()
+{
+    ScriptedTransport transport({
+        SuccessfulTransaction(MakeDriverResponse(
+            3, mdv::Command::Read, 0x10, 0x80, 21)),
+        SuccessfulTransaction(MakeDriverResponse(
+            3, mdv::Command::Set, 0x10, 0x80, 21)),
+        SuccessfulTransaction(MakeDriverResponse(
+            3, mdv::Command::Read, 0x84, 0x02, 25, 0x04)),
+    });
+    mdv::MdvDriver driver({3}, transport);
+
+    static_cast<void>(driver.ProcessNext());
+    driver.SetPower(3, true);
+    driver.SetMode(3, mdv::Mode::Heat);
+    driver.SetFanSpeed(3, mdv::FanSpeed::Medium);
+    driver.SetTemperature(3, 25);
+    driver.SetBlinds(3, true);
+
+    const auto set = driver.ProcessNext();
+    const auto confirm = driver.ProcessNext();
+    const auto& frame = transport.requests[1];
+
+    return Check(set.operation == mdv::DriverOperation::SetState,
+                 "merged command sends C3") &&
+        Check(frame[6] == 0x84, "merged Power and Heat") &&
+        Check(frame[7] == 0x02, "merged Medium speed") &&
+        Check(frame[8] == 25, "merged SetTemp") &&
+        Check(frame[9] == 0x04, "merged Blinds") &&
+        Check(mdv::HasValidRequestChecksum(frame), "merged frame checksum") &&
+        Check(confirm.operation == mdv::DriverOperation::ConfirmRead,
+              "merged frame has one confirmation") &&
+        Check(driver.DeviceByAddress(3).device.PendingFields() ==
+                  mdv::PendingField::None,
+              "all merged fields confirmed") &&
+        Check(!driver.HasQueuedWork(), "one C3 handles all queued field changes");
+}
+
+bool TestSetTimeoutIsConfirmedBeforeRetry()
+{
+    ScriptedTransport transport({
+        SuccessfulTransaction(MakeDriverResponse(
+            4, mdv::Command::Read, 0x10, 0x80, 21)),
+        mdv::TransactionResult{
+            .status = mdv::TransactionStatus::Timeout,
+            .response = std::nullopt,
+            .error = "set timeout",
+        },
+        SuccessfulTransaction(MakeDriverResponse(
+            4, mdv::Command::Read, 0x10, 0x80, 21)),
+        SuccessfulTransaction(MakeDriverResponse(
+            4, mdv::Command::Set, 0x10, 0x80, 21)),
+        SuccessfulTransaction(MakeDriverResponse(
+            4, mdv::Command::Read, 0x90, 0x80, 21)),
+    });
+    mdv::MdvDriver driver({4}, transport);
+
+    static_cast<void>(driver.ProcessNext());
+    driver.SetPower(4, true);
+
+    const auto timeout = driver.ProcessNext();
+    const auto confirmOld = driver.ProcessNext();
+    const auto retry = driver.ProcessNext();
+    const auto confirmed = driver.ProcessNext();
+    const auto& runtime = driver.DeviceByAddress(4);
+
+    return Check(timeout.operation == mdv::DriverOperation::SetState &&
+                     timeout.outcome == mdv::DriverOutcome::Timeout,
+                 "C3 timeout is reported") &&
+        Check(confirmOld.operation == mdv::DriverOperation::ConfirmRead,
+              "C0 is sent before duplicate C3") &&
+        Check(retry.operation == mdv::DriverOperation::SetState,
+              "old C0 result permits cached C3 retry") &&
+        Check(confirmed.operation == mdv::DriverOperation::ConfirmRead &&
+                  confirmed.outcome == mdv::DriverOutcome::Success,
+              "retry is confirmed") &&
+        Check(runtime.failedSets == 1 && runtime.successfulSets == 1,
+              "set counters include timeout and retry") &&
+        Check(runtime.device.PendingFields() == mdv::PendingField::None,
+              "retry confirmation clears pending Power");
+}
+
+bool TestDriverRejectsCommandBeforeFirstRead()
+{
+    ScriptedTransport transport({});
+    mdv::MdvDriver driver({7}, transport);
+
+    bool rejected = false;
+    try {
+        driver.SetPower(7, true);
+    }
+    catch (const std::logic_error&) {
+        rejected = true;
+    }
+
+    return Check(rejected, "driver rejects C3 before cached frame initialization") &&
+        Check(!driver.HasQueuedWork(), "rejected command is not queued");
 }
 
 } // namespace
@@ -590,13 +754,17 @@ int RunProtocolSelfTest()
         TestRoundRobinPolling() &&
         TestPollingContinuesAfterTimeout() &&
         TestInvalidPollingResponses() &&
-        TestPollingAddressValidation();
+        TestPollingAddressValidation() &&
+        TestSetQueueAndConfirmation() &&
+        TestMultipleCommandsMergeIntoOneFrame() &&
+        TestSetTimeoutIsConfirmedBeforeRetry() &&
+        TestDriverRejectsCommandBeforeFirstRead();
 
     if (!ok) {
         return 1;
     }
 
-    std::cout << "MDV protocol, cache, serial and polling self-test: OK\n";
+    std::cout << "MDV protocol, cache, serial, polling and command self-test: OK\n";
     return 0;
 }
 
@@ -606,7 +774,7 @@ int main(int argc, char* argv[])
         return RunProtocolSelfTest();
     }
 
-    std::cout << "MDVWB step 4: round-robin polling is ready.\n"
+    std::cout << "MDVWB step 5: queued C3 commands and confirmation reads are ready.\n"
                  "Run with --self-test to verify known MDV behavior.\n";
     return 0;
 }

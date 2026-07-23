@@ -5,21 +5,29 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
 namespace mdv {
 
-enum class PollOutcome {
+enum class DriverOperation {
+    PollRead,
+    SetState,
+    ConfirmRead,
+};
+
+enum class DriverOutcome {
     Success,
     Timeout,
     IoError,
     InvalidResponse,
 };
 
-struct PollResult {
+struct DriverResult {
     std::uint8_t address = 0;
-    PollOutcome outcome = PollOutcome::Timeout;
+    DriverOperation operation = DriverOperation::PollRead;
+    DriverOutcome outcome = DriverOutcome::Timeout;
     std::string error;
 };
 
@@ -31,38 +39,65 @@ struct DeviceRuntime {
 
     DeviceContext device;
     bool online = false;
-    std::uint64_t successfulPolls = 0;
-    std::uint64_t failedPolls = 0;
-    std::uint32_t consecutiveFailures = 0;
+    bool setQueueEntry = false;
+    bool confirmQueueEntry = false;
+
+    std::uint64_t successfulReads = 0;
+    std::uint64_t failedReads = 0;
+    std::uint64_t successfulSets = 0;
+    std::uint64_t failedSets = 0;
+    std::uint32_t consecutiveReadFailures = 0;
     std::string lastError;
 };
 
-// Performs one strictly sequential C0 transaction at a time. The transport owns
-// the fixed 150 ms pacing, while this class only selects the next device and
-// updates its confirmed state.
-class MdvPollingDriver {
+// Owns the transaction order for one RS-485 line. Exactly one request is sent
+// per call. Confirmation reads have highest priority, then cached C3 frames,
+// then the ordinary round-robin C0 poll.
+class MdvDriver {
 public:
-    MdvPollingDriver(
+    MdvDriver(
         std::vector<std::uint8_t> addresses,
         ITransactionTransport& transport,
         std::uint8_t masterId = 0);
 
-    [[nodiscard]] PollResult PollNext();
+    [[nodiscard]] DriverResult ProcessNext();
 
+    void SetPower(std::uint8_t address, bool power);
+    void SetMode(std::uint8_t address, Mode mode);
+    void SetFanSpeed(std::uint8_t address, FanSpeed speed);
+    void SetTemperature(std::uint8_t address, std::uint8_t temperature);
+    void SetBlinds(std::uint8_t address, bool enabled);
+
+    [[nodiscard]] bool HasQueuedWork() const noexcept;
     [[nodiscard]] std::size_t DeviceCount() const noexcept;
-    [[nodiscard]] std::uint8_t NextAddress() const noexcept;
+    [[nodiscard]] std::uint8_t NextPollAddress() const noexcept;
 
     [[nodiscard]] DeviceRuntime& DeviceByAddress(std::uint8_t address);
     [[nodiscard]] const DeviceRuntime& DeviceByAddress(std::uint8_t address) const;
 
 private:
-    void MarkSuccess(DeviceRuntime& runtime) noexcept;
-    void MarkFailure(DeviceRuntime& runtime, std::string error);
+    [[nodiscard]] DriverResult ExecuteRead(
+        DeviceRuntime& runtime,
+        DriverOperation operation);
+    [[nodiscard]] DriverResult ExecuteSet(DeviceRuntime& runtime);
+
+    void EnqueueSet(DeviceRuntime& runtime);
+    void EnqueueConfirmation(DeviceRuntime& runtime);
+    [[nodiscard]] DeviceRuntime& PopSet();
+    [[nodiscard]] DeviceRuntime& PopConfirmation();
+    [[nodiscard]] DeviceRuntime& NextPollDevice() noexcept;
+
+    void MarkReadSuccess(DeviceRuntime& runtime) noexcept;
+    void MarkReadFailure(DeviceRuntime& runtime, std::string error);
+    void MarkSetSuccess(DeviceRuntime& runtime) noexcept;
+    void MarkSetFailure(DeviceRuntime& runtime, std::string error);
 
     std::vector<DeviceRuntime> devices_;
     ITransactionTransport& transport_;
     std::uint8_t masterId_ = 0;
-    std::size_t nextIndex_ = 0;
+    std::size_t nextPollIndex_ = 0;
+    std::deque<std::uint8_t> setQueue_;
+    std::deque<std::uint8_t> confirmationQueue_;
 };
 
 } // namespace mdv

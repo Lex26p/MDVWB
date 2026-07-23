@@ -71,6 +71,10 @@ public:
     [[nodiscard]] SetFrameSnapshot PrepareSetFrameForSend();
     void FinishSetFrameSend(std::uint64_t sentRevision) noexcept;
 
+    // Used after a confirmation C0. Returns true only when a complete cached
+    // C3 must be queued because at least one desired field is still unconfirmed.
+    [[nodiscard]] bool QueueSetCommandIfPending() noexcept;
+
 private:
     void RequireInitialized() const;
     void MarkChanged(PendingField field) noexcept;

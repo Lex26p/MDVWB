@@ -219,6 +219,15 @@ void DeviceContext::FinishSetFrameSend(std::uint64_t sentRevision) noexcept
     }
 }
 
+bool DeviceContext::QueueSetCommandIfPending() noexcept
+{
+    if (pendingFields_ == PendingField::None) {
+        return false;
+    }
+    setCommandQueued_ = true;
+    return true;
+}
+
 void DeviceContext::RequireInitialized() const
 {
     if (!initialized_) {
