@@ -2,6 +2,7 @@
 #include "mdv_device.h"
 #include "mdv_driver.h"
 #include "mdv_mqtt.h"
+#include "mdv_mosquitto.h"
 #include "mdv_protocol.h"
 #include "mdv_serial.h"
 
@@ -1073,6 +1074,49 @@ bool TestMqttBlockDoesNotReplaceStatus()
               "Blok does not replace Cool status");
 }
 
+bool TestMosquittoClientBuffering()
+{
+    mdv::MqttConnectionOptions options;
+    options.host = "127.0.0.1";
+    options.port = 1883;
+    options.keepAliveSeconds = 60;
+    options.clientId = "mdvwb-self-test";
+    mdv::MosquittoMqttClient client(options);
+
+    client.Subscribe(mdv::MqttCommandRouter::SubscriptionTopic());
+    client.Subscribe(mdv::MqttCommandRouter::SubscriptionTopic());
+    client.Publish("/devices/Fan-1_1/controls/Power/on", "0", false);
+    client.Publish("/devices/Fan-1_1/controls/Power/on", "1", false);
+    client.Publish("/devices/Fan-1_1/controls/Mode/on", "4", false);
+
+    bool invalidHostRejected = false;
+    bool invalidPortRejected = false;
+    try {
+        auto invalidOptions = mdv::MqttConnectionOptions{};
+        invalidOptions.host.clear();
+        mdv::MosquittoMqttClient invalid(invalidOptions);
+    }
+    catch (const std::invalid_argument&) {
+        invalidHostRejected = true;
+    }
+    try {
+        auto invalidOptions = mdv::MqttConnectionOptions{};
+        invalidOptions.port = 70000;
+        mdv::MosquittoMqttClient invalid(invalidOptions);
+    }
+    catch (const std::invalid_argument&) {
+        invalidPortRejected = true;
+    }
+
+    return Check(!client.IsConnected(), "MQTT client starts disconnected") &&
+        Check(client.SubscriptionCount() == 1,
+              "duplicate MQTT subscription is stored once") &&
+        Check(client.PendingPublicationCount() == 2,
+              "offline MQTT buffer keeps latest value per topic") &&
+        Check(invalidHostRejected, "empty MQTT host rejected") &&
+        Check(invalidPortRejected, "invalid MQTT port rejected");
+}
+
 bool TestMqttValidation()
 {
     ScriptedTransport transport({});
@@ -1140,13 +1184,14 @@ int RunProtocolSelfTest()
         TestMqttStatePublishingOnlyChanges() &&
         TestMqttAlarmOfflineAndRecovery() &&
         TestMqttBlockDoesNotReplaceStatus() &&
+        TestMosquittoClientBuffering() &&
         TestMqttValidation();
 
     if (!ok) {
         return 1;
     }
 
-    std::cout << "MDV protocol, cache, serial, polling, command and MQTT state self-test: OK\n";
+    std::cout << "MDV protocol, cache, serial, polling, command and real MQTT client self-test: OK\n";
     return 0;
 }
 
