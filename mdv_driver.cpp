@@ -68,6 +68,11 @@ DriverResult MdvDriver::ProcessNext()
         return ExecuteRead(runtime, DriverOperation::ConfirmRead);
     }
 
+    if (!blockQueue_.empty()) {
+        auto& runtime = PopBlock();
+        return ExecuteBlock(runtime);
+    }
+
     if (!setQueue_.empty()) {
         auto& runtime = PopSet();
         return ExecuteSet(runtime);
@@ -112,9 +117,23 @@ void MdvDriver::SetBlinds(std::uint8_t address, bool enabled)
     EnqueueSet(runtime);
 }
 
+void MdvDriver::SetBlocked(std::uint8_t address, bool blocked)
+{
+    auto& runtime = DeviceByAddress(address);
+    if (!runtime.device.IsInitialized()) {
+        throw std::logic_error(
+            "MDV block command is forbidden before the first valid C0 response");
+    }
+
+    runtime.desiredBlocked = blocked;
+    runtime.blockPending = true;
+    ++runtime.blockRevision;
+    EnqueueBlock(runtime);
+}
+
 bool MdvDriver::HasQueuedWork() const noexcept
 {
-    return !confirmationQueue_.empty() || !setQueue_.empty();
+    return !confirmationQueue_.empty() || !blockQueue_.empty() || !setQueue_.empty();
 }
 
 std::size_t MdvDriver::DeviceCount() const noexcept
@@ -192,6 +211,15 @@ DriverResult MdvDriver::ExecuteRead(
     runtime.device.SynchronizeReadState(parsed.state);
     MarkReadSuccess(runtime);
 
+    if (runtime.blockPending) {
+        if (parsed.state.modeLocked == runtime.desiredBlocked) {
+            runtime.blockPending = false;
+        }
+        else {
+            EnqueueBlock(runtime);
+        }
+    }
+
     // A C0 response may still contain the old value after C3. Only if pending
     // fields remain do we queue another complete cached C3 frame.
     if (runtime.device.QueueSetCommandIfPending()) {
@@ -257,6 +285,66 @@ DriverResult MdvDriver::ExecuteSet(DeviceRuntime& runtime)
     return result;
 }
 
+DriverResult MdvDriver::ExecuteBlock(DeviceRuntime& runtime)
+{
+    const auto address = runtime.device.Address();
+    const auto desiredBlocked = runtime.desiredBlocked;
+    const auto sentRevision = runtime.blockRevision;
+    const auto request = desiredBlocked
+        ? BuildLockRequest(address, masterId_)
+        : BuildUnlockRequest(address, masterId_);
+    const auto expectedCommand = desiredBlocked ? Command::Lock : Command::Unlock;
+    const auto transaction = transport_.Execute(request);
+
+    DriverResult result;
+    result.address = address;
+    result.operation = desiredBlocked
+        ? DriverOperation::Lock
+        : DriverOperation::Unlock;
+
+    if (transaction.status != TransactionStatus::Success) {
+        result.outcome = ToDriverOutcome(transaction.status);
+        result.error = transaction.error.empty()
+            ? DefaultTransactionError(transaction.status)
+            : transaction.error;
+        MarkBlockFailure(runtime, result.error);
+    }
+    else if (!transaction.response.has_value()) {
+        result.outcome = DriverOutcome::InvalidResponse;
+        result.error = "successful MDV transaction has no response frame";
+        MarkBlockFailure(runtime, result.error);
+    }
+    else {
+        const auto parsed = ParseResponse(*transaction.response, address, masterId_);
+        if (!parsed.ok) {
+            result.outcome = DriverOutcome::InvalidResponse;
+            result.error = parsed.error;
+            MarkBlockFailure(runtime, result.error);
+        }
+        else if (parsed.state.command != expectedCommand) {
+            result.outcome = DriverOutcome::InvalidResponse;
+            result.error = desiredBlocked
+                ? "MDV lock transaction expected a CC response"
+                : "MDV unlock transaction expected a CD response";
+            MarkBlockFailure(runtime, result.error);
+        }
+        else {
+            result.outcome = DriverOutcome::Success;
+            MarkBlockSuccess(runtime);
+        }
+    }
+
+    // CC/CD replies can also contain the previous state, therefore only a
+    // subsequent C0 is allowed to confirm the Blok value.
+    EnqueueConfirmation(runtime);
+
+    if (runtime.blockRevision != sentRevision) {
+        EnqueueBlock(runtime);
+    }
+
+    return result;
+}
+
 void MdvDriver::EnqueueSet(DeviceRuntime& runtime)
 {
     if (!runtime.device.IsSetCommandQueued() || runtime.setQueueEntry) {
@@ -264,6 +352,15 @@ void MdvDriver::EnqueueSet(DeviceRuntime& runtime)
     }
     setQueue_.push_back(runtime.device.Address());
     runtime.setQueueEntry = true;
+}
+
+void MdvDriver::EnqueueBlock(DeviceRuntime& runtime)
+{
+    if (!runtime.blockPending || runtime.blockQueueEntry) {
+        return;
+    }
+    blockQueue_.push_back(runtime.device.Address());
+    runtime.blockQueueEntry = true;
 }
 
 void MdvDriver::EnqueueConfirmation(DeviceRuntime& runtime)
@@ -281,6 +378,15 @@ DeviceRuntime& MdvDriver::PopSet()
     setQueue_.pop_front();
     auto& runtime = DeviceByAddress(address);
     runtime.setQueueEntry = false;
+    return runtime;
+}
+
+DeviceRuntime& MdvDriver::PopBlock()
+{
+    const auto address = blockQueue_.front();
+    blockQueue_.pop_front();
+    auto& runtime = DeviceByAddress(address);
+    runtime.blockQueueEntry = false;
     return runtime;
 }
 
@@ -326,6 +432,19 @@ void MdvDriver::MarkSetSuccess(DeviceRuntime& runtime) noexcept
 void MdvDriver::MarkSetFailure(DeviceRuntime& runtime, std::string error)
 {
     ++runtime.failedSets;
+    runtime.lastError = std::move(error);
+}
+
+void MdvDriver::MarkBlockSuccess(DeviceRuntime& runtime) noexcept
+{
+    runtime.online = true;
+    ++runtime.successfulBlockCommands;
+    runtime.lastError.clear();
+}
+
+void MdvDriver::MarkBlockFailure(DeviceRuntime& runtime, std::string error)
+{
+    ++runtime.failedBlockCommands;
     runtime.lastError = std::move(error);
 }
 

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(MDVWB VERSION 0.5.0 LANGUAGES CXX)
+project(MDVWB VERSION 0.6.0 LANGUAGES CXX)
 
 add_executable(MDVWB
     MDVWB.cpp
@@ -13,9 +13,14 @@ add_executable(MDVWB
     mdv_serial.h
     mdv_driver.cpp
     mdv_driver.h
+    mdv_mqtt.cpp
+    mdv_mqtt.h
 )
 
 target_compile_features(MDVWB PRIVATE cxx_std_20)
+
+find_package(Threads REQUIRED)
+target_link_libraries(MDVWB PRIVATE Threads::Threads)
 
 if(MSVC)
     target_compile_options(MDVWB PRIVATE /W4 /permissive-)

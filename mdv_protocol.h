@@ -56,6 +56,7 @@ struct DeviceState {
     std::uint8_t masterId = 0;
 
     bool power = false;
+    bool modeLocked = false;
     std::optional<Mode> mode;
     std::optional<Mode> activeMode;
     std::optional<FanSpeed> fanSpeed;
@@ -89,6 +90,8 @@ struct ParseResult {
 void RefreshRequestChecksum(RequestFrame& frame) noexcept;
 
 [[nodiscard]] RequestFrame BuildReadRequest(std::uint8_t address, std::uint8_t masterId = 0);
+[[nodiscard]] RequestFrame BuildLockRequest(std::uint8_t address, std::uint8_t masterId = 0);
+[[nodiscard]] RequestFrame BuildUnlockRequest(std::uint8_t address, std::uint8_t masterId = 0);
 [[nodiscard]] RequestFrame BuildSetRequest(
     std::uint8_t address,
     const SetState& state,

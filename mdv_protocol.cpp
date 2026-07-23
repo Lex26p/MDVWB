@@ -105,6 +105,7 @@ void ValidateTemperature(std::uint8_t temperature)
     std::string& error)
 {
     state.power = (raw & kPowerBit) != 0;
+    state.modeLocked = (raw & 0x20U) != 0;
 
     const auto modeBits = static_cast<std::uint8_t>(raw & kModeMask);
     const bool isAuto = (modeBits & static_cast<std::uint8_t>(Mode::Auto)) != 0;
@@ -253,6 +254,20 @@ bool HasValidResponseChecksum(const ResponseFrame& frame) noexcept
 RequestFrame BuildReadRequest(std::uint8_t address, std::uint8_t masterId)
 {
     auto frame = BuildRequestBase(Command::Read, address, masterId);
+    RefreshRequestChecksum(frame);
+    return frame;
+}
+
+RequestFrame BuildLockRequest(std::uint8_t address, std::uint8_t masterId)
+{
+    auto frame = BuildRequestBase(Command::Lock, address, masterId);
+    RefreshRequestChecksum(frame);
+    return frame;
+}
+
+RequestFrame BuildUnlockRequest(std::uint8_t address, std::uint8_t masterId)
+{
+    auto frame = BuildRequestBase(Command::Unlock, address, masterId);
     RefreshRequestChecksum(frame);
     return frame;
 }

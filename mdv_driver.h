@@ -14,6 +14,8 @@ namespace mdv {
 enum class DriverOperation {
     PollRead,
     SetState,
+    Lock,
+    Unlock,
     ConfirmRead,
 };
 
@@ -40,19 +42,26 @@ struct DeviceRuntime {
     DeviceContext device;
     bool online = false;
     bool setQueueEntry = false;
+    bool blockQueueEntry = false;
     bool confirmQueueEntry = false;
+
+    bool desiredBlocked = false;
+    bool blockPending = false;
+    std::uint64_t blockRevision = 0;
 
     std::uint64_t successfulReads = 0;
     std::uint64_t failedReads = 0;
     std::uint64_t successfulSets = 0;
     std::uint64_t failedSets = 0;
+    std::uint64_t successfulBlockCommands = 0;
+    std::uint64_t failedBlockCommands = 0;
     std::uint32_t consecutiveReadFailures = 0;
     std::string lastError;
 };
 
 // Owns the transaction order for one RS-485 line. Exactly one request is sent
-// per call. Confirmation reads have highest priority, then cached C3 frames,
-// then the ordinary round-robin C0 poll.
+// per call. Confirmation reads have highest priority, then CC/CD, cached C3,
+// and finally the ordinary round-robin C0 poll.
 class MdvDriver {
 public:
     MdvDriver(
@@ -67,6 +76,7 @@ public:
     void SetFanSpeed(std::uint8_t address, FanSpeed speed);
     void SetTemperature(std::uint8_t address, std::uint8_t temperature);
     void SetBlinds(std::uint8_t address, bool enabled);
+    void SetBlocked(std::uint8_t address, bool blocked);
 
     [[nodiscard]] bool HasQueuedWork() const noexcept;
     [[nodiscard]] std::size_t DeviceCount() const noexcept;
@@ -80,10 +90,13 @@ private:
         DeviceRuntime& runtime,
         DriverOperation operation);
     [[nodiscard]] DriverResult ExecuteSet(DeviceRuntime& runtime);
+    [[nodiscard]] DriverResult ExecuteBlock(DeviceRuntime& runtime);
 
     void EnqueueSet(DeviceRuntime& runtime);
+    void EnqueueBlock(DeviceRuntime& runtime);
     void EnqueueConfirmation(DeviceRuntime& runtime);
     [[nodiscard]] DeviceRuntime& PopSet();
+    [[nodiscard]] DeviceRuntime& PopBlock();
     [[nodiscard]] DeviceRuntime& PopConfirmation();
     [[nodiscard]] DeviceRuntime& NextPollDevice() noexcept;
 
@@ -91,12 +104,15 @@ private:
     void MarkReadFailure(DeviceRuntime& runtime, std::string error);
     void MarkSetSuccess(DeviceRuntime& runtime) noexcept;
     void MarkSetFailure(DeviceRuntime& runtime, std::string error);
+    void MarkBlockSuccess(DeviceRuntime& runtime) noexcept;
+    void MarkBlockFailure(DeviceRuntime& runtime, std::string error);
 
     std::vector<DeviceRuntime> devices_;
     ITransactionTransport& transport_;
     std::uint8_t masterId_ = 0;
     std::size_t nextPollIndex_ = 0;
     std::deque<std::uint8_t> setQueue_;
+    std::deque<std::uint8_t> blockQueue_;
     std::deque<std::uint8_t> confirmationQueue_;
 };
 

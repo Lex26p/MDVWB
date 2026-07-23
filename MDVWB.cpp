@@ -1,6 +1,7 @@
 #include "MDVWB.h"
 #include "mdv_device.h"
 #include "mdv_driver.h"
+#include "mdv_mqtt.h"
 #include "mdv_protocol.h"
 #include "mdv_serial.h"
 
@@ -732,14 +733,208 @@ bool TestDriverRejectsCommandBeforeFirstRead()
         Check(!driver.HasQueuedWork(), "rejected command is not queued");
 }
 
+
+bool TestLockUnlockRequests()
+{
+    constexpr RequestFrame expectedLock{
+        0xAA, 0xCC, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x33, 0x80, 0x55};
+    constexpr RequestFrame expectedUnlock{
+        0xAA, 0xCD, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x80, 0x55};
+
+    return CheckFrame(mdv::BuildLockRequest(1), expectedLock, "CC lock frame") &&
+        CheckFrame(mdv::BuildUnlockRequest(1), expectedUnlock, "CD unlock frame") &&
+        Check(mdv::HasValidRequestChecksum(expectedLock), "CC checksum") &&
+        Check(mdv::HasValidRequestChecksum(expectedUnlock), "CD checksum");
+}
+
+bool TestBlockStateParsing()
+{
+    const auto response = MakeDriverResponse(
+        8, mdv::Command::Read, 0xA8, 0x84, 23);
+    const auto parsed = mdv::ParseResponse(response, 8);
+
+    return Check(parsed.ok, parsed.error) &&
+        Check(parsed.state.power, "blocked response Power") &&
+        Check(parsed.state.mode == mdv::Mode::Cool, "blocked response Mode") &&
+        Check(parsed.state.modeLocked, "blocked response Blok") ;
+}
+
+bool TestBlockQueueAndConfirmation()
+{
+    ScriptedTransport transport({
+        SuccessfulTransaction(MakeDriverResponse(8)),
+        SuccessfulTransaction(MakeDriverResponse(8, mdv::Command::Lock)),
+        SuccessfulTransaction(MakeDriverResponse(
+            8, mdv::Command::Read, 0xA8, 0x84, 23)),
+        SuccessfulTransaction(MakeDriverResponse(
+            8, mdv::Command::Unlock, 0xA8, 0x84, 23)),
+        SuccessfulTransaction(MakeDriverResponse(8)),
+    });
+    mdv::MdvDriver driver({8}, transport);
+
+    static_cast<void>(driver.ProcessNext());
+    driver.SetBlocked(8, true);
+    const auto lock = driver.ProcessNext();
+    const auto confirmLock = driver.ProcessNext();
+    const bool lockedConfirmed = !driver.DeviceByAddress(8).blockPending &&
+        driver.DeviceByAddress(8).device.ActualState().modeLocked;
+
+    driver.SetBlocked(8, false);
+    const auto unlock = driver.ProcessNext();
+    const auto confirmUnlock = driver.ProcessNext();
+    const auto& runtime = driver.DeviceByAddress(8);
+
+    const bool order = transport.requests.size() == 5 &&
+        transport.requests[1][1] == static_cast<std::uint8_t>(mdv::Command::Lock) &&
+        transport.requests[2][1] == static_cast<std::uint8_t>(mdv::Command::Read) &&
+        transport.requests[3][1] == static_cast<std::uint8_t>(mdv::Command::Unlock) &&
+        transport.requests[4][1] == static_cast<std::uint8_t>(mdv::Command::Read);
+
+    return Check(lock.operation == mdv::DriverOperation::Lock &&
+                     lock.outcome == mdv::DriverOutcome::Success,
+                 "Blok=1 sends CC") &&
+        Check(confirmLock.operation == mdv::DriverOperation::ConfirmRead,
+              "CC is followed by C0") &&
+        Check(lockedConfirmed, "C0 confirms Blok=1") &&
+        Check(unlock.operation == mdv::DriverOperation::Unlock &&
+                  unlock.outcome == mdv::DriverOutcome::Success,
+              "Blok=0 sends CD") &&
+        Check(confirmUnlock.operation == mdv::DriverOperation::ConfirmRead,
+              "CD is followed by C0") &&
+        Check(!runtime.blockPending && !runtime.device.ActualState().modeLocked,
+              "C0 confirms Blok=0") &&
+        Check(runtime.successfulBlockCommands == 2,
+              "block command success counter") &&
+        Check(order, "CC/CD confirmation order");
+}
+
+class FakeMqttClient final : public mdv::IMqttClient {
+public:
+    void SetMessageHandler(MessageHandler handler) override
+    {
+        handler_ = std::move(handler);
+    }
+
+    void Subscribe(std::string_view topicFilter) override
+    {
+        subscriptions.emplace_back(topicFilter);
+    }
+
+    void Emit(std::string topic, std::string payload, bool retained = false)
+    {
+        if (!handler_) {
+            throw std::logic_error("fake MQTT client has no message handler");
+        }
+        handler_(mdv::MqttMessage{
+            .topic = std::move(topic),
+            .payload = std::move(payload),
+            .retained = retained,
+        });
+    }
+
+    std::vector<std::string> subscriptions;
+
+private:
+    MessageHandler handler_;
+};
+
+bool TestMqttCommandQueueAndRouting()
+{
+    ScriptedTransport transport({
+        SuccessfulTransaction(MakeDriverResponse(
+            9, mdv::Command::Read, 0x10, 0x80, 21)),
+    });
+    mdv::MdvDriver driver({9}, transport);
+    static_cast<void>(driver.ProcessNext());
+
+    FakeMqttClient client;
+    mdv::MqttCommandRouter router(1, driver);
+    mdv::MqttCommandService service(client, router);
+    service.Start();
+
+    const auto before = driver.DeviceByAddress(9).device.CachedSetFrame();
+    client.Emit("/devices/Fan-1_9/controls/Power/on1", "1");
+    client.Emit("/devices/Fan-1_9/controls/Mode/on1", "1");
+    client.Emit("/devices/Fan-1_9/controls/Speed/on1", "2");
+    client.Emit("/devices/Fan-1_9/controls/SetTemp/on1", "25");
+    client.Emit("/devices/Fan-1_9/controls/Blinds/on1", "1");
+    client.Emit("/devices/Fan-1_9/controls/Blok/on1", "1");
+
+    const bool callbackDidNotTouchDriver =
+        driver.DeviceByAddress(9).device.CachedSetFrame() == before &&
+        service.PendingCount() == 6;
+
+    bool allApplied = true;
+    for (int index = 0; index < 6; ++index) {
+        const auto result = service.ProcessOne();
+        allApplied = allApplied && result.has_value() &&
+            result->status == mdv::MqttCommandStatus::Applied;
+    }
+
+    const auto& runtime = driver.DeviceByAddress(9);
+    const auto& frame = runtime.device.CachedSetFrame();
+
+    return Check(client.subscriptions.size() == 1 &&
+                     client.subscriptions[0] == "/devices/+/controls/+/on1",
+                 "MQTT command subscription") &&
+        Check(callbackDidNotTouchDriver,
+              "MQTT callback only queues messages") &&
+        Check(allApplied && service.PendingCount() == 0,
+              "queued MQTT commands applied by driver thread") &&
+        Check(frame[6] == 0x84, "MQTT Power and Heat mapping") &&
+        Check(frame[7] == 0x02, "MQTT Medium speed mapping") &&
+        Check(frame[8] == 25, "MQTT SetTemp mapping") &&
+        Check(frame[9] == 0x04, "MQTT Blinds mapping") &&
+        Check(runtime.blockPending && runtime.desiredBlocked,
+              "MQTT Blok mapping") &&
+        Check(driver.HasQueuedWork(), "MQTT commands queue RS-485 work");
+}
+
+bool TestMqttValidation()
+{
+    ScriptedTransport transport({});
+    mdv::MdvDriver driver({10}, transport);
+    mdv::MqttCommandRouter router(1, driver);
+
+    const auto wrongBus = router.Handle({
+        "/devices/Fan-2_10/controls/Power/on1", "1", false});
+    const auto loopTopic = router.Handle({
+        "/devices/Fan-1_10/controls/Power/on", "1", false});
+    const auto badPayload = router.Handle({
+        "/devices/Fan-1_10/controls/Power/on1", "2", false});
+    const auto retained = router.Handle({
+        "/devices/Fan-1_10/controls/Power/on1", "1", true});
+    const auto notInitialized = router.Handle({
+        "/devices/Fan-1_10/controls/Power/on1", "1", false});
+    const auto unknownDevice = router.Handle({
+        "/devices/Fan-1_11/controls/Power/on1", "1", false});
+
+    return Check(wrongBus.status == mdv::MqttCommandStatus::Ignored,
+                 "other bus MQTT command ignored") &&
+        Check(loopTopic.status == mdv::MqttCommandStatus::InvalidTopic,
+              "state /on topic is never treated as command") &&
+        Check(badPayload.status == mdv::MqttCommandStatus::InvalidPayload,
+              "invalid boolean MQTT payload rejected") &&
+        Check(retained.status == mdv::MqttCommandStatus::InvalidPayload,
+              "retained MQTT command rejected") &&
+        Check(notInitialized.status == mdv::MqttCommandStatus::DeviceNotInitialized,
+              "MQTT command waits for first valid C0") &&
+        Check(unknownDevice.status == mdv::MqttCommandStatus::DeviceNotConfigured,
+              "unconfigured MQTT device rejected");
+}
+
 } // namespace
 
 int RunProtocolSelfTest()
 {
     const bool ok = TestReadRequests() &&
+        TestLockUnlockRequests() &&
         TestSetRequests() &&
         TestResponseParsing() &&
         TestAutoModeParsing() &&
+        TestBlockStateParsing() &&
         TestStreamCollector() &&
         TestCachedSetFrame() &&
         TestSingleFieldModification() &&
@@ -758,13 +953,16 @@ int RunProtocolSelfTest()
         TestSetQueueAndConfirmation() &&
         TestMultipleCommandsMergeIntoOneFrame() &&
         TestSetTimeoutIsConfirmedBeforeRetry() &&
-        TestDriverRejectsCommandBeforeFirstRead();
+        TestDriverRejectsCommandBeforeFirstRead() &&
+        TestBlockQueueAndConfirmation() &&
+        TestMqttCommandQueueAndRouting() &&
+        TestMqttValidation();
 
     if (!ok) {
         return 1;
     }
 
-    std::cout << "MDV protocol, cache, serial, polling and command self-test: OK\n";
+    std::cout << "MDV protocol, cache, serial, polling, command and MQTT self-test: OK\n";
     return 0;
 }
 
