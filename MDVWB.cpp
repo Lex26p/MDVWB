@@ -1,5 +1,6 @@
 #include "MDVWB.h"
 #include "mdv_device.h"
+#include "mdv_driver.h"
 #include "mdv_protocol.h"
 #include "mdv_serial.h"
 
@@ -10,6 +11,7 @@
 #include <exception>
 #include <iostream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -378,6 +380,194 @@ bool TestPortNameNormalization()
 #endif
 }
 
+
+class ScriptedTransport final : public mdv::ITransactionTransport {
+public:
+    explicit ScriptedTransport(std::vector<mdv::TransactionResult> results)
+        : results_(std::move(results))
+    {
+    }
+
+    mdv::TransactionResult Execute(const RequestFrame& request) override
+    {
+        requests.push_back(request);
+        if (nextResult_ >= results_.size()) {
+            return mdv::TransactionResult{
+                .status = mdv::TransactionStatus::IoError,
+                .response = std::nullopt,
+                .error = "scripted transport has no result",
+            };
+        }
+        return results_[nextResult_++];
+    }
+
+    std::vector<RequestFrame> requests;
+
+private:
+    std::vector<mdv::TransactionResult> results_;
+    std::size_t nextResult_ = 0;
+};
+
+ResponseFrame MakePollingResponse(
+    std::uint8_t address,
+    mdv::Command command = mdv::Command::Read,
+    std::uint8_t setTemperature = 23)
+{
+    ResponseFrame response{
+        0xAA, 0xC0, 0x80, 0x00, 0x00, 0x00, 0xE0, 0x14,
+        0x88, 0x84, 0x17, 0x58, 0x3C, 0x4C, 0xFF, 0xFF,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x55};
+
+    response[1] = static_cast<std::uint8_t>(command);
+    response[4] = address;
+    response[10] = setTemperature;
+
+    std::uint8_t sum = 0;
+    for (std::size_t index = 1; index <= 29; ++index) {
+        sum = static_cast<std::uint8_t>(sum + response[index]);
+    }
+    response[30] = static_cast<std::uint8_t>(0U - sum);
+    return response;
+}
+
+mdv::TransactionResult SuccessfulTransaction(ResponseFrame response)
+{
+    return mdv::TransactionResult{
+        .status = mdv::TransactionStatus::Success,
+        .response = std::move(response),
+        .error = {},
+    };
+}
+
+bool TestRoundRobinPolling()
+{
+    ScriptedTransport transport({
+        SuccessfulTransaction(MakePollingResponse(1)),
+        SuccessfulTransaction(MakePollingResponse(2)),
+        SuccessfulTransaction(MakePollingResponse(3)),
+        SuccessfulTransaction(MakePollingResponse(1, mdv::Command::Read, 24)),
+    });
+    mdv::MdvPollingDriver driver({1, 2, 3}, transport);
+
+    const auto first = driver.PollNext();
+    const auto second = driver.PollNext();
+    const auto third = driver.PollNext();
+    const auto fourth = driver.PollNext();
+
+    const bool requestOrder = transport.requests.size() == 4 &&
+        transport.requests[0][2] == 1 &&
+        transport.requests[1][2] == 2 &&
+        transport.requests[2][2] == 3 &&
+        transport.requests[3][2] == 1;
+
+    return Check(first.outcome == mdv::PollOutcome::Success && first.address == 1,
+                 "round-robin first device") &&
+        Check(second.outcome == mdv::PollOutcome::Success && second.address == 2,
+              "round-robin second device") &&
+        Check(third.outcome == mdv::PollOutcome::Success && third.address == 3,
+              "round-robin third device") &&
+        Check(fourth.outcome == mdv::PollOutcome::Success && fourth.address == 1,
+              "round-robin wraps to first device") &&
+        Check(requestOrder, "round-robin C0 request order") &&
+        Check(driver.NextAddress() == 2, "next round-robin address") &&
+        Check(driver.DeviceByAddress(1).device.IsInitialized(),
+              "first valid C0 initializes cached C3") &&
+        Check(driver.DeviceByAddress(1).device.ActualState().setTemperature == 24,
+              "later C0 updates actual state") &&
+        Check(driver.DeviceByAddress(1).successfulPolls == 2,
+              "successful poll counter") &&
+        Check(driver.DeviceByAddress(1).online, "successful device is online");
+}
+
+bool TestPollingContinuesAfterTimeout()
+{
+    ScriptedTransport transport({
+        mdv::TransactionResult{
+            .status = mdv::TransactionStatus::Timeout,
+            .response = std::nullopt,
+            .error = "timeout",
+        },
+        SuccessfulTransaction(MakePollingResponse(5)),
+        SuccessfulTransaction(MakePollingResponse(4)),
+    });
+    mdv::MdvPollingDriver driver({4, 5}, transport);
+
+    const auto timeout = driver.PollNext();
+    const auto nextDevice = driver.PollNext();
+    const auto recovered = driver.PollNext();
+    const auto& device4 = driver.DeviceByAddress(4);
+
+    return Check(timeout.outcome == mdv::PollOutcome::Timeout && timeout.address == 4,
+                 "poll timeout result") &&
+        Check(nextDevice.outcome == mdv::PollOutcome::Success && nextDevice.address == 5,
+              "timeout does not stop round-robin polling") &&
+        Check(recovered.outcome == mdv::PollOutcome::Success && recovered.address == 4,
+              "timed-out device is polled again") &&
+        Check(device4.online, "device returns online after valid response") &&
+        Check(device4.failedPolls == 1 && device4.successfulPolls == 1,
+              "communication counters survive recovery") &&
+        Check(device4.consecutiveFailures == 0, "recovery clears consecutive failures");
+}
+
+bool TestInvalidPollingResponses()
+{
+    auto corrupted = MakePollingResponse(6);
+    corrupted[11] ^= 0x01;
+
+    ScriptedTransport transport({
+        SuccessfulTransaction(corrupted),
+        SuccessfulTransaction(MakePollingResponse(6, mdv::Command::Set)),
+    });
+    mdv::MdvPollingDriver driver({6}, transport);
+
+    const auto badChecksum = driver.PollNext();
+    const auto wrongCommand = driver.PollNext();
+    const auto& runtime = driver.DeviceByAddress(6);
+
+    return Check(badChecksum.outcome == mdv::PollOutcome::InvalidResponse,
+                 "poll rejects bad response checksum") &&
+        Check(wrongCommand.outcome == mdv::PollOutcome::InvalidResponse,
+              "poll rejects C3 response while expecting C0") &&
+        Check(!runtime.device.IsInitialized(),
+              "invalid polling responses do not initialize cached frame") &&
+        Check(runtime.failedPolls == 2 && !runtime.online,
+              "invalid responses update communication state");
+}
+
+bool TestPollingAddressValidation()
+{
+    ScriptedTransport transport({});
+
+    bool emptyRejected = false;
+    try {
+        static_cast<void>(mdv::MdvPollingDriver({}, transport));
+    }
+    catch (const std::invalid_argument&) {
+        emptyRejected = true;
+    }
+
+    bool duplicateRejected = false;
+    try {
+        static_cast<void>(mdv::MdvPollingDriver({1, 1}, transport));
+    }
+    catch (const std::invalid_argument&) {
+        duplicateRejected = true;
+    }
+
+    bool invalidAddressRejected = false;
+    try {
+        static_cast<void>(mdv::MdvPollingDriver({0x40}, transport));
+    }
+    catch (const std::out_of_range&) {
+        invalidAddressRejected = true;
+    }
+
+    return Check(emptyRejected, "empty polling list rejected") &&
+        Check(duplicateRejected, "duplicate polling address rejected") &&
+        Check(invalidAddressRejected, "out-of-range polling address rejected");
+}
+
 } // namespace
 
 int RunProtocolSelfTest()
@@ -396,13 +586,17 @@ int RunProtocolSelfTest()
         TestWireRequest() &&
         TestTransactionTiming() &&
         TestInvalidTimingRejected() &&
-        TestPortNameNormalization();
+        TestPortNameNormalization() &&
+        TestRoundRobinPolling() &&
+        TestPollingContinuesAfterTimeout() &&
+        TestInvalidPollingResponses() &&
+        TestPollingAddressValidation();
 
     if (!ok) {
         return 1;
     }
 
-    std::cout << "MDV protocol, device-cache and serial self-test: OK\n";
+    std::cout << "MDV protocol, cache, serial and polling self-test: OK\n";
     return 0;
 }
 
@@ -412,7 +606,7 @@ int main(int argc, char* argv[])
         return RunProtocolSelfTest();
     }
 
-    std::cout << "MDVWB step 3: serial transport and 150 ms pacing are ready.\n"
+    std::cout << "MDVWB step 4: round-robin polling is ready.\n"
                  "Run with --self-test to verify known MDV behavior.\n";
     return 0;
 }

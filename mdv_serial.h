@@ -86,9 +86,16 @@ struct TransactionResult {
     std::chrono::milliseconds elapsed{0};
 };
 
+class ITransactionTransport {
+public:
+    virtual ~ITransactionTransport() = default;
+
+    [[nodiscard]] virtual TransactionResult Execute(const RequestFrame& request) = 0;
+};
+
 // Owns the only physical path to the RS-485 line. Every request type uses the
 // same pacer, so C0, C3, CC and CD all follow one start-to-start period.
-class MdvSerialTransport {
+class MdvSerialTransport final : public ITransactionTransport {
 public:
     explicit MdvSerialTransport(TimingSettings timing = {});
 
@@ -96,7 +103,7 @@ public:
     void Close() noexcept;
     [[nodiscard]] bool IsOpen() const noexcept;
 
-    [[nodiscard]] TransactionResult Execute(const RequestFrame& request);
+    [[nodiscard]] TransactionResult Execute(const RequestFrame& request) override;
 
     [[nodiscard]] const TimingSettings& Timing() const noexcept;
     [[nodiscard]] const std::string& PortName() const noexcept;
