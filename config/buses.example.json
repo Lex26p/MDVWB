@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "buses": [
+    {
+      "id": 1,
+      "enabled": true,
+      "port": "/dev/ttyRS485-1",
+      "addresses": [1, 2, 3]
+    },
+    {
+      "id": 2,
+      "enabled": true,
+      "port": "/dev/ttyRS485-2",
+      "addresses": [1, 5, 18]
+    },
+    {
+      "id": 3,
+      "enabled": false,
+      "port": "/dev/ttyUSB0",
+      "addresses": []
+    }
+  ]
+}

@@ -641,7 +641,7 @@ void MqttSystemPublisher::PublishText(
     if (!force && previous.has_value() && *previous == value) {
         return;
     }
-    client_.Publish(Topic(control), value, false);
+    client_.Publish(Topic(control), value, true);
     previous = std::string(value);
 }
 
@@ -654,7 +654,7 @@ void MqttSystemPublisher::PublishInteger(
     if (!force && previous.has_value() && *previous == value) {
         return;
     }
-    client_.Publish(Topic(control), std::to_string(value), false);
+    client_.Publish(Topic(control), std::to_string(value), true);
     previous = value;
 }
 

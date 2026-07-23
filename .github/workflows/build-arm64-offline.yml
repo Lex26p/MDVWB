@@ -11,6 +11,9 @@ on:
       - "*.h"
       - "CMakeLists.txt"
       - "deploy/**"
+      - "config/**"
+      - "tests/**"
+      - "www/**"
       - ".github/workflows/build-arm64-offline.yml"
 
 permissions:
@@ -55,6 +58,7 @@ jobs:
               (cd out/build/arm64-release && ctest --output-on-failure)
               ./out/build/arm64-release/MDVWB --version
               ./out/build/arm64-release/MDVWB --self-test
+              ./out/build/arm64-release/mdvwb-manager validate config/buses.example.json
             '
 
       - name: Create offline installation archive
@@ -65,19 +69,26 @@ jobs:
           mkdir -p dist/MDVWB-arm64
 
           install -m 0755 out/build/arm64-release/MDVWB dist/MDVWB-arm64/MDVWB
+          install -m 0755 out/build/arm64-release/mdvwb-manager dist/MDVWB-arm64/mdvwb-manager
           install -m 0755 deploy/mdvwb-run dist/MDVWB-arm64/mdvwb-run
-          install -m 0755 deploy/mdvwb-bus dist/MDVWB-arm64/mdvwb-bus
           install -m 0755 deploy/offline-install.sh dist/MDVWB-arm64/offline-install.sh
           install -m 0644 deploy/mdvwb@.service dist/MDVWB-arm64/mdvwb@.service
           install -m 0640 deploy/mdvwb.env dist/MDVWB-arm64/mdvwb.env
-          install -m 0644 deploy/mdvwb-service-control.js dist/MDVWB-arm64/mdvwb-service-control.js
+          install -m 0644 deploy/mdvwb-manager.service dist/MDVWB-arm64/mdvwb-manager.service
+          install -m 0640 deploy/mdvwb-manager.env dist/MDVWB-arm64/mdvwb-manager.env
+          install -m 0640 deploy/buses.example.json dist/MDVWB-arm64/buses.example.json
+          mkdir -p dist/MDVWB-arm64/www/mdvwb
+          cp -a www/mdvwb/. dist/MDVWB-arm64/www/mdvwb/
 
           file dist/MDVWB-arm64/MDVWB
           readelf -h dist/MDVWB-arm64/MDVWB | grep -E "Class:|Machine:"
 
           (
             cd dist/MDVWB-arm64
-            sha256sum MDVWB mdvwb-run mdvwb-bus mdvwb@.service mdvwb.env mdvwb-service-control.js offline-install.sh > SHA256SUMS
+            find MDVWB mdvwb-manager mdvwb-run mdvwb@.service mdvwb.env \
+              mdvwb-manager.service mdvwb-manager.env buses.example.json \
+              offline-install.sh www/mdvwb -type f -print0 | sort -z | \
+              xargs -0 sha256sum > SHA256SUMS
           )
 
           tar -C dist -czf dist/MDVWB-arm64-offline.tar.gz MDVWB-arm64

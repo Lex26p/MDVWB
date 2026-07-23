@@ -1,34 +1,47 @@
 # MDVWB
 
-Компактный C++20-драйвер индивидуального управления фанкойлами MDV через RS-485 и MQTT на контроллере Wiren Board.
+Компактный C++20-драйвер индивидуального управления фанкойлами MDV через
+RS-485 и MQTT на Wiren Board.
 
-## Поддерживаемые функции
+## Архитектура
 
-Драйвер опрашивает устройства индивидуально и управляет следующими параметрами:
+- один процесс `MDVWB` обслуживает один последовательный порт;
+- каждая активная шина запускается отдельным экземпляром `mdvwb@N.service`;
+- общий `mdvwb-manager.service` читает `/etc/mdvwb/buses.json`, синхронизирует
+  процессы и предоставляет MQTT API для статической страницы;
+- страница устанавливается в `/mnt/data/www/mdvwb/` и открывается по адресу
+  `http://<WB-address>/mdvwb/`;
+- драйвер сам публикует retained-метаданные `Fan-<bus>_<address>` и `sist-<bus>`,
+  поэтому отдельный wb-rules-скрипт с `ArrID` больше не нужен.
 
-- `Power`: `0` — выключено, `1` — включено;
-- `Mode`: `0` — охлаждение, `1` — обогрев, `2` — осушение, `3` — вентиляция, `4` — авто;
-- `Speed`: `1` — низкая, `2` — средняя, `3` — высокая, `4` — авто;
-- `SetTemp`: от `16` до `32` °C;
-- `Blinds`: `0` — выключено, `1` — включено;
-- `Blok`: `0` — разблокировать, `1` — заблокировать.
+## Конфигурация шин
 
-Также публикуются `Temp`, `Alarm`, `AlarmCode` и общий `Status`. Все фактические значения сохраняются брокером (`retain=true`), поэтому сразу отображаются в веб-интерфейсе Wiren Board и восстанавливаются после перезапуска интерфейса. Значение `Blok` публикуется отдельно и не меняет общий `Status`.
-
-## MQTT-топики
-
-Команды принимаются из топиков:
-
-```text
-/devices/Fan-1_1/controls/Power/on1
-/devices/Fan-1_1/controls/Mode/on1
-/devices/Fan-1_1/controls/Speed/on1
-/devices/Fan-1_1/controls/SetTemp/on1
-/devices/Fan-1_1/controls/Blinds/on1
-/devices/Fan-1_1/controls/Blok/on1
+```json
+{
+  "version": 1,
+  "buses": [
+    {
+      "id": 1,
+      "enabled": true,
+      "port": "/dev/ttyRS485-1",
+      "addresses": [1, 2, 3]
+    },
+    {
+      "id": 2,
+      "enabled": true,
+      "port": "/dev/serial/by-id/mdv-bus-2",
+      "addresses": [5, 18]
+    }
+  ]
+}
 ```
 
-Фактическое состояние публикуется в основные control-топики только при изменении и с `retain=true`:
+Поддерживается произвольное количество шин `1..999`, индивидуальный путь
+`/dev/...` и адреса фанкойлов `0..63`.
+
+## MQTT
+
+Фактические значения публикуются retained в основные топики:
 
 ```text
 /devices/Fan-1_1/controls/Power
@@ -43,192 +56,53 @@
 /devices/Fan-1_1/controls/Status
 ```
 
-Системные топики:
+Команды принимаются только из безопасных `/on1`-топиков с `retain=false`:
 
 ```text
-/devices/sist-1/controls/Serial
-/devices/sist-1/controls/Error
-/devices/sist-1/controls/GanGetID
+/devices/Fan-1_1/controls/Power/on1
+/devices/Fan-1_1/controls/Mode/on1
+/devices/Fan-1_1/controls/Speed/on1
+/devices/Fan-1_1/controls/SetTemp/on1
+/devices/Fan-1_1/controls/Blinds/on1
+/devices/Fan-1_1/controls/Blok/on1
 ```
 
-`GanGetID` выключен по умолчанию и включается параметром `--publish-poll-address`.
+Менеджер использует `/mdvwb/config`, `/mdvwb/config/set`,
+`/mdvwb/buses/<id>/...` для веб-настройки, управления и поиска.
 
-## Безопасность обмена
-
-- Скорость порта: `4800 8N1`.
-- Минимальный период между началами транзакций: `150 мс`.
-- По умолчанию ответ ожидается до `130 мс`.
-- На линии одновременно выполняется только одна транзакция.
-- Кадр установки формируется только после первого корректного `C0`.
-- MQTT-команда меняет только нужное поле уже подготовленного кадра.
-- После `C3`, `CC` или `CD` выполняется отдельный подтверждающий `C0`.
-- Старый ответ после установки не затирает ожидаемую команду.
-- Широковещательное управление не используется.
-
-## Сборка в Visual Studio
+## Сборка и тесты
 
 ```powershell
 cmake --preset x64-debug
 cmake --build "out/build/x64-debug"
-.\out\build\x64-debug\MDVWB.exe --self-test
-```
-
-Версия:
-
-```powershell
-.\out\build\x64-debug\MDVWB.exe --version
-```
-
-## Безопасная проверка через USB–COM
-
-Сначала выполняется только чтение одного адреса. Замените `COM4` и адрес `1` на фактические значения:
-
-```powershell
-.\out\build\x64-debug\MDVWB.exe --addresses 1 --port COM4 --bus 1 --read-only
-```
-
-В этом режиме разрешены только запросы `C0`. MQTT и команды записи отключены. Остановка — `Ctrl+C`.
-
-После стабильного чтения одна команда проверяется отдельным запуском:
-
-```powershell
-.\out\build\x64-debug\MDVWB.exe --addresses 1 --port COM4 --bus 1 --test-command SetTemp=24
-```
-
-Другие допустимые варианты:
-
-```text
-Power=0 или Power=1
-Mode=0..4
-Speed=1..4
-SetTemp=16..32
-Blinds=0 или Blinds=1
-Blok=0 или Blok=1
-```
-
-За один запуск разрешена только одна команда и только один адрес. Драйвер сначала читает фактическое состояние, затем отправляет команду и подтверждает результат отдельным `C0`.
-
-## Рабочий запуск
-
-Совместимый формат:
-
-```text
-MDVWB 1,2,3 /dev/ttyRS485-1 1
-```
-
-Именованный формат:
-
-```text
-MDVWB --addresses 1,2,3 --port /dev/ttyRS485-1 --bus 1 --mqtt-host 127.0.0.1
-```
-
-Полный список параметров:
-
-```text
-MDVWB --help
+ctest --test-dir "out/build/x64-debug" -C Debug --output-on-failure
 ```
 
 ## Установка на Wiren Board
 
-На контроллере должны быть установлены компилятор, CMake и `libmosquitto-dev`. Для сборки и установки используется:
+GitHub Actions создаёт artifact `MDVWB-arm64-offline`. После копирования
+архива на контроллер:
 
 ```bash
-sudo ./deploy/install_wirenboard.sh
+cd /root
+rm -rf MDVWB-arm64
+tar -xzf MDVWB-arm64-offline.tar.gz
+cd MDVWB-arm64
+chmod +x offline-install.sh
+./offline-install.sh
 ```
 
-После установки отредактируйте:
+Установщик сохраняет существующий `/etc/mdvwb/buses.json`. При первой
+миграции он преобразует текущие `/etc/default/mdvwb-N`, отключает старый
+wb-rules-скрипт с `ArrID`, очищает старые retained `Fan-*` и запускает новую
+схему.
 
-```text
-/etc/default/mdvwb
-```
-
-Затем запустите сервис:
+## Диагностика
 
 ```bash
-sudo systemctl enable --now mdvwb.service
-sudo systemctl status mdvwb.service
+systemctl status mdvwb-manager.service --no-pager
+mdvwb-manager summary /etc/mdvwb/buses.json
+systemctl status 'mdvwb@*.service' --no-pager
+journalctl -u mdvwb-manager.service -n 50 --no-pager
+journalctl -u mdvwb@1.service -n 50 --no-pager
 ```
-
-## Инициализация MQTT после запуска
-
-Первый корректный C0 публикует полный набор значений устройства. Дополнительно
-драйвер один раз повторяет полный снимок после запуска MQTT и после каждого
-переподключения. Задержка равна не менее 3 секунд и не меньше одного полного
-цикла опроса плюс 1 секунда. Это исключает сохранение старых значений
-виртуального устройства, если wb-rules создаёт контролы позже первого ответа.
-
-## Поиск устройств MDV
-
-Безопасный режим поиска проходит адреса `0..63` три полных раза. В этом
-режиме отключены MQTT и любые команды записи; отправляются только запросы
-`C0` с тем же фиксированным периодом транзакций.
-
-```bash
-/usr/local/bin/MDVWB --discover --port /dev/ttyRS485-1 --master-id 0
-```
-
-По завершении программа печатает итоговый список в обычном и
-машиночитаемом виде:
-
-```text
-Found MDV addresses: 1,5,18
-FOUND_ADDRESSES=1,5,18
-```
-
-Адрес включается в результат после хотя бы одного полностью корректного
-ответа `C0` за три прохода. При отсутствии ответивших устройств последняя
-строка имеет вид `FOUND_ADDRESSES=`.
-
-
-## Поиск устройств из веб-интерфейса Wiren Board
-
-Файл `deploy/mdvwb-service-control.js` добавляет в устройство
-`MDVWB-Service-1` кнопку `Найти устройства` и текстовые контролы:
-
-```text
-DiscoveryStatus
-FoundAddresses
-DiscoveryDetails
-```
-
-При запуске поиска правило:
-
-1. Проверяет состояние `mdvwb.service`.
-2. Если сервис работает, останавливает его и ожидает освобождения RS-485.
-3. Читает порт, master ID и интервалы из `/etc/default/mdvwb`.
-4. Запускает `/usr/local/bin/MDVWB --discover`.
-5. Публикует адреса из строки `FOUND_ADDRESSES=` через запятую.
-6. Не запускает `mdvwb.service` после завершения поиска.
-
-Топик результата:
-
-```text
-/devices/MDVWB-Service-1/controls/FoundAddresses
-```
-
-Полный поиск занимает около 29 секунд при периоде транзакций 150 мс.
-
-
-## Исправление отображения поиска
-
-Поиск остаётся в виртуальном устройстве `MDVWB-Service-1`. В веб-интерфейсе оставлены кнопка `Найти устройства` и одно поле `Результат поиска`. После завершения поле содержит только краткий итог, например `На связи: 1, 5, 18`. Служебный stdout сканера, журнал и промежуточные сообщения в результат поиска не выводятся. Если устройств нет, отображается `На связи: нет устройств`. После поиска сервис остаётся остановленным.
-
-## Unified multi-bus service management
-
-Each RS-485 line now uses the same systemd template:
-
-```text
-mdvwb@1.service -> /etc/default/mdvwb-1 -> /dev/ttyRS485-1 -> Fan-1_*
-mdvwb@2.service -> /etc/default/mdvwb-2 -> /dev/ttyRS485-2 -> Fan-2_*
-```
-
-Use the installed helper instead of manually copying service files:
-
-```sh
-mdvwb-bus init 2 /dev/ttyRS485-2
-mdvwb-bus set-addresses 2 1,2,3
-mdvwb-bus enable 2
-mdvwb-bus show 2
-```
-
-The helper validates addresses as unique values from 0 through 63 and stores a canonical comma-separated list. `mdvwb-bus discover BUS` stops only the selected bus and does not restart it after scanning.

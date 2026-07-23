@@ -1,12 +1,13 @@
 [Unit]
-Description=MDV individual fan-coil MQTT driver, bus %i
+Description=MDVWB multi-bus configuration and MQTT manager
 Wants=network-online.target mosquitto.service
 After=network-online.target mosquitto.service
+Before=mdvwb@1.service
 
 [Service]
 Type=simple
-Environment=MDVWB_CONFIG_FILE=/etc/default/mdvwb-%i
-ExecStart=/usr/local/lib/mdvwb/mdvwb-run
+EnvironmentFile=-/etc/default/mdvwb-manager
+ExecStart=/usr/local/bin/mdvwb-manager mqtt /etc/mdvwb/buses.json
 Restart=on-failure
 RestartSec=5
 User=root

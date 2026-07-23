@@ -9,7 +9,7 @@ fi
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SOURCE_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 BUILD_DIR=${MDVWB_BUILD_DIR:-$SOURCE_DIR/out/build/wirenboard-release}
-INSTALL_PREFIX=${MDVWB_INSTALL_PREFIX:-/usr/local}
+WWW_ROOT=${MDVWB_WWW_ROOT:-/mnt/data/www}
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -17,34 +17,34 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
 
 cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX" \
     -DMDVWB_REQUIRE_MOSQUITTO=ON
 cmake --build "$BUILD_DIR" --parallel 1
 (cd "$BUILD_DIR" && ctest --output-on-failure)
-cmake --install "$BUILD_DIR"
 
-install -d -m 0755 /usr/local/bin /usr/local/lib/mdvwb /etc/default /etc/systemd/system /etc/wb-rules
+install -d -m 0755 \
+    /usr/local/bin /usr/local/lib/mdvwb /etc/mdvwb /etc/default \
+    /etc/systemd/system "$WWW_ROOT/mdvwb"
+install -m 0755 "$BUILD_DIR/MDVWB" /usr/local/bin/MDVWB
+install -m 0755 "$BUILD_DIR/mdvwb-manager" /usr/local/bin/mdvwb-manager
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" /usr/local/lib/mdvwb/mdvwb-run
-install -m 0755 "$SCRIPT_DIR/mdvwb-bus" /usr/local/bin/mdvwb-bus
 install -m 0640 "$SCRIPT_DIR/mdvwb.env" /usr/local/lib/mdvwb/mdvwb.env
 install -m 0644 "$SCRIPT_DIR/mdvwb@.service" /etc/systemd/system/mdvwb@.service
-install -m 0644 "$SCRIPT_DIR/mdvwb-service-control.js" /etc/wb-rules/mdvwb-service-control.js
+install -m 0644 "$SCRIPT_DIR/mdvwb-manager.service" /etc/systemd/system/mdvwb-manager.service
+[ -e /etc/default/mdvwb-manager ] || \
+    install -m 0640 "$SCRIPT_DIR/mdvwb-manager.env" /etc/default/mdvwb-manager
+cp -a "$SOURCE_DIR/www/mdvwb/." "$WWW_ROOT/mdvwb/"
 
-if [ ! -e /etc/default/mdvwb-1 ]; then
-    if [ -r /etc/default/mdvwb ]; then
-        install -m 0640 /etc/default/mdvwb /etc/default/mdvwb-1
-    else
-        install -m 0640 "$SCRIPT_DIR/mdvwb.env" /etc/default/mdvwb-1
-    fi
+if [ ! -s /etc/mdvwb/buses.json ]; then
+    /usr/local/bin/mdvwb-manager migrate-defaults /etc/mdvwb/buses.json || \
+        install -m 0640 "$SCRIPT_DIR/buses.example.json" /etc/mdvwb/buses.json
 fi
-/usr/local/bin/mdvwb-bus init 1 /dev/ttyRS485-1
 
-systemctl disable --now mdvwb.service 2>/dev/null || true
+systemctl disable --now mdvwb.service mdvwb-2.service 2>/dev/null || true
 rm -f /etc/systemd/system/mdvwb.service /etc/systemd/system/mdvwb-2.service
+rm -f /usr/local/bin/mdvwb-bus
+rm -f /etc/wb-rules/mdvwb-service-control.js
 systemctl daemon-reload
-systemctl restart wb-rules.service
+/usr/local/bin/mdvwb-manager apply /etc/mdvwb/buses.json
+systemctl enable --now mdvwb-manager.service
 
-echo "Installed unified service template: mdvwb@<bus>.service"
-echo "Start bus 1 with: mdvwb-bus enable 1"
-echo "Create bus 2 with: mdvwb-bus init 2 /dev/ttyRS485-2"
-echo "View bus 1 logs with: journalctl -u mdvwb@1.service -f"
+echo "Installed MDVWB manager and web page: http://<WB-address>/mdvwb/"

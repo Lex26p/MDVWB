@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MDVWB — управление шинами</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">Wiren Board</p>
+        <h1>MDVWB — шины RS-485</h1>
+        <p class="subtitle">Настройка, управление и поиск устройств</p>
+      </div>
+      <div id="connectionBadge" class="status-badge status-offline" aria-live="polite">
+        MQTT: отключено
+      </div>
+    </header>
+
+    <section class="summary" aria-label="Общее состояние">
+      <article class="summary-card">
+        <span class="summary-label">Настроено шин</span>
+        <strong id="busCount">0</strong>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">Активных в конфигурации</span>
+        <strong id="enabledCount">0</strong>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">Работающих процессов</span>
+        <strong id="runningCount">0</strong>
+      </article>
+    </section>
+
+    <section class="manager-panel" aria-labelledby="managerTitle">
+      <div>
+        <h2 id="managerTitle">Менеджер MDVWB</h2>
+        <p id="managerStatus" class="muted">Ожидание данных MQTT…</p>
+      </div>
+      <p id="lastUpdate" class="last-update">Нет обновлений</p>
+    </section>
+
+    <section class="configuration-panel" aria-labelledby="configurationTitle">
+      <div class="configuration-header">
+        <div>
+          <h2 id="configurationTitle">Конфигурация шин</h2>
+          <p id="draftStatus" class="muted">Ожидание текущей конфигурации…</p>
+        </div>
+        <div class="button-row">
+          <button id="addBusButton" class="button button-secondary" type="button">Добавить шину</button>
+          <button id="resetConfigButton" class="button button-secondary" type="button" disabled>Отменить изменения</button>
+          <button id="applyConfigButton" class="button button-primary" type="button" disabled>Сохранить конфигурацию</button>
+        </div>
+      </div>
+      <div id="configResult" class="operation-result operation-result-hidden" role="status" aria-live="polite"></div>
+    </section>
+
+    <section id="editorPanel" class="editor-panel editor-panel-hidden" aria-labelledby="editorTitle">
+      <div class="editor-header">
+        <div>
+          <p class="eyebrow">Редактор</p>
+          <h2 id="editorTitle">Новая шина</h2>
+        </div>
+        <button id="closeEditorButton" class="icon-button" type="button" aria-label="Закрыть редактор">×</button>
+      </div>
+
+      <form id="busEditorForm" novalidate>
+        <div class="form-grid">
+          <label class="field">
+            <span>Номер шины</span>
+            <input id="busIdInput" type="number" min="1" max="999" step="1" required>
+            <small>Число от 1 до 999. Используется в имени Fan-&lt;шина&gt;_&lt;адрес&gt;.</small>
+          </label>
+
+          <label class="field">
+            <span>Порт RS-485</span>
+            <input id="busPortInput" type="text" placeholder="/dev/ttyRS485-1" autocomplete="off" required>
+            <small>Допустим любой безопасный путь устройства, начинающийся с /dev/.</small>
+          </label>
+
+          <label class="field field-wide">
+            <span>Опрашиваемые адреса</span>
+            <input id="busAddressesInput" type="text" placeholder="1, 2, 3" autocomplete="off">
+            <small>Адреса 0–63 через запятую. Для отключённой шины список может быть пустым.</small>
+          </label>
+
+          <label class="checkbox-field field-wide">
+            <input id="busEnabledInput" type="checkbox">
+            <span>Шина активна и должна запускаться автоматически</span>
+          </label>
+        </div>
+
+        <div id="editorError" class="form-error form-error-hidden" role="alert"></div>
+        <div class="button-row editor-actions">
+          <button id="cancelEditorButton" class="button button-secondary" type="button">Отмена</button>
+          <button class="button button-primary" type="submit">Сохранить в черновик</button>
+        </div>
+      </form>
+    </section>
+
+    <section aria-labelledby="busesTitle">
+      <div class="section-heading">
+        <h2 id="busesTitle">Настроенные шины</h2>
+        <p class="muted">Управление доступно только когда черновик сохранён и совпадает с конфигурацией контроллера.</p>
+      </div>
+      <div id="notice" class="notice" role="status" aria-live="polite">
+        Подключение к MQTT…
+      </div>
+      <div id="busGrid" class="bus-grid" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <template id="busCardTemplate">
+    <article class="bus-card">
+      <div class="bus-card-header">
+        <div>
+          <p class="eyebrow bus-number"></p>
+          <h3 class="bus-title"></h3>
+        </div>
+        <span class="bus-service status-badge"></span>
+      </div>
+
+      <dl class="bus-details">
+        <div>
+          <dt>Порт</dt>
+          <dd class="bus-port"></dd>
+        </div>
+        <div>
+          <dt>Адреса</dt>
+          <dd class="bus-addresses"></dd>
+        </div>
+        <div>
+          <dt>Конфигурация</dt>
+          <dd class="bus-enabled"></dd>
+        </div>
+        <div>
+          <dt>Автозапуск</dt>
+          <dd class="bus-autostart"></dd>
+        </div>
+      </dl>
+
+      <section class="bus-control-block" aria-label="Управление шиной">
+        <h4>Управление процессом</h4>
+        <div class="bus-control-actions">
+          <button class="button button-success bus-command" data-command="start" type="button">Запустить</button>
+          <button class="button button-secondary bus-command" data-command="stop" type="button">Остановить</button>
+          <button class="button button-secondary bus-command" data-command="restart" type="button">Перезапустить</button>
+          <button class="button button-secondary bus-command" data-command="status" type="button">Обновить</button>
+        </div>
+        <p class="bus-operation-result muted" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="discovery-block">
+        <div class="discovery-heading">
+          <div>
+            <h4>Поиск устройств</h4>
+            <p class="bus-discovery-status muted">Нет данных</p>
+          </div>
+          <button class="button button-secondary bus-command bus-discover" data-command="discovery" type="button">Найти устройства</button>
+        </div>
+        <p class="bus-discovery-result"></p>
+        <p class="discovery-note muted">Поиск остановит только эту шину. После завершения сервис останется остановленным.</p>
+      </section>
+
+      <div class="card-actions">
+        <button class="button button-secondary bus-edit" type="button">Изменить</button>
+        <button class="button button-danger bus-delete" type="button">Удалить</button>
+      </div>
+    </article>
+  </template>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

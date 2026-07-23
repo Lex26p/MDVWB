@@ -4,6 +4,7 @@
 #include "mdv_driver.h"
 #include "mdv_discovery.h"
 #include "mdv_mqtt.h"
+#include "mdv_metadata.h"
 #include "mdv_mosquitto.h"
 #include "mdv_protocol.h"
 #include "mdv_serial.h"
@@ -952,6 +953,50 @@ private:
     MessageHandler handler_;
 };
 
+bool TestMqttMetadataPublishing()
+{
+    FakeMqttClient client;
+    mdv::MqttMetadataPublisher publisher(4, client);
+    publisher.Publish({1, 7});
+
+    const auto HasPublication = [&client](
+        std::string_view topic,
+        std::string_view payload) {
+        return std::any_of(
+            client.publications.begin(),
+            client.publications.end(),
+            [topic, payload](const mdv::MqttPublication& publication) {
+                return publication.topic == topic &&
+                    publication.payload == payload && publication.retained;
+            });
+    };
+
+    return Check(
+               HasPublication(
+                   "/devices/Fan-4_1/meta/name", "Кондиционер 4-1"),
+               "fan device metadata name") &&
+        Check(
+            HasPublication(
+                "/devices/Fan-4_7/controls/Temp/meta/type", "value"),
+            "fan control metadata type") &&
+        Check(
+            HasPublication(
+                "/devices/Fan-4_7/controls/Power/meta/readonly", "1"),
+            "fan controls remain readonly in standard WB UI") &&
+        Check(
+            HasPublication(
+                "/devices/sist-4/controls/Serial/meta/type", "text"),
+            "system device metadata") &&
+        Check(
+            std::all_of(
+                client.publications.begin(),
+                client.publications.end(),
+                [](const mdv::MqttPublication& publication) {
+                    return publication.retained;
+                }),
+            "all metadata publications are retained");
+}
+
 bool TestMqttCommandQueueAndRouting()
 {
     ScriptedTransport transport({
@@ -1663,6 +1708,7 @@ int RunProtocolSelfTest()
         TestSetTimeoutIsConfirmedBeforeRetry() &&
         TestDriverRejectsCommandBeforeFirstRead() &&
         TestBlockQueueAndConfirmation() &&
+        TestMqttMetadataPublishing() &&
         TestMqttCommandQueueAndRouting() &&
         TestMqttStatePublishingOnlyChanges() &&
         TestMqttAlarmOfflineAndRecovery() &&
@@ -1677,7 +1723,7 @@ int RunProtocolSelfTest()
         return 1;
     }
 
-    std::cout << "MDVWB 1.1 protocol, discovery, cache, serial, polling, command, MQTT, system status, configuration and hardware-test self-test: OK\n";
+    std::cout << "MDVWB 1.2 protocol, discovery, cache, serial, polling, command, MQTT, system status, configuration and hardware-test self-test: OK\n";
     return 0;
 }
 
@@ -1968,6 +2014,7 @@ int RunApplication(const mdv::ApplicationConfig& config)
     mdv::MqttCommandRouter router(config.busNumber, driver);
     mdv::MqttCommandService commandService(mqtt, router);
     mdv::MqttStatePublisher statePublisher(config.busNumber, mqtt);
+    mdv::MqttMetadataPublisher metadataPublisher(config.busNumber, mqtt);
     mdv::MqttSystemPublisher systemPublisher(
         config.busNumber, mqtt, config.publishPollAddress);
 
@@ -1994,10 +2041,9 @@ int RunApplication(const mdv::ApplicationConfig& config)
     while (gStopRequested == 0) {
         const bool mqttConnected = mqtt.IsConnected();
         if (mqttConnected && !mqttWasConnected) {
-            // Retained state messages can still be overwritten by wb-rules defaults
-            // while virtual controls are being created. Publish one additional
-            // complete snapshot after that startup window, and repeat it after
-            // MQTT reconnects.
+            metadataPublisher.Publish(config.addresses);
+            // Publish one additional complete snapshot after the startup window
+            // and repeat it after MQTT reconnects.
             initialSnapshotAt =
                 std::chrono::steady_clock::now() + initialSnapshotDelay;
         }
