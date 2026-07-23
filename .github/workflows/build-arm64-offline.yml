@@ -18,27 +18,27 @@ permissions:
 
 jobs:
   build-arm64:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Checkout sources
         uses: actions/checkout@v4
 
-      - name: Enable ARM64 emulation
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Build and test on Debian 11 ARM64
         shell: bash
         run: |
           set -euxo pipefail
-          docker run --rm --platform linux/arm64 \
+          uname -m
+          test "$(uname -m)" = "aarch64"
+
+          docker run --rm \
             -v "$PWD:/src" \
             -w /src \
             debian:bullseye \
             bash -lc '
               set -eux
+              test "$(uname -m)" = "aarch64"
+
               apt-get update
               DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
                 build-essential \
