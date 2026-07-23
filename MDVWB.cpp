@@ -1,4 +1,5 @@
 #include "MDVWB.h"
+#include "mdv_config.h"
 #include "mdv_device.h"
 #include "mdv_driver.h"
 #include "mdv_mqtt.h"
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <csignal>
 #include <cmath>
 #include <cstdint>
 #include <exception>
@@ -1150,6 +1152,93 @@ bool TestMqttValidation()
               "unconfigured MQTT device rejected");
 }
 
+
+bool TestApplicationConfiguration()
+{
+    auto Parse = [](std::vector<std::string> values) {
+        std::vector<char*> arguments;
+        arguments.reserve(values.size());
+        for (auto& value : values) {
+            arguments.push_back(value.data());
+        }
+        return mdv::ParseCommandLine(
+            static_cast<int>(arguments.size()), arguments.data());
+    };
+
+    const auto legacy = Parse({"MDVWB", "1,2,38", "COM7", "2"});
+    const bool legacyOk = legacy.action == mdv::CommandLineAction::Run &&
+        legacy.config.addresses == std::vector<std::uint8_t>({1, 2, 38}) &&
+        legacy.config.serialPort == "COM7" &&
+        legacy.config.busNumber == 2 &&
+        legacy.config.mqtt.clientId == "mdvwb-2";
+
+    const auto named = Parse({
+        "MDVWB",
+        "--addresses", "0,17,63",
+        "--port", "/dev/ttyRS485-1",
+        "--bus", "3",
+        "--master-id", "5",
+        "--period-ms", "200",
+        "--response-timeout-ms", "170",
+        "--mqtt-host", "192.0.2.10",
+        "--mqtt-port", "1884",
+        "--mqtt-user", "user",
+        "--mqtt-password", "secret",
+        "--mqtt-keepalive", "45",
+        "--mqtt-reconnect", "2",
+        "--mqtt-reconnect-max", "20",
+    });
+    const bool namedOk = named.config.addresses ==
+            std::vector<std::uint8_t>({0, 17, 63}) &&
+        named.config.serialPort == "/dev/ttyRS485-1" &&
+        named.config.busNumber == 3 &&
+        named.config.masterId == 5 &&
+        named.config.timing.transactionPeriod == std::chrono::milliseconds(200) &&
+        named.config.timing.responseTimeout == std::chrono::milliseconds(170) &&
+        named.config.mqtt.host == "192.0.2.10" &&
+        named.config.mqtt.port == 1884 &&
+        named.config.mqtt.username == "user" &&
+        named.config.mqtt.password == "secret" &&
+        named.config.mqtt.keepAliveSeconds == 45 &&
+        named.config.mqtt.reconnectDelaySeconds == 2 &&
+        named.config.mqtt.reconnectDelayMaxSeconds == 20 &&
+        named.config.mqtt.clientId == "mdvwb-3";
+
+    bool duplicateRejected = false;
+    bool timingRejected = false;
+    bool unknownRejected = false;
+    try {
+        (void)Parse({"MDVWB", "1,1", "COM4", "1"});
+    }
+    catch (const std::invalid_argument&) {
+        duplicateRejected = true;
+    }
+    try {
+        (void)Parse({
+            "MDVWB", "--addresses", "1", "--port", "COM4", "--bus", "1",
+            "--period-ms", "150", "--response-timeout-ms", "150"});
+    }
+    catch (const std::invalid_argument&) {
+        timingRejected = true;
+    }
+    try {
+        (void)Parse({
+            "MDVWB", "--addresses", "1", "--port", "COM4", "--bus", "1",
+            "--unknown", "value"});
+    }
+    catch (const std::invalid_argument&) {
+        unknownRejected = true;
+    }
+
+    return Check(legacyOk, "legacy launch format parsed") &&
+        Check(namedOk, "named launch options parsed") &&
+        Check(duplicateRejected, "duplicate addresses rejected") &&
+        Check(timingRejected, "unsafe timing rejected") &&
+        Check(unknownRejected, "unknown launch option rejected") &&
+        Check(mdv::FormatAddressList(named.config.addresses) == "0,17,63",
+              "address list formatted");
+}
+
 } // namespace
 
 int RunProtocolSelfTest()
@@ -1185,23 +1274,105 @@ int RunProtocolSelfTest()
         TestMqttAlarmOfflineAndRecovery() &&
         TestMqttBlockDoesNotReplaceStatus() &&
         TestMosquittoClientBuffering() &&
-        TestMqttValidation();
+        TestMqttValidation() &&
+        TestApplicationConfiguration();
 
     if (!ok) {
         return 1;
     }
 
-    std::cout << "MDV protocol, cache, serial, polling, command and real MQTT client self-test: OK\n";
+    std::cout << "MDV protocol, cache, serial, polling, command, MQTT and configuration self-test: OK\n";
     return 0;
 }
 
-int main(int argc, char* argv[])
+namespace {
+
+volatile std::sig_atomic_t gStopRequested = 0;
+
+void RequestStop(int) noexcept
 {
-    if (argc == 2 && std::string_view(argv[1]) == "--self-test") {
-        return RunProtocolSelfTest();
+    gStopRequested = 1;
+}
+
+int RunApplication(const mdv::ApplicationConfig& config)
+{
+    if (!mdv::MosquittoMqttClient::IsSupported()) {
+        throw std::runtime_error(
+            "this build has no libmosquitto support; install the development library and rebuild");
     }
 
-    std::cout << "MDVWB step 7: changed-only MQTT state publishing is ready.\n"
-                 "Run with --self-test to verify known MDV behavior.\n";
+    mdv::MdvSerialTransport transport(config.timing);
+    transport.Open(config.serialPort);
+
+    mdv::MdvDriver driver(config.addresses, transport, config.masterId);
+    mdv::MosquittoMqttClient mqtt(config.mqtt);
+    mdv::MqttCommandRouter router(config.busNumber, driver);
+    mdv::MqttCommandService commandService(mqtt, router);
+    mdv::MqttStatePublisher statePublisher(config.busNumber, mqtt);
+
+    commandService.Start();
+    mqtt.Start();
+
+    std::signal(SIGINT, RequestStop);
+    std::signal(SIGTERM, RequestStop);
+
+    std::cout
+        << "MDVWB started: port=" << config.serialPort
+        << ", bus=" << config.busNumber
+        << ", addresses=" << mdv::FormatAddressList(config.addresses)
+        << ", period=" << config.timing.transactionPeriod.count() << " ms"
+        << ", response-timeout=" << config.timing.responseTimeout.count() << " ms"
+        << ", MQTT=" << config.mqtt.host << ':' << config.mqtt.port << '\n';
+
+    while (gStopRequested == 0) {
+        // Limit command processing per slot so an MQTT flood cannot stop C0/C3
+        // transactions. All physical requests still run from this one thread.
+        for (int count = 0; count < 64; ++count) {
+            const auto command = commandService.ProcessOne();
+            if (!command.has_value()) {
+                break;
+            }
+            if (command->status != mdv::MqttCommandStatus::Applied &&
+                command->status != mdv::MqttCommandStatus::Ignored) {
+                std::cerr << "MQTT command rejected: " << command->error << '\n';
+            }
+        }
+
+        const auto result = driver.ProcessNext();
+        statePublisher.PublishAfter(driver, result);
+    }
+
+    mqtt.Stop();
+    transport.Close();
+    std::cout << "MDVWB stopped.\n";
     return 0;
+}
+
+} // namespace
+
+int main(int argc, char* argv[])
+{
+    try {
+        const auto commandLine = mdv::ParseCommandLine(argc, argv);
+        switch (commandLine.action) {
+        case mdv::CommandLineAction::SelfTest:
+            return RunProtocolSelfTest();
+        case mdv::CommandLineAction::Help:
+            std::cout << mdv::BuildHelpText(argc > 0 ? argv[0] : "MDVWB");
+            return 0;
+        case mdv::CommandLineAction::Run:
+            return RunApplication(commandLine.config);
+        }
+    }
+    catch (const std::invalid_argument& error) {
+        std::cerr << "Configuration error: " << error.what() << "\n\n"
+                  << mdv::BuildHelpText(argc > 0 ? argv[0] : "MDVWB");
+        return 2;
+    }
+    catch (const std::exception& error) {
+        std::cerr << "MDVWB startup/runtime error: " << error.what() << '\n';
+        return 3;
+    }
+
+    return 3;
 }

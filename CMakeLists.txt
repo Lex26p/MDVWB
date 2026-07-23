@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(MDVWB VERSION 0.8.0 LANGUAGES CXX)
+project(MDVWB VERSION 0.9.0 LANGUAGES CXX)
 
 add_executable(MDVWB
     MDVWB.cpp
@@ -17,6 +17,8 @@ add_executable(MDVWB
     mdv_mqtt.h
     mdv_mosquitto.cpp
     mdv_mosquitto.h
+    mdv_config.cpp
+    mdv_config.h
 )
 
 target_compile_features(MDVWB PRIVATE cxx_std_20)
