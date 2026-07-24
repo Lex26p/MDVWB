@@ -84,6 +84,14 @@ target_compile_features(mdvwb_dashboard_config PUBLIC cxx_std_20)
 target_include_directories(mdvwb_dashboard_config PUBLIC ${MDVWB_MANAGER_DIR})
 target_link_libraries(mdvwb_dashboard_config PUBLIC mdvwb_buses_config)
 
+add_library(mdvwb_schedules_config STATIC
+    ${MDVWB_MANAGER_DIR}/mdv_schedules_config.cpp
+    ${MDVWB_MANAGER_DIR}/mdv_schedules_config.h
+)
+target_compile_features(mdvwb_schedules_config PUBLIC cxx_std_20)
+target_include_directories(mdvwb_schedules_config PUBLIC ${MDVWB_MANAGER_DIR})
+target_link_libraries(mdvwb_schedules_config PUBLIC mdvwb_buses_config mdvwb_dashboard_config)
+
 
 add_library(mdvwb_dashboard_upload STATIC
     ${MDVWB_MANAGER_DIR}/mdvwb_dashboard_upload.cpp
@@ -114,8 +122,9 @@ add_library(mdvwb_manager_mqtt STATIC
 target_compile_features(mdvwb_manager_mqtt PUBLIC cxx_std_20)
 target_include_directories(mdvwb_manager_mqtt PUBLIC ${MDVWB_MANAGER_DIR} ${MDVWB_DRIVER_DIR})
 target_link_libraries(mdvwb_manager_mqtt
-    PUBLIC mdvwb_buses_config mdvwb_dashboard_config mdvwb_dashboard_upload
-           mdvwb_service_sync mdvwb_mosquitto_transport mdvwb_discovery_runner)
+    PUBLIC mdvwb_buses_config mdvwb_dashboard_config mdvwb_schedules_config
+           mdvwb_dashboard_upload mdvwb_service_sync mdvwb_mosquitto_transport
+           mdvwb_discovery_runner)
 
 add_library(mdvwb_manager_cli STATIC
     ${MDVWB_MANAGER_DIR}/mdvwb_manager_cli.cpp
@@ -141,6 +150,11 @@ add_executable(mdvwb_dashboard_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_dashboard_config_test.cpp
 )
 target_link_libraries(mdvwb_dashboard_config_test PRIVATE mdvwb_dashboard_config)
+
+add_executable(mdvwb_schedules_config_test
+    ${MDVWB_MANAGER_TEST_DIR}/mdv_schedules_config_test.cpp
+)
+target_link_libraries(mdvwb_schedules_config_test PRIVATE mdvwb_schedules_config)
 
 add_executable(mdvwb_dashboard_upload_test
     ${MDVWB_MANAGER_TEST_DIR}/mdvwb_dashboard_upload_test.cpp
@@ -177,6 +191,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_mosquitto_transport
     mdvwb_buses_config
     mdvwb_dashboard_config
+    mdvwb_schedules_config
     mdvwb_dashboard_upload
     mdvwb_service_sync
     mdvwb_discovery_runner
@@ -185,6 +200,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb-manager
     mdvwb_buses_config_test
     mdvwb_dashboard_config_test
+    mdvwb_schedules_config_test
     mdvwb_dashboard_upload_test
     mdvwb_manager_cli_test
     mdvwb_service_sync_test
@@ -209,6 +225,7 @@ enable_testing()
 add_test(NAME mdv_protocol_self_test COMMAND MDVWB --self-test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
 add_test(NAME mdvwb_dashboard_config_test COMMAND mdvwb_dashboard_config_test)
+add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)
 add_test(NAME mdvwb_dashboard_upload_test COMMAND mdvwb_dashboard_upload_test)
 add_test(NAME mdvwb_manager_cli_test COMMAND mdvwb_manager_cli_test)
 add_test(NAME mdvwb_service_sync_test COMMAND mdvwb_service_sync_test)

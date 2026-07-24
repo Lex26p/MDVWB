@@ -164,6 +164,7 @@ struct Fixture {
     TemporaryDirectory temporary;
     std::filesystem::path config = temporary.Path() / "etc/mdvwb/buses.json";
     std::filesystem::path dashboard = temporary.Path() / "etc/mdvwb/dashboard.json";
+    std::filesystem::path schedules = temporary.Path() / "etc/mdvwb/schedules.json";
     mdvwb::ServiceSyncPaths paths;
     FakeMqttClient client;
     RecordingRunner runner;
@@ -194,29 +195,33 @@ void TestStartPublishesConfigurationAndBusStatuses() {
         fixture.client, fixture.config, fixture.paths, fixture.runner, &fixture.discovery);
     service.Start();
 
-    Require(fixture.client.subscriptions.size() == 11,
-            "manager must create eleven subscriptions");
+    Require(fixture.client.subscriptions.size() == 13,
+            "manager must create thirteen subscriptions");
     Require(fixture.client.subscriptions[0] == mdvwb::ManagerMqttService::ConfigSetTopic,
             "manager subscribed to wrong configuration topic");
     Require(fixture.client.subscriptions[1] == mdvwb::ManagerMqttService::DashboardConfigSetTopic,
             "manager subscribed to wrong dashboard configuration topic");
-    Require(fixture.client.subscriptions[2] == mdvwb::ManagerMqttService::BackgroundUploadStartTopic,
+    Require(fixture.client.subscriptions[2] == mdvwb::ManagerMqttService::SchedulesConfigSetTopic,
+            "manager subscribed to wrong schedules configuration topic");
+    Require(fixture.client.subscriptions[3] == mdvwb::ManagerMqttService::ScheduleRunFilter,
+            "manager subscribed to wrong schedule run filter");
+    Require(fixture.client.subscriptions[4] == mdvwb::ManagerMqttService::BackgroundUploadStartTopic,
             "manager subscribed to wrong upload start topic");
-    Require(fixture.client.subscriptions[3] == mdvwb::ManagerMqttService::BackgroundUploadChunkFilter,
+    Require(fixture.client.subscriptions[5] == mdvwb::ManagerMqttService::BackgroundUploadChunkFilter,
             "manager subscribed to wrong upload chunk filter");
-    Require(fixture.client.subscriptions[4] == mdvwb::ManagerMqttService::BackgroundUploadFinishFilter,
+    Require(fixture.client.subscriptions[6] == mdvwb::ManagerMqttService::BackgroundUploadFinishFilter,
             "manager subscribed to wrong upload finish filter");
-    Require(fixture.client.subscriptions[5] == mdvwb::ManagerMqttService::BackgroundUploadCancelFilter,
+    Require(fixture.client.subscriptions[7] == mdvwb::ManagerMqttService::BackgroundUploadCancelFilter,
             "manager subscribed to wrong upload cancel filter");
-    Require(fixture.client.subscriptions[6] == mdvwb::ManagerMqttService::BusStartFilter,
+    Require(fixture.client.subscriptions[8] == mdvwb::ManagerMqttService::BusStartFilter,
             "manager subscribed to wrong start filter");
-    Require(fixture.client.subscriptions[7] == mdvwb::ManagerMqttService::BusStopFilter,
+    Require(fixture.client.subscriptions[9] == mdvwb::ManagerMqttService::BusStopFilter,
             "manager subscribed to wrong stop filter");
-    Require(fixture.client.subscriptions[8] == mdvwb::ManagerMqttService::BusRestartFilter,
+    Require(fixture.client.subscriptions[10] == mdvwb::ManagerMqttService::BusRestartFilter,
             "manager subscribed to wrong restart filter");
-    Require(fixture.client.subscriptions[9] == mdvwb::ManagerMqttService::BusStatusGetFilter,
+    Require(fixture.client.subscriptions[11] == mdvwb::ManagerMqttService::BusStatusGetFilter,
             "manager subscribed to wrong status filter");
-    Require(fixture.client.subscriptions[10] == mdvwb::ManagerMqttService::BusDiscoveryStartFilter,
+    Require(fixture.client.subscriptions[12] == mdvwb::ManagerMqttService::BusDiscoveryStartFilter,
             "manager subscribed to wrong discovery filter");
 
     const auto* config = LastPublication(
@@ -258,6 +263,19 @@ void TestStartPublishesConfigurationAndBusStatuses() {
     Require(uploadStatus != nullptr && uploadStatus->retained &&
                 uploadStatus->payload.find("\"state\":\"idle\"") != std::string::npos,
             "background upload did not publish idle state");
+
+    Require(std::filesystem::exists(fixture.schedules),
+            "default schedules configuration was not created");
+    const auto* schedulesConfig = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::SchedulesConfigTopic);
+    Require(schedulesConfig != nullptr && schedulesConfig->retained &&
+                schedulesConfig->payload.find("\"revision\": 0") != std::string::npos,
+            "current schedules configuration must be retained");
+    const auto* schedulesStatus = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::SchedulesStatusTopic);
+    Require(schedulesStatus != nullptr && schedulesStatus->retained &&
+                schedulesStatus->payload.find("\"state\":\"ready\"") != std::string::npos,
+            "schedules did not publish ready state");
 }
 
 void TestValidConfigurationIsSavedAndApplied() {
@@ -754,6 +772,122 @@ void TestMultiplePanelsAndPanelSpecificBackground() {
             "upload for unknown panel was accepted");
 }
 
+void WriteDashboardWithMainFan(const Fixture& fixture) {
+    WriteFile(fixture.dashboard, R"json({
+      "version":2,"revision":0,"defaultPanel":"main","panels":[{
+        "id":"main","title":"Главная",
+        "background":{"file":"","naturalWidth":0,"naturalHeight":0,"defaultScale":1,"fit":"contain"},
+        "fans":[{"id":"fan-1-1","number":1,"bus":1,"address":1,"label":"Кабинет 1",
+                 "x":0.5,"y":0.5,"markerScale":1,"rotation":0,"visible":true}]
+      }]
+    })json");
+}
+
+std::string ValidSchedulesPayload(int revision = 0) {
+    return std::string("{\"version\":1,\"revision\":") + std::to_string(revision) + R"json(,
+      "schedules":[{
+        "id":"morning","name":"Утренний запуск","enabled":true,"panelId":"main",
+        "kind":"weekly","days":[1,2,3,4,5],"date":"","time":"08:00",
+        "targets":[{"bus":1,"address":1}],
+        "actions":{"power":true,"mode":0,"speed":2,"setTemp":23}
+      }]})json";
+}
+
+void TestSchedulesConfigurationIsSavedAndRunIsQueued() {
+    Fixture fixture;
+    WriteDashboardWithMainFan(fixture);
+    mdvwb::ManagerMqttService service(
+        fixture.client, fixture.config, fixture.paths, fixture.runner, &fixture.discovery);
+    service.Start();
+    fixture.client.publications.clear();
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::SchedulesConfigSetTopic,
+        ValidSchedulesPayload());
+    auto result = service.ProcessOne();
+    Require(result.has_value() && result->success && result->saved &&
+                result->command == "schedules-config",
+            "valid schedules configuration was not saved");
+    const std::string saved = ReadFile(fixture.schedules);
+    Require(saved.find("\"revision\": 1") != std::string::npos &&
+                saved.find("\"id\": \"morning\"") != std::string::npos,
+            "saved schedules file is incomplete");
+
+    const auto* config = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::SchedulesConfigTopic);
+    Require(config != nullptr && config->retained &&
+                config->payload.find("\"revision\": 1") != std::string::npos,
+            "saved schedules were not republished retained");
+    const auto* operation = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::SchedulesConfigResultTopic);
+    Require(operation != nullptr && !operation->retained &&
+                operation->payload.find("\"success\":true") != std::string::npos &&
+                operation->payload.find("\"schedules\":1") != std::string::npos,
+            "schedules operation result is incomplete");
+
+    fixture.client.Inject("/mdvwb/schedules/morning/run", "1");
+    result = service.ProcessOne();
+    Require(result.has_value() && result->success && !result->saved &&
+                result->command == "schedule-run",
+            "manual schedule run was not queued");
+    const auto* execute = LastPublication(
+        fixture.client, "/mdvwb/schedules/morning/execute");
+    Require(execute != nullptr && !execute->retained &&
+                execute->payload.find("\"source\":\"manual\"") != std::string::npos,
+            "manual schedule execution event is missing");
+    const auto* runResult = LastPublication(
+        fixture.client, "/mdvwb/schedules/morning/result");
+    Require(runResult != nullptr && !runResult->retained &&
+                runResult->payload.find("\"state\":\"queued\"") != std::string::npos,
+            "queued schedule result is missing");
+}
+
+void TestSchedulesConflictsReferencesAndRetainedRunsAreRejected() {
+    Fixture fixture;
+    WriteDashboardWithMainFan(fixture);
+    mdvwb::ManagerMqttService service(
+        fixture.client, fixture.config, fixture.paths, fixture.runner, &fixture.discovery);
+    service.Start();
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::SchedulesConfigSetTopic,
+        ValidSchedulesPayload());
+    auto result = service.ProcessOne();
+    Require(result.has_value() && result->success,
+            "initial schedules save failed");
+    const std::string original = ReadFile(fixture.schedules);
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::SchedulesConfigSetTopic,
+        ValidSchedulesPayload(0));
+    result = service.ProcessOne();
+    Require(result.has_value() && !result->success && !result->saved &&
+                ReadFile(fixture.schedules) == original,
+            "stale schedules revision changed the file");
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::SchedulesConfigSetTopic,
+        R"json({"version":1,"revision":1,"schedules":[{
+          "id":"bad-target","name":"Bad","enabled":true,"panelId":"main",
+          "kind":"weekly","days":[1],"date":"","time":"08:00",
+          "targets":[{"bus":1,"address":63}],"actions":{"power":true}
+        }]})json");
+    result = service.ProcessOne();
+    Require(result.has_value() && !result->success && !result->saved &&
+                ReadFile(fixture.schedules) == original,
+            "schedule with unknown address was accepted");
+
+    fixture.client.Inject("/mdvwb/schedules/morning/run", "1", true);
+    result = service.ProcessOne();
+    Require(result.has_value() && !result->success,
+            "retained schedule run was accepted");
+
+    fixture.client.Inject("/mdvwb/schedules/missing/run", "1");
+    result = service.ProcessOne();
+    Require(result.has_value() && !result->success,
+            "unknown schedule run was accepted");
+}
+
 void TestInvalidConfigurationAndSynchronizationFailure() {
     Fixture fixture;
     mdvwb::ManagerMqttService service(
@@ -801,6 +935,8 @@ int main() {
         TestInvalidAndRetainedDashboardCommandsAreRejected();
         TestBackgroundUploadUpdatesDashboardWithoutServiceRestart();
         TestMultiplePanelsAndPanelSpecificBackground();
+        TestSchedulesConfigurationIsSavedAndRunIsQueued();
+        TestSchedulesConflictsReferencesAndRetainedRunsAreRejected();
         TestInvalidConfigurationAndSynchronizationFailure();
         std::cout << "MDVWB manager MQTT and dashboard tests: OK\n";
         return 0;

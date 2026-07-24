@@ -1975,3 +1975,8 @@ http://<адрес-WB>/fancoils/?panel=floor-2
 ### Step 9.8 editor interaction correction
 
 The dashboard editor keeps the 1% grid switch inside **Panel settings**. The editor header contains no zoom controls; wheel input over the map changes only the temporary editor preview scale. The saved opening scale remains the explicit setting in the drawer. Marker rotation is no longer exposed or rendered; legacy `rotation` values are accepted for compatibility and normalized to zero on the next save.
+
+
+## Backend расписаний
+
+Кнопка «Расписание» пока остаётся без полноценного редактора, но backend уже доступен через `/mdvwb/schedules/...`. Конфигурация привязана к конкретной пользовательской панели и содержит только явно выбранные fan-coil targets. Редактор и отображение ближайшего запуска будут добавлены после службы выполнения.

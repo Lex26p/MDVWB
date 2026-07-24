@@ -1467,3 +1467,24 @@ Background upload start carries `panelId`. `ManagerMqttService` validates that t
 ### Step 9.8 editor interaction correction
 
 The dashboard editor keeps the 1% grid switch inside **Panel settings**. The editor header contains no zoom controls; wheel input over the map changes only the temporary editor preview scale. The saved opening scale remains the explicit setting in the drawer. Marker rotation is no longer exposed or rendered; legacy `rotation` values are accepted for compatibility and normalized to zero on the next save.
+
+
+## 42. Schedule configuration backend
+
+Runtime file: `/etc/mdvwb/schedules.json`. `mdv_schedules_config` owns strict parsing, canonical serialization, weekly/once validation, action ranges and cross-reference inspection against both `buses.json` and dashboard collection version 2.
+
+Manager MQTT contract:
+
+```text
+/mdvwb/schedules/config
+/mdvwb/schedules/config/set
+/mdvwb/schedules/config/result
+/mdvwb/schedules/status
+/mdvwb/schedules/<id>/run
+/mdvwb/schedules/<id>/execute
+/mdvwb/schedules/<id>/result
+```
+
+Configuration saves are complete transactions protected by `revision`, written atomically and limited to 1 MiB. Unlike dashboard placement warnings, broken schedule references reject a save because an executable rule must resolve to an existing visible target. Later bus/dashboard changes can make an existing schedule stale; republishing then reports `state=warning` and `referenceIssues`.
+
+Manual `/run` is validated by the manager and converted to an internal non-retained `/execute` event. Step 11 owns actual timing and command delivery in `mdvwb-scheduler`; do not execute serial or `/on1` commands inside the manager.

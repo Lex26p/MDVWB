@@ -248,6 +248,7 @@ systemctl list-units 'mdvwb@*.service' --all --no-pager
 | [`docs/DEVELOPER.md`](docs/DEVELOPER.md) | Source architecture, protocol, MQTT contracts, tests and extension procedures |
 | [`docs/INSTALLATION.md`](docs/INSTALLATION.md) | Installation, configuration, commands, update, recovery and diagnostics |
 | [`docs/WEB_AND_FANCOILS.md`](docs/WEB_AND_FANCOILS.md) | Web UI, bus operations, discovery and fan-coil interaction |
+| [`docs/schedules-config.md`](docs/schedules-config.md) | Schedule JSON schema, validation and MQTT contract |
 
 ## Repository
 
@@ -320,3 +321,8 @@ Public links select a panel without exposing an admin selector:
 ### Step 9.8 editor interaction correction
 
 The dashboard editor keeps the 1% grid switch inside **Panel settings**. The editor header contains no zoom controls; wheel input over the map changes only the temporary editor preview scale. The saved opening scale remains the explicit setting in the drawer. Marker rotation is no longer exposed or rendered; legacy `rotation` values are accepted for compatibility and normalized to zero on the next save.
+
+
+## Schedule configuration backend
+
+The manager owns `/etc/mdvwb/schedules.json` and exposes retained configuration/status plus non-retained save and manual-run commands under `/mdvwb/schedules/...`. Weekly and one-time schedules store a panel ID, explicit individual bus/address targets, local controller time and opt-in Power/Mode/Speed/SetTemp actions. Saves use optimistic revision control and reject targets that are missing from `buses.json` or the selected visible dashboard panel. See [`docs/schedules-config.md`](docs/schedules-config.md). Actual timed execution is introduced by the separate scheduler service in the next step.

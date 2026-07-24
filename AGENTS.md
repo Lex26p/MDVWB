@@ -832,7 +832,8 @@ For implementation steps:
 - use one-line PowerShell commands;
 - group commands by unpack, build/run, verification, and Git;
 - avoid helper apply scripts and unnecessary preflight checks;
-- do not create a Git commit or trigger ARM64 CI for every documentation-only step;
+- create a local Git commit after every implementation step and require its hash before continuing;
+- do not trigger ARM64 CI until the final integration checkpoint;
 - use Git/CI only when an integrated checkpoint or new ARM64 artifact is required;
 - keep architecture compact and avoid unnecessary infrastructure.
 
@@ -930,3 +931,13 @@ The engineering dashboard editor is now a single-header, map-first workspace. Ge
 ### Step 9.8 editor interaction correction
 
 The dashboard editor keeps the 1% grid switch inside **Panel settings**. The editor header contains no zoom controls; wheel input over the map changes only the temporary editor preview scale. The saved opening scale remains the explicit setting in the drawer. Marker rotation is no longer exposed or rendered; legacy `rotation` values are accepted for compatibility and normalized to zero on the next save.
+
+
+## Schedule backend invariant
+
+- `/etc/mdvwb/schedules.json` is strict schema version 1 with one global optimistic-concurrency revision.
+- Schedule targets are always individual `bus/address` pairs; never use protocol broadcast.
+- Every saved target must exist in `buses.json` and be visible in the referenced dashboard panel.
+- Actions are opt-in Power/Mode/Speed/SetTemp fields and at least one action is required.
+- Manager validates `/run` and emits `/execute`; actual timing and `/on1` publishing belong to the separate scheduler service.
+- Retained save/run commands are forbidden. Configuration and status are retained; operation events/results are non-retained.

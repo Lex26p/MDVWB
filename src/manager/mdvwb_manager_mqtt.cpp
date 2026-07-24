@@ -24,7 +24,9 @@ namespace {
 
 constexpr std::size_t MaximumConfigPayloadBytes = 64U * 1024U;
 constexpr std::size_t MaximumDashboardPayloadBytes = 1024U * 1024U;
+constexpr std::size_t MaximumSchedulesPayloadBytes = 1024U * 1024U;
 constexpr std::string_view BusTopicPrefix = "/mdvwb/buses/";
+constexpr std::string_view ScheduleTopicPrefix = "/mdvwb/schedules/";
 constexpr std::string_view BackgroundChunkPrefix =
     "/mdvwb/dashboard/background/upload/chunk/";
 constexpr std::string_view BackgroundFinishPrefix =
@@ -63,6 +65,12 @@ std::size_t EnabledCount(const BusesConfig& config) {
         [](const BusConfig& bus) { return bus.enabled; }));
 }
 
+std::size_t EnabledScheduleCount(const SchedulesConfig& config) {
+    return static_cast<std::size_t>(std::count_if(
+        config.schedules.begin(), config.schedules.end(),
+        [](const ScheduleEntry& schedule) { return schedule.enabled; }));
+}
+
 const BusConfig* FindBus(const BusesConfig& config, int busId) {
     const auto iterator = std::find_if(
         config.buses.begin(), config.buses.end(),
@@ -97,6 +105,14 @@ std::string DiscoveryStatusTopic(int busId) {
 
 std::string DiscoveryResultTopic(int busId) {
     return "/mdvwb/buses/" + std::to_string(busId) + "/discovery/result";
+}
+
+std::string ScheduleExecuteTopic(std::string_view scheduleId) {
+    return "/mdvwb/schedules/" + std::string(scheduleId) + "/execute";
+}
+
+std::string ScheduleResultTopic(std::string_view scheduleId) {
+    return "/mdvwb/schedules/" + std::string(scheduleId) + "/result";
 }
 
 int ReadIntegerEnvironment(const char* name, int fallback) {
@@ -169,6 +185,14 @@ std::filesystem::path ResolveDashboardAssetDirectory(
         : std::move(assetDirectory);
 }
 
+std::filesystem::path ResolveSchedulesPath(
+    const std::filesystem::path& configPath,
+    std::filesystem::path schedulesPath) {
+    return schedulesPath.empty()
+        ? configPath.parent_path() / "schedules.json"
+        : std::move(schedulesPath);
+}
+
 bool IsSafeUploadTopicId(std::string_view value) {
     return !value.empty() && value.size() <= 64U &&
         std::all_of(value.begin(), value.end(), [](char character) {
@@ -199,10 +223,12 @@ ManagerMqttService::ManagerMqttService(
     CommandRunner& commandRunner,
     DiscoveryRunner* discoveryRunner,
     std::filesystem::path dashboardPath,
-    std::filesystem::path dashboardAssetDirectory)
+    std::filesystem::path dashboardAssetDirectory,
+    std::filesystem::path schedulesPath)
     : client_(client),
       configPath_(std::move(configPath)),
       dashboardPath_(ResolveDashboardPath(configPath_, std::move(dashboardPath))),
+      schedulesPath_(ResolveSchedulesPath(configPath_, std::move(schedulesPath))),
       backgroundUpload_(ResolveDashboardAssetDirectory(
           dashboardPath_, std::move(dashboardAssetDirectory))),
       servicePaths_(std::move(servicePaths)),
@@ -222,6 +248,8 @@ void ManagerMqttService::Start() {
     });
     client_.Subscribe(ConfigSetTopic);
     client_.Subscribe(DashboardConfigSetTopic);
+    client_.Subscribe(SchedulesConfigSetTopic);
+    client_.Subscribe(ScheduleRunFilter);
     client_.Subscribe(BackgroundUploadStartTopic);
     client_.Subscribe(BackgroundUploadChunkFilter);
     client_.Subscribe(BackgroundUploadFinishFilter);
@@ -243,6 +271,11 @@ void ManagerMqttService::Start() {
     } catch (const std::exception& error) {
         PublishDashboardStatus("error", 0, 0, 0, error.what());
     }
+    try {
+        PublishCurrentSchedules();
+    } catch (const std::exception& error) {
+        PublishSchedulesStatus("error", 0, 0, 0, 0, error.what());
+    }
     PublishBackgroundUploadStatus("idle");
 }
 
@@ -260,6 +293,9 @@ std::optional<ManagerMqttService::IncomingCommand> ManagerMqttService::ParseInco
     }
     if (message.topic == DashboardConfigSetTopic) {
         return makeCommand(IncomingType::DashboardConfiguration);
+    }
+    if (message.topic == SchedulesConfigSetTopic) {
+        return makeCommand(IncomingType::SchedulesConfiguration);
     }
     if (message.topic == BackgroundUploadStartTopic) {
         return makeCommand(IncomingType::BackgroundUploadStart);
@@ -316,6 +352,27 @@ std::optional<ManagerMqttService::IncomingCommand> ManagerMqttService::ParseInco
     if (auto command = parseUploadId(
             BackgroundCancelPrefix, IncomingType::BackgroundUploadCancel)) {
         return command;
+    }
+
+    if (message.topic.rfind(ScheduleTopicPrefix, 0U) == 0U) {
+        const std::string_view remainder(
+            message.topic.data() + ScheduleTopicPrefix.size(),
+            message.topic.size() - ScheduleTopicPrefix.size());
+        constexpr std::string_view suffix = "/run";
+        if (remainder.size() > suffix.size() &&
+            remainder.ends_with(suffix)) {
+            const std::string_view scheduleId =
+                remainder.substr(0U, remainder.size() - suffix.size());
+            if (IsSafeUploadTopicId(scheduleId) &&
+                scheduleId.find('/') == std::string_view::npos) {
+                IncomingCommand command;
+                command.type = IncomingType::ScheduleRun;
+                command.scheduleId = std::string(scheduleId);
+                command.message = std::move(message);
+                return command;
+            }
+        }
+        return std::nullopt;
     }
 
     if (message.topic.rfind(BusTopicPrefix, 0) != 0U) {
@@ -385,6 +442,12 @@ std::optional<ManagerMqttResult> ManagerMqttService::ProcessOne() {
     if (command.type == IncomingType::DashboardConfiguration) {
         return ProcessDashboardConfiguration(command.message);
     }
+    if (command.type == IncomingType::SchedulesConfiguration) {
+        return ProcessSchedulesConfiguration(command.message);
+    }
+    if (command.type == IncomingType::ScheduleRun) {
+        return ProcessScheduleRun(command.scheduleId, command.message);
+    }
     if (command.type == IncomingType::BackgroundUploadStart) {
         return ProcessBackgroundUploadStart(command.message);
     }
@@ -440,6 +503,11 @@ ManagerMqttResult ManagerMqttService::ProcessConfiguration(
             PublishCurrentDashboard();
         } catch (const std::exception& error) {
             PublishDashboardStatus("error", 0, 0, 0, error.what());
+        }
+        try {
+            PublishCurrentSchedules();
+        } catch (const std::exception& error) {
+            PublishSchedulesStatus("error", 0, 0, 0, 0, error.what());
         }
 
         try {
@@ -551,6 +619,11 @@ ManagerMqttResult ManagerMqttService::ProcessDashboardConfiguration(
             submitted.revision,
             std::accumulate(submitted.panels.begin(), submitted.panels.end(), std::size_t{0}, [](std::size_t total, const DashboardPanel& panel) { return total + panel.fans.size(); }),
             issues);
+        try {
+            PublishCurrentSchedules();
+        } catch (const std::exception& error) {
+            PublishSchedulesStatus("error", 0, 0, 0, 0, error.what());
+        }
         return ManagerMqttResult{
             true,
             true,
@@ -568,6 +641,155 @@ ManagerMqttResult ManagerMqttService::ProcessDashboardConfiguration(
             std::string("Cannot save dashboard configuration: ") + error.what();
         PublishDashboardStatus("error", 0, 0, 0, detail);
         PublishDashboardResult(false, false, detail, 0, 0, 0);
+        return ManagerMqttResult{
+            false, false, detail, std::nullopt, std::string(command)};
+    }
+}
+
+ManagerMqttResult ManagerMqttService::ProcessSchedulesConfiguration(
+    const mdv::MqttMessage& message) {
+    constexpr std::string_view command = "schedules-config";
+    if (message.retained) {
+        constexpr std::string_view error =
+            "Retained schedules configuration commands are ignored";
+        PublishSchedulesResult(false, false, error, 0, 0, 0, 0);
+        return ManagerMqttResult{
+            false, false, std::string(error), std::nullopt, std::string(command)};
+    }
+    if (message.payload.size() > MaximumSchedulesPayloadBytes) {
+        constexpr std::string_view error =
+            "Schedules configuration payload exceeds 1048576 bytes";
+        PublishSchedulesResult(false, false, error, 0, 0, 0, 0);
+        return ManagerMqttResult{
+            false, false, std::string(error), std::nullopt, std::string(command)};
+    }
+
+    try {
+        SchedulesConfig current = LoadOrCreateSchedules();
+        SchedulesConfig submitted = ParseSchedulesConfig(message.payload);
+        const BusesConfig buses = LoadBusesConfig(configPath_);
+        const DashboardCollection dashboards = LoadOrCreateDashboard();
+
+        if (submitted.revision != current.revision) {
+            const std::string detail =
+                "Schedules revision conflict: submitted " +
+                std::to_string(submitted.revision) + ", current " +
+                std::to_string(current.revision);
+            const std::size_t issues =
+                InspectScheduleReferences(current, buses, dashboards).size();
+            PublishSchedulesResult(
+                false,
+                false,
+                detail,
+                current.revision,
+                current.schedules.size(),
+                EnabledScheduleCount(current),
+                issues);
+            PublishSchedulesStatus(
+                issues == 0U ? "ready" : "warning",
+                current.revision,
+                current.schedules.size(),
+                EnabledScheduleCount(current),
+                issues,
+                detail);
+            return ManagerMqttResult{
+                false, false, detail, std::nullopt, std::string(command)};
+        }
+        if (current.revision == std::numeric_limits<int>::max()) {
+            throw SchedulesConfigError("schedules revision limit has been reached");
+        }
+
+        ValidateScheduleReferences(submitted, buses, dashboards);
+        submitted.revision = current.revision + 1;
+        const std::string canonical = SerializeSchedulesConfig(submitted);
+        WriteTextFileAtomically(schedulesPath_, canonical);
+        client_.Publish(SchedulesConfigTopic, canonical, true);
+        PublishSchedulesStatus(
+            "ready",
+            submitted.revision,
+            submitted.schedules.size(),
+            EnabledScheduleCount(submitted),
+            0);
+        PublishSchedulesResult(
+            true,
+            true,
+            "Schedules configuration saved",
+            submitted.revision,
+            submitted.schedules.size(),
+            EnabledScheduleCount(submitted),
+            0);
+        return ManagerMqttResult{
+            true,
+            true,
+            "Schedules configuration saved",
+            std::nullopt,
+            std::string(command)};
+    } catch (const SchedulesConfigError& error) {
+        const std::string detail =
+            std::string("Invalid schedules configuration: ") + error.what();
+        PublishSchedulesResult(false, false, detail, 0, 0, 0, 0);
+        return ManagerMqttResult{
+            false, false, detail, std::nullopt, std::string(command)};
+    } catch (const std::exception& error) {
+        const std::string detail =
+            std::string("Cannot save schedules configuration: ") + error.what();
+        PublishSchedulesStatus("error", 0, 0, 0, 0, detail);
+        PublishSchedulesResult(false, false, detail, 0, 0, 0, 0);
+        return ManagerMqttResult{
+            false, false, detail, std::nullopt, std::string(command)};
+    }
+}
+
+ManagerMqttResult ManagerMqttService::ProcessScheduleRun(
+    std::string_view scheduleId,
+    const mdv::MqttMessage& message) {
+    constexpr std::string_view command = "schedule-run";
+    if (message.retained) {
+        constexpr std::string_view detail = "Retained schedule run commands are ignored";
+        PublishScheduleRunResult(scheduleId, false, "rejected", detail);
+        return ManagerMqttResult{
+            false, false, std::string(detail), std::nullopt, std::string(command)};
+    }
+    if (!message.payload.empty() && message.payload != "1" &&
+        message.payload != "run" && message.payload != "{}") {
+        constexpr std::string_view detail =
+            "Schedule run payload must be empty, '1', 'run' or '{}'";
+        PublishScheduleRunResult(scheduleId, false, "rejected", detail);
+        return ManagerMqttResult{
+            false, false, std::string(detail), std::nullopt, std::string(command)};
+    }
+
+    try {
+        const SchedulesConfig schedules = LoadOrCreateSchedules();
+        const ScheduleEntry* schedule = FindSchedule(schedules, scheduleId);
+        if (schedule == nullptr) {
+            throw SchedulesConfigError(
+                "schedule '" + std::string(scheduleId) + "' does not exist");
+        }
+        SchedulesConfig selected;
+        selected.revision = schedules.revision;
+        selected.schedules.push_back(*schedule);
+        ValidateScheduleReferences(
+            selected,
+            LoadBusesConfig(configPath_),
+            LoadOrCreateDashboard());
+
+        const std::string payload =
+            "{\"version\":1,\"scheduleId\":\"" +
+            JsonEscape(scheduleId) + "\",\"source\":\"manual\"}";
+        client_.Publish(ScheduleExecuteTopic(scheduleId), payload, false);
+        PublishScheduleRunResult(
+            scheduleId, true, "queued", "Schedule queued for execution");
+        return ManagerMqttResult{
+            true,
+            false,
+            "Schedule queued for execution",
+            std::nullopt,
+            std::string(command)};
+    } catch (const std::exception& error) {
+        const std::string detail =
+            std::string("Cannot queue schedule: ") + error.what();
+        PublishScheduleRunResult(scheduleId, false, "rejected", detail);
         return ManagerMqttResult{
             false, false, detail, std::nullopt, std::string(command)};
     }
@@ -847,6 +1069,9 @@ ManagerMqttResult ManagerMqttService::ProcessBusCommand(
             throw std::logic_error("configuration command routed as bus command");
         case IncomingType::DashboardConfiguration:
             throw std::logic_error("dashboard configuration command routed as bus command");
+        case IncomingType::SchedulesConfiguration:
+        case IncomingType::ScheduleRun:
+            throw std::logic_error("schedule command routed as bus command");
         case IncomingType::BackgroundUploadStart:
         case IncomingType::BackgroundUploadChunk:
         case IncomingType::BackgroundUploadFinish:
@@ -1024,6 +1249,46 @@ void ManagerMqttService::PublishCurrentDashboard() {
         issues);
 }
 
+SchedulesConfig ManagerMqttService::LoadOrCreateSchedules() {
+    std::error_code error;
+    if (std::filesystem::exists(schedulesPath_, error)) {
+        if (error) {
+            throw std::runtime_error(
+                "cannot inspect schedules configuration: " + error.message());
+        }
+        return LoadSchedulesConfig(schedulesPath_);
+    }
+    if (error) {
+        throw std::runtime_error(
+            "cannot inspect schedules configuration: " + error.message());
+    }
+
+    SchedulesConfig schedules;
+    const std::string canonical = SerializeSchedulesConfig(schedules);
+    WriteTextFileAtomically(schedulesPath_, canonical);
+    return schedules;
+}
+
+void ManagerMqttService::PublishCurrentSchedules() {
+    const SchedulesConfig schedules = LoadOrCreateSchedules();
+    const BusesConfig buses = LoadBusesConfig(configPath_);
+    const DashboardCollection dashboards = LoadOrCreateDashboard();
+    const std::size_t issues =
+        InspectScheduleReferences(schedules, buses, dashboards).size();
+    client_.Publish(
+        SchedulesConfigTopic,
+        SerializeSchedulesConfig(schedules),
+        true);
+    PublishSchedulesStatus(
+        issues == 0U ? "ready" : "warning",
+        schedules.revision,
+        schedules.schedules.size(),
+        EnabledScheduleCount(schedules),
+        issues,
+        issues == 0U ? std::string_view{} :
+            std::string_view("Schedule references require attention"));
+}
+
 void ManagerMqttService::PublishReadyStatus(
     std::size_t busCount,
     std::size_t enabledCount) {
@@ -1072,6 +1337,58 @@ void ManagerMqttService::PublishDashboardResult(
         ",\"fans\":" + std::to_string(fanCount) +
         ",\"referenceIssues\":" + std::to_string(referenceIssueCount) + "}";
     client_.Publish(DashboardConfigResultTopic, payload, false);
+}
+
+void ManagerMqttService::PublishSchedulesStatus(
+    std::string_view state,
+    int revision,
+    std::size_t scheduleCount,
+    std::size_t enabledCount,
+    std::size_t referenceIssueCount,
+    std::string_view message) {
+    std::string payload =
+        "{\"state\":\"" + JsonEscape(state) + "\"" +
+        ",\"revision\":" + std::to_string(revision) +
+        ",\"schedules\":" + std::to_string(scheduleCount) +
+        ",\"enabled\":" + std::to_string(enabledCount) +
+        ",\"referenceIssues\":" + std::to_string(referenceIssueCount);
+    if (!message.empty()) {
+        payload += ",\"message\":\"" + JsonEscape(message) + "\"";
+    }
+    payload += '}';
+    client_.Publish(SchedulesStatusTopic, payload, true);
+}
+
+void ManagerMqttService::PublishSchedulesResult(
+    bool success,
+    bool saved,
+    std::string_view message,
+    int revision,
+    std::size_t scheduleCount,
+    std::size_t enabledCount,
+    std::size_t referenceIssueCount) {
+    const std::string payload =
+        std::string("{\"success\":") + (success ? "true" : "false") +
+        ",\"saved\":" + (saved ? std::string("true") : std::string("false")) +
+        ",\"message\":\"" + JsonEscape(message) + "\"" +
+        ",\"revision\":" + std::to_string(revision) +
+        ",\"schedules\":" + std::to_string(scheduleCount) +
+        ",\"enabled\":" + std::to_string(enabledCount) +
+        ",\"referenceIssues\":" + std::to_string(referenceIssueCount) + "}";
+    client_.Publish(SchedulesConfigResultTopic, payload, false);
+}
+
+void ManagerMqttService::PublishScheduleRunResult(
+    std::string_view scheduleId,
+    bool success,
+    std::string_view state,
+    std::string_view message) {
+    const std::string payload =
+        std::string("{\"success\":") + (success ? "true" : "false") +
+        ",\"scheduleId\":\"" + JsonEscape(scheduleId) + "\"" +
+        ",\"state\":\"" + JsonEscape(state) + "\"" +
+        ",\"message\":\"" + JsonEscape(message) + "\"}";
+    client_.Publish(ScheduleResultTopic(scheduleId), payload, false);
 }
 
 void ManagerMqttService::PublishBackgroundUploadStatus(
@@ -1329,6 +1646,9 @@ int RunManagerMqttDaemon(
         const std::filesystem::path dashboardAssetDirectory = ReadStringEnvironment(
             "MDVWB_DASHBOARD_ASSET_DIR",
             "/var/www/fancoils/assets");
+        const std::filesystem::path schedulesPath = ReadStringEnvironment(
+            "MDVWB_SCHEDULES_CONFIG",
+            (configPath.parent_path() / "schedules.json").string());
         ManagerMqttService service(
             client,
             configPath,
@@ -1336,7 +1656,8 @@ int RunManagerMqttDaemon(
             commandRunner,
             &discoveryRunner,
             dashboardPath,
-            dashboardAssetDirectory);
+            dashboardAssetDirectory,
+            schedulesPath);
 
         service.Start();
         client.Start();

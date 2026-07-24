@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "revision": 0,
+  "schedules": [
+    {
+      "id": "workday-start",
+      "name": "Начало рабочего дня",
+      "enabled": true,
+      "panelId": "main",
+      "kind": "weekly",
+      "days": [1, 2, 3, 4, 5],
+      "date": "",
+      "time": "08:00",
+      "targets": [
+        {"bus": 1, "address": 1},
+        {"bus": 1, "address": 2}
+      ],
+      "actions": {
+        "power": true,
+        "mode": 0,
+        "speed": 2,
+        "setTemp": 23
+      }
+    },
+    {
+      "id": "holiday-off",
+      "name": "Разовое выключение",
+      "enabled": false,
+      "panelId": "main",
+      "kind": "once",
+      "days": [],
+      "date": "2026-12-31",
+      "time": "18:00",
+      "targets": [
+        {"bus": 1, "address": 1}
+      ],
+      "actions": {
+        "power": false
+      }
+    }
+  ]
+}

@@ -2041,3 +2041,14 @@ mosquitto_sub -v \
 
 Ручная публикация бинарных chunks не предназначена для обычной эксплуатации;
 её будет выполнять редактор панели. Загрузка не перезапускает процессы шин.
+
+
+## Schedule configuration path
+
+The manager creates `/etc/mdvwb/schedules.json` when it is missing. Override only when required:
+
+```bash
+MDVWB_SCHEDULES_CONFIG="/etc/mdvwb/schedules.json"
+```
+
+The current step provides storage and MQTT validation. Timed execution requires the `mdvwb-scheduler.service` added in the next integration step.

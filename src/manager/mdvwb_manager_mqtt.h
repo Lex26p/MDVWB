@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mdv_dashboard_config.h"
+#include "mdv_schedules_config.h"
 #include "mdvwb_dashboard_upload.h"
 #include "mdv_mqtt.h"
 #include "mdvwb_discovery_runner.h"
@@ -36,6 +37,11 @@ public:
     static constexpr const char* DashboardConfigSetTopic = "/mdvwb/dashboard/config/set";
     static constexpr const char* DashboardConfigResultTopic = "/mdvwb/dashboard/config/result";
     static constexpr const char* DashboardStatusTopic = "/mdvwb/dashboard/status";
+    static constexpr const char* SchedulesConfigTopic = "/mdvwb/schedules/config";
+    static constexpr const char* SchedulesConfigSetTopic = "/mdvwb/schedules/config/set";
+    static constexpr const char* SchedulesConfigResultTopic = "/mdvwb/schedules/config/result";
+    static constexpr const char* SchedulesStatusTopic = "/mdvwb/schedules/status";
+    static constexpr const char* ScheduleRunFilter = "/mdvwb/schedules/+/run";
     static constexpr const char* BackgroundUploadStartTopic =
         "/mdvwb/dashboard/background/upload/start";
     static constexpr const char* BackgroundUploadChunkFilter =
@@ -61,7 +67,8 @@ public:
         CommandRunner& commandRunner,
         DiscoveryRunner* discoveryRunner = nullptr,
         std::filesystem::path dashboardPath = {},
-        std::filesystem::path dashboardAssetDirectory = {});
+        std::filesystem::path dashboardAssetDirectory = {},
+        std::filesystem::path schedulesPath = {});
 
     void Start();
     [[nodiscard]] std::optional<ManagerMqttResult> ProcessOne();
@@ -71,6 +78,8 @@ private:
     enum class IncomingType {
         Configuration,
         DashboardConfiguration,
+        SchedulesConfiguration,
+        ScheduleRun,
         BackgroundUploadStart,
         BackgroundUploadChunk,
         BackgroundUploadFinish,
@@ -86,6 +95,7 @@ private:
         IncomingType type = IncomingType::Configuration;
         std::optional<int> busId;
         std::string uploadId;
+        std::string scheduleId;
         std::optional<std::size_t> chunkIndex;
         mdv::MqttMessage message;
     };
@@ -96,6 +106,11 @@ private:
     [[nodiscard]] ManagerMqttResult ProcessConfiguration(
         const mdv::MqttMessage& message);
     [[nodiscard]] ManagerMqttResult ProcessDashboardConfiguration(
+        const mdv::MqttMessage& message);
+    [[nodiscard]] ManagerMqttResult ProcessSchedulesConfiguration(
+        const mdv::MqttMessage& message);
+    [[nodiscard]] ManagerMqttResult ProcessScheduleRun(
+        std::string_view scheduleId,
         const mdv::MqttMessage& message);
     [[nodiscard]] ManagerMqttResult ProcessBackgroundUploadStart(
         const mdv::MqttMessage& message);
@@ -120,6 +135,8 @@ private:
     void PublishCurrentConfig();
     void PublishCurrentDashboard();
     [[nodiscard]] DashboardCollection LoadOrCreateDashboard();
+    void PublishCurrentSchedules();
+    [[nodiscard]] SchedulesConfig LoadOrCreateSchedules();
     void PublishReadyStatus(std::size_t busCount, std::size_t enabledCount);
     void PublishErrorStatus(std::string_view message);
     void PublishDashboardStatus(
@@ -135,6 +152,26 @@ private:
         int revision,
         std::size_t fanCount,
         std::size_t referenceIssueCount);
+    void PublishSchedulesStatus(
+        std::string_view state,
+        int revision,
+        std::size_t scheduleCount,
+        std::size_t enabledCount,
+        std::size_t referenceIssueCount,
+        std::string_view message = {});
+    void PublishSchedulesResult(
+        bool success,
+        bool saved,
+        std::string_view message,
+        int revision,
+        std::size_t scheduleCount,
+        std::size_t enabledCount,
+        std::size_t referenceIssueCount);
+    void PublishScheduleRunResult(
+        std::string_view scheduleId,
+        bool success,
+        std::string_view state,
+        std::string_view message);
     void PublishBackgroundUploadStatus(
         std::string_view state,
         std::string_view uploadId = {},
@@ -189,6 +226,7 @@ private:
     mdv::IMqttClient& client_;
     std::filesystem::path configPath_;
     std::filesystem::path dashboardPath_;
+    std::filesystem::path schedulesPath_;
     DashboardBackgroundUpload backgroundUpload_;
     ServiceSyncPaths servicePaths_;
     CommandRunner& commandRunner_;
