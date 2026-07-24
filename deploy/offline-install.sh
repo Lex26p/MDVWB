@@ -22,8 +22,9 @@ if ! ldconfig -p 2>/dev/null | grep -q 'libmosquitto\.so\.1'; then
 fi
 
 for required in \
-    MDVWB mdvwb-manager mdvwb-run 'mdvwb@.service' mdvwb.env \
-    mdvwb-manager.service mdvwb-manager.env buses.example.json \
+    MDVWB mdvwb-manager mdvwb-scheduler mdvwb-run 'mdvwb@.service' mdvwb.env \
+    mdvwb-manager.service mdvwb-manager.env mdvwb-scheduler.service \
+    mdvwb-scheduler.env buses.example.json \
     www/mdvwb/index.html www/mdvwb/app.js www/mdvwb/model.js \
     www/mdvwb/mqtt-client.js www/mdvwb/styles.css SHA256SUMS; do
     if [ ! -e "$SCRIPT_DIR/$required" ]; then
@@ -37,19 +38,25 @@ done
     sha256sum -c SHA256SUMS
 )
 
+systemctl stop mdvwb-scheduler.service 2>/dev/null || true
 systemctl stop mdvwb-manager.service 2>/dev/null || true
 
 install -d -m 0755 \
     /usr/local/bin /usr/local/lib/mdvwb /etc/mdvwb /etc/default \
-    /etc/systemd/system "$WWW_ROOT/mdvwb"
+    /etc/systemd/system /var/lib/mdvwb "$WWW_ROOT/mdvwb"
 install -m 0755 "$SCRIPT_DIR/MDVWB" /usr/local/bin/MDVWB
 install -m 0755 "$SCRIPT_DIR/mdvwb-manager" /usr/local/bin/mdvwb-manager
+install -m 0755 "$SCRIPT_DIR/mdvwb-scheduler" /usr/local/bin/mdvwb-scheduler
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" /usr/local/lib/mdvwb/mdvwb-run
 install -m 0640 "$SCRIPT_DIR/mdvwb.env" /usr/local/lib/mdvwb/mdvwb.env
 install -m 0644 "$SCRIPT_DIR/mdvwb@.service" /etc/systemd/system/mdvwb@.service
 install -m 0644 "$SCRIPT_DIR/mdvwb-manager.service" /etc/systemd/system/mdvwb-manager.service
+install -m 0644 "$SCRIPT_DIR/mdvwb-scheduler.service" /etc/systemd/system/mdvwb-scheduler.service
 if [ ! -e /etc/default/mdvwb-manager ]; then
     install -m 0640 "$SCRIPT_DIR/mdvwb-manager.env" /etc/default/mdvwb-manager
+fi
+if [ ! -e /etc/default/mdvwb-scheduler ]; then
+    install -m 0640 "$SCRIPT_DIR/mdvwb-scheduler.env" /etc/default/mdvwb-scheduler
 fi
 
 install -m 0644 "$SCRIPT_DIR/www/mdvwb/index.html" "$WWW_ROOT/mdvwb/index.html"
@@ -108,6 +115,7 @@ systemctl daemon-reload
 /usr/local/bin/MDVWB --self-test
 /usr/local/bin/mdvwb-manager apply /etc/mdvwb/buses.json
 systemctl enable --now mdvwb-manager.service
+systemctl enable --now mdvwb-scheduler.service
 
 sleep 3
 if ! systemctl is-active --quiet mdvwb-manager.service; then
@@ -115,9 +123,15 @@ if ! systemctl is-active --quiet mdvwb-manager.service; then
     systemctl status mdvwb-manager.service --no-pager >&2 || true
     exit 5
 fi
+if ! systemctl is-active --quiet mdvwb-scheduler.service; then
+    echo "mdvwb-scheduler.service failed to start." >&2
+    systemctl status mdvwb-scheduler.service --no-pager >&2 || true
+    exit 6
+fi
 
-printf '%s\n' "Installed MDVWB multi-bus manager."
+printf '%s\n' "Installed MDVWB multi-bus manager and scheduler."
 printf '%s\n' "Configuration: /etc/mdvwb/buses.json"
 printf '%s\n' "Web files: $WWW_ROOT/mdvwb"
 printf '%s\n' "Open: http://<WB-address>/mdvwb/"
-printf '%s\n' "Status: systemctl status mdvwb-manager.service --no-pager"
+printf '%s\n' "Manager: systemctl status mdvwb-manager.service --no-pager"
+printf '%s\n' "Scheduler: systemctl status mdvwb-scheduler.service --no-pager"

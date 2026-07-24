@@ -2052,3 +2052,39 @@ MDVWB_SCHEDULES_CONFIG="/etc/mdvwb/schedules.json"
 ```
 
 The current step provides storage and MQTT validation. Timed execution requires the `mdvwb-scheduler.service` added in the next integration step.
+
+
+## Служба расписаний
+
+Установка создаёт:
+
+```text
+/usr/local/bin/mdvwb-scheduler
+/etc/systemd/system/mdvwb-scheduler.service
+/etc/default/mdvwb-scheduler
+/var/lib/mdvwb/scheduler-state.tsv
+```
+
+Проверка:
+
+```bash
+systemctl status mdvwb-scheduler.service --no-pager
+journalctl -u mdvwb-scheduler.service -n 100 --no-pager
+mosquitto_sub -v -t '/mdvwb/scheduler/status' -C 1
+```
+
+Перезапуск:
+
+```bash
+systemctl restart mdvwb-scheduler.service
+```
+
+Служба должна использовать корректное локальное время контроллера:
+
+```bash
+date
+timedatectl status
+```
+
+Изменение MQTT или путей выполняется в `/etc/default/mdvwb-scheduler`. После
+изменения требуется `systemctl restart mdvwb-scheduler.service`.

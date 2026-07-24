@@ -2,7 +2,7 @@
 Description=MDVWB multi-bus configuration and MQTT manager
 Wants=network-online.target mosquitto.service
 After=network-online.target mosquitto.service
-Before=mdvwb@1.service
+Before=mdvwb@1.service mdvwb-scheduler.service
 
 [Service]
 Type=simple

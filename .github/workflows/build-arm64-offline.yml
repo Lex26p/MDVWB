@@ -9,6 +9,7 @@ on:
     paths:
       - "*.cpp"
       - "*.h"
+      - "src/**"
       - "CMakeLists.txt"
       - "deploy/**"
       - "config/**"
@@ -59,6 +60,7 @@ jobs:
               ./out/build/arm64-release/MDVWB --version
               ./out/build/arm64-release/MDVWB --self-test
               ./out/build/arm64-release/mdvwb-manager validate config/buses.example.json
+              ./out/build/arm64-release/mdvwb-scheduler --help
             '
 
       - name: Create offline installation archive
@@ -70,12 +72,15 @@ jobs:
 
           install -m 0755 out/build/arm64-release/MDVWB dist/MDVWB-arm64/MDVWB
           install -m 0755 out/build/arm64-release/mdvwb-manager dist/MDVWB-arm64/mdvwb-manager
+          install -m 0755 out/build/arm64-release/mdvwb-scheduler dist/MDVWB-arm64/mdvwb-scheduler
           install -m 0755 deploy/mdvwb-run dist/MDVWB-arm64/mdvwb-run
           install -m 0755 deploy/offline-install.sh dist/MDVWB-arm64/offline-install.sh
           install -m 0644 deploy/mdvwb@.service dist/MDVWB-arm64/mdvwb@.service
           install -m 0640 deploy/mdvwb.env dist/MDVWB-arm64/mdvwb.env
           install -m 0644 deploy/mdvwb-manager.service dist/MDVWB-arm64/mdvwb-manager.service
           install -m 0640 deploy/mdvwb-manager.env dist/MDVWB-arm64/mdvwb-manager.env
+          install -m 0644 deploy/mdvwb-scheduler.service dist/MDVWB-arm64/mdvwb-scheduler.service
+          install -m 0640 deploy/mdvwb-scheduler.env dist/MDVWB-arm64/mdvwb-scheduler.env
           install -m 0640 deploy/buses.example.json dist/MDVWB-arm64/buses.example.json
           mkdir -p dist/MDVWB-arm64/www/mdvwb
           cp -a www/mdvwb/. dist/MDVWB-arm64/www/mdvwb/
@@ -85,8 +90,9 @@ jobs:
 
           (
             cd dist/MDVWB-arm64
-            find MDVWB mdvwb-manager mdvwb-run mdvwb@.service mdvwb.env \
-              mdvwb-manager.service mdvwb-manager.env buses.example.json \
+            find MDVWB mdvwb-manager mdvwb-scheduler mdvwb-run mdvwb@.service mdvwb.env \
+              mdvwb-manager.service mdvwb-manager.env mdvwb-scheduler.service \
+              mdvwb-scheduler.env buses.example.json \
               offline-install.sh www/mdvwb -type f -print0 | sort -z | \
               xargs -0 sha256sum > SHA256SUMS
           )

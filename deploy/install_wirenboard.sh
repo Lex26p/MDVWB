@@ -23,15 +23,19 @@ cmake --build "$BUILD_DIR" --parallel 1
 
 install -d -m 0755 \
     /usr/local/bin /usr/local/lib/mdvwb /etc/mdvwb /etc/default \
-    /etc/systemd/system "$WWW_ROOT/mdvwb"
+    /etc/systemd/system /var/lib/mdvwb "$WWW_ROOT/mdvwb"
 install -m 0755 "$BUILD_DIR/MDVWB" /usr/local/bin/MDVWB
 install -m 0755 "$BUILD_DIR/mdvwb-manager" /usr/local/bin/mdvwb-manager
+install -m 0755 "$BUILD_DIR/mdvwb-scheduler" /usr/local/bin/mdvwb-scheduler
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" /usr/local/lib/mdvwb/mdvwb-run
 install -m 0640 "$SCRIPT_DIR/mdvwb.env" /usr/local/lib/mdvwb/mdvwb.env
 install -m 0644 "$SCRIPT_DIR/mdvwb@.service" /etc/systemd/system/mdvwb@.service
 install -m 0644 "$SCRIPT_DIR/mdvwb-manager.service" /etc/systemd/system/mdvwb-manager.service
+install -m 0644 "$SCRIPT_DIR/mdvwb-scheduler.service" /etc/systemd/system/mdvwb-scheduler.service
 [ -e /etc/default/mdvwb-manager ] || \
     install -m 0640 "$SCRIPT_DIR/mdvwb-manager.env" /etc/default/mdvwb-manager
+[ -e /etc/default/mdvwb-scheduler ] || \
+    install -m 0640 "$SCRIPT_DIR/mdvwb-scheduler.env" /etc/default/mdvwb-scheduler
 cp -a "$SOURCE_DIR/www/mdvwb/." "$WWW_ROOT/mdvwb/"
 
 if [ ! -s /etc/mdvwb/buses.json ]; then
@@ -46,5 +50,6 @@ rm -f /etc/wb-rules/mdvwb-service-control.js
 systemctl daemon-reload
 /usr/local/bin/mdvwb-manager apply /etc/mdvwb/buses.json
 systemctl enable --now mdvwb-manager.service
+systemctl enable --now mdvwb-scheduler.service
 
-echo "Installed MDVWB manager and web page: http://<WB-address>/mdvwb/"
+echo "Installed MDVWB manager, scheduler and web page: http://<WB-address>/mdvwb/"

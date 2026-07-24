@@ -941,3 +941,14 @@ The dashboard editor keeps the 1% grid switch inside **Panel settings**. The edi
 - Actions are opt-in Power/Mode/Speed/SetTemp fields and at least one action is required.
 - Manager validates `/run` and emits `/execute`; actual timing and `/on1` publishing belong to the separate scheduler service.
 - Retained save/run commands are forbidden. Configuration and status are retained; operation events/results are non-retained.
+
+
+## Scheduler execution invariant
+
+- `mdvwb-scheduler` is the only component that converts schedule time or `/execute` events into fan `/on1` commands.
+- Use controller local time; weekly days are Monday=1 through Sunday=7.
+- Persist automatic execution minute before queuing commands so restart in the same minute cannot duplicate a run.
+- Manual execution remains allowed when `enabled=false`; automatic execution does not.
+- Publish Mode, Speed, SetTemp, then Power, each non-retained and individually addressed.
+- A run completes only after matching factual base topics confirm every requested value; default timeout is 10 seconds.
+- Never use broadcast, retained commands, C3 replies, or optimistic state as confirmation.

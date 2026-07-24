@@ -56,6 +56,7 @@ Mosquitto
 ```text
 MDVWB
 mdvwb-manager
+mdvwb-scheduler
 ```
 
 ### 3.1. `MDVWB`
@@ -168,6 +169,7 @@ www/mdvwb/styles.css
 ```text
 MDVWB
 mdvwb-manager
+mdvwb-scheduler
 ```
 
 Вспомогательные библиотеки:
@@ -179,6 +181,7 @@ mdvwb_service_sync
 mdvwb_discovery_runner
 mdvwb_manager_mqtt
 mdvwb_manager_cli
+mdvwb_scheduler
 ```
 
 Тестовые исполняемые файлы:
@@ -190,6 +193,7 @@ mdvwb_service_sync_test
 mdvwb_manager_mqtt_test
 mdvwb_discovery_runner_test
 mdvwb_migration_test
+mdvwb_scheduler_test
 ```
 
 Self-test протокола запускается самим `MDVWB`:
@@ -1027,6 +1031,7 @@ mdvwb_service_sync_test
 mdvwb_manager_mqtt_test
 mdvwb_discovery_runner_test
 mdvwb_migration_test
+mdvwb_scheduler_test
 ```
 
 Веб-модель:
@@ -1488,3 +1493,23 @@ Manager MQTT contract:
 Configuration saves are complete transactions protected by `revision`, written atomically and limited to 1 MiB. Unlike dashboard placement warnings, broken schedule references reject a save because an executable rule must resolve to an existing visible target. Later bus/dashboard changes can make an existing schedule stale; republishing then reports `state=warning` and `referenceIssues`.
 
 Manual `/run` is validated by the manager and converted to an internal non-retained `/execute` event. Step 11 owns actual timing and command delivery in `mdvwb-scheduler`; do not execute serial or `/on1` commands inside the manager.
+
+
+## Scheduler architecture
+
+`src/scheduler/mdvwb_scheduler.cpp` owns schedule timing and execution. The MQTT
+callback only queues messages; all configuration replacement, command publishing
+and confirmation handling occurs in the scheduler loop. Automatic runs are
+deduplicated per local minute through the atomic state file. Never use retained
+commands, protocol broadcast, C3 replies, or optimistic factual updates.
+
+The scheduler subscribes to:
+
+```text
+/mdvwb/schedules/config
+/mdvwb/schedules/+/execute
+/devices/+/controls/+
+```
+
+It publishes command topics with `/on1`, retained global status on
+`/mdvwb/scheduler/status`, and non-retained per-run results.

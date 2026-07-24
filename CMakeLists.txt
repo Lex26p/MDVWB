@@ -5,6 +5,8 @@ project(MDVWB VERSION 1.2.0 LANGUAGES CXX)
 set(MDVWB_DRIVER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/driver")
 set(MDVWB_MANAGER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/manager")
 set(MDVWB_MANAGER_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/manager")
+set(MDVWB_SCHEDULER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/scheduler")
+set(MDVWB_SCHEDULER_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/scheduler")
 
 set(MDVWB_DRIVER_SOURCES
     ${MDVWB_DRIVER_DIR}/MDVWB.cpp
@@ -141,6 +143,21 @@ add_executable(mdvwb-manager
 )
 target_link_libraries(mdvwb-manager PRIVATE mdvwb_manager_cli)
 
+add_library(mdvwb_scheduler STATIC
+    ${MDVWB_SCHEDULER_DIR}/mdvwb_scheduler.cpp
+    ${MDVWB_SCHEDULER_DIR}/mdvwb_scheduler.h
+)
+target_compile_features(mdvwb_scheduler PUBLIC cxx_std_20)
+target_include_directories(mdvwb_scheduler
+    PUBLIC ${MDVWB_SCHEDULER_DIR} ${MDVWB_MANAGER_DIR} ${MDVWB_DRIVER_DIR})
+target_link_libraries(mdvwb_scheduler
+    PUBLIC mdvwb_schedules_config mdvwb_mosquitto_transport)
+
+add_executable(mdvwb-scheduler
+    ${MDVWB_SCHEDULER_DIR}/mdvwb_scheduler_main.cpp
+)
+target_link_libraries(mdvwb-scheduler PRIVATE mdvwb_scheduler)
+
 add_executable(mdvwb_buses_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_buses_config_test.cpp
 )
@@ -186,6 +203,11 @@ add_executable(mdvwb_migration_test
 )
 target_link_libraries(mdvwb_migration_test PRIVATE mdvwb_manager_cli)
 
+add_executable(mdvwb_scheduler_test
+    ${MDVWB_SCHEDULER_TEST_DIR}/mdvwb_scheduler_test.cpp
+)
+target_link_libraries(mdvwb_scheduler_test PRIVATE mdvwb_scheduler)
+
 set(MDVWB_PROJECT_TARGETS
     MDVWB
     mdvwb_mosquitto_transport
@@ -198,6 +220,8 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_manager_mqtt
     mdvwb_manager_cli
     mdvwb-manager
+    mdvwb_scheduler
+    mdvwb-scheduler
     mdvwb_buses_config_test
     mdvwb_dashboard_config_test
     mdvwb_schedules_config_test
@@ -207,6 +231,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_manager_mqtt_test
     mdvwb_discovery_runner_test
     mdvwb_migration_test
+    mdvwb_scheduler_test
 )
 
 if(MSVC)
@@ -232,6 +257,7 @@ add_test(NAME mdvwb_service_sync_test COMMAND mdvwb_service_sync_test)
 add_test(NAME mdvwb_manager_mqtt_test COMMAND mdvwb_manager_mqtt_test)
 add_test(NAME mdvwb_discovery_runner_test COMMAND mdvwb_discovery_runner_test)
 add_test(NAME mdvwb_migration_test COMMAND mdvwb_migration_test)
+add_test(NAME mdvwb_scheduler_test COMMAND mdvwb_scheduler_test)
 
 include(GNUInstallDirs)
-install(TARGETS MDVWB mdvwb-manager RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS MDVWB mdvwb-manager mdvwb-scheduler RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
