@@ -1,0 +1,57 @@
+{
+  "version": 2,
+  "revision": 0,
+  "defaultPanel": "main",
+  "panels": [
+    {
+      "id": "main",
+      "title": "Главная панель",
+      "background": {
+        "file": "",
+        "naturalWidth": 0,
+        "naturalHeight": 0,
+        "defaultScale": 1,
+        "fit": "contain"
+      },
+      "fans": [
+        {
+          "id": "fan-1-1",
+          "number": 1,
+          "bus": 1,
+          "address": 1,
+          "label": "Приёмная",
+          "x": 0.25,
+          "y": 0.35,
+          "markerScale": 1,
+          "rotation": 0,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "id": "floor-2",
+      "title": "Второй этаж",
+      "background": {
+        "file": "",
+        "naturalWidth": 0,
+        "naturalHeight": 0,
+        "defaultScale": 1,
+        "fit": "contain"
+      },
+      "fans": [
+        {
+          "id": "fan-2-18",
+          "number": 101,
+          "bus": 2,
+          "address": 18,
+          "label": "Кабинет 201",
+          "x": 0.7,
+          "y": 0.55,
+          "markerScale": 1,
+          "rotation": 0,
+          "visible": true
+        }
+      ]
+    }
+  ]
+}

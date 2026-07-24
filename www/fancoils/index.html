@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Панель фанкойлов</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="workspace">
+    <header class="topbar">
+      <div class="brand-compact">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.2"/><path d="M12 9.8c-1.1-4.1.1-6.2 2.2-6.5 2.2-.3 3.5 2.2 2.5 4.4-.8 1.7-2.5 2.7-4.7 2.1ZM14 12c4.1-1.1 6.2.1 6.5 2.2.3 2.2-2.2 3.5-4.4 2.5-1.7-.8-2.7-2.5-2.1-4.7ZM12 14.2c1.1 4.1-.1 6.2-2.2 6.5-2.2-.3-3.5-2.2-2.5-4.4.8-1.7 2.5-2.7 4.7-2.1ZM9.8 12c-4.1 1.1-6.2-.1-6.5-2.2C3 7.6 5.5 6.3 7.7 7.3c1.7.8 2.7 2.5 2.1 4.7Z"/></svg>
+        </span>
+        <div class="brand-copy">
+          <h1 id="dashboardTitle">Панель фанкойлов</h1>
+          <span id="dashboardSubtitle" class="visually-hidden">Загрузка конфигурации…</span>
+        </div>
+      </div>
+
+      <div class="topbar-center" aria-label="Состояние системы">
+        <span id="connectionBadge" class="status-chip status-offline"><span class="status-dot"></span>MQTT</span>
+        <span class="metric-chip" title="Устройств на плане">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V8l8-5 8 5v11M8 19v-6h8v6"/></svg>
+          <strong id="placedCount">0</strong>
+          <span>устройств</span>
+        </span>
+        <span class="metric-chip metric-chip-online" title="Устройств на связи">
+          <span class="status-dot"></span><strong id="onlineCount">0</strong><span>на связи</span>
+        </span>
+        <span class="metric-chip metric-chip-alert" title="Аварии и устройства без связи">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3 20h18L12 4ZM12 9v5m0 3h.01"/></svg>
+          <strong id="alarmCount">0</strong><span>проблем</span>
+        </span>
+        <span class="visually-hidden" id="visibleCount">0 видимых</span>
+        <span class="visually-hidden" id="offlineCount">0</span>
+        <span class="visually-hidden" id="waitingCount">0 ожидают данные</span>
+      </div>
+
+      <div class="topbar-actions">
+        <div class="zoom-controls" aria-label="Масштаб плана">
+          <button id="zoomOutButton" class="icon-button" type="button" aria-label="Уменьшить масштаб">−</button>
+          <button id="fitButton" class="zoom-value" type="button" title="Вписать план">100%</button>
+          <button id="zoomInButton" class="icon-button" type="button" aria-label="Увеличить масштаб">＋</button>
+        </div>
+
+        <button id="groupModeButton" class="topbar-button group-control-button" type="button" aria-pressed="false">
+          <svg viewBox="0 0 28 20" aria-hidden="true">
+            <g transform="translate(1 3)"><circle cx="5" cy="5" r="1.2"/><path d="M5 3.8C4.3 1.3 5 .2 6.3.2c1.4 0 2 1.4 1.2 2.5-.5.8-1.4 1.2-2.5 1.1ZM6.2 5c2.5-.7 3.6 0 3.6 1.3 0 1.4-1.4 2-2.5 1.2-.8-.5-1.2-1.4-1.1-2.5ZM5 6.2c.7 2.5 0 3.6-1.3 3.6-1.4 0-2-1.4-1.2-2.5.5-.8 1.4-1.2 2.5-1.1ZM3.8 5c-2.5.7-3.6 0-3.6-1.3 0-1.4 1.4-2 2.5-1.2.8.5 1.2 1.4 1.1 2.5Z"/></g>
+            <g transform="translate(9 7)"><circle cx="5" cy="5" r="1.2"/><path d="M5 3.8C4.3 1.3 5 .2 6.3.2c1.4 0 2 1.4 1.2 2.5-.5.8-1.4 1.2-2.5 1.1ZM6.2 5c2.5-.7 3.6 0 3.6 1.3 0 1.4-1.4 2-2.5 1.2-.8-.5-1.2-1.4-1.1-2.5ZM5 6.2c.7 2.5 0 3.6-1.3 3.6-1.4 0-2-1.4-1.2-2.5.5-.8 1.4-1.2 2.5-1.1ZM3.8 5c-2.5.7-3.6 0-3.6-1.3 0-1.4 1.4-2 2.5-1.2.8.5 1.2 1.4 1.1 2.5Z"/></g>
+            <g transform="translate(17 3)"><circle cx="5" cy="5" r="1.2"/><path d="M5 3.8C4.3 1.3 5 .2 6.3.2c1.4 0 2 1.4 1.2 2.5-.5.8-1.4 1.2-2.5 1.1ZM6.2 5c2.5-.7 3.6 0 3.6 1.3 0 1.4-1.4 2-2.5 1.2-.8-.5-1.2-1.4-1.1-2.5ZM5 6.2c.7 2.5 0 3.6-1.3 3.6-1.4 0-2-1.4-1.2-2.5.5-.8 1.4-1.2 2.5-1.1ZM3.8 5c-2.5.7-3.6 0-3.6-1.3 0-1.4 1.4-2 2.5-1.2.8.5 1.2 1.4 1.1 2.5Z"/></g>
+          </svg>
+          <span>Групповое управление</span>
+        </button>
+
+        <button id="scheduleButton" class="topbar-button" type="button" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v3m12-3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/><path d="M8 13h3v3H8z"/></svg>
+          <span>Расписание</span>
+        </button>
+      </div>
+    </header>
+
+    <section id="notice" class="notice notice-hidden" role="status" aria-live="polite"></section>
+
+    <section class="map-panel" aria-label="План объекта">
+      <div id="mapViewport" class="map-viewport">
+        <div id="mapSizer" class="map-sizer">
+          <div id="mapCanvas" class="map-canvas">
+            <img id="backgroundImage" class="map-background map-background-hidden" alt="Подложка плана">
+            <div id="mapPlaceholder" class="map-placeholder">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v14H3zM3 15l5-5 4 4 3-3 6 6"/><circle cx="16.5" cy="8.5" r="1.5"/></svg>
+              <strong>Подложка не настроена</strong>
+              <span>Маркеры отображаются на нейтральном поле.</span>
+            </div>
+            <div id="markerLayer" class="marker-layer" aria-live="polite"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div id="markerTooltip" class="marker-tooltip marker-tooltip-hidden" role="tooltip" aria-hidden="true"></div>
+
+    <button id="drawerBackdrop" class="drawer-backdrop drawer-backdrop-hidden" type="button" aria-label="Закрыть боковую панель"></button>
+
+    <aside id="detailsPanel" class="side-drawer drawer-hidden" aria-labelledby="detailsTitle">
+      <div id="detailsEmpty" class="details-empty details-hidden">
+        <h2 id="detailsTitle">Выберите фанкойл</h2>
+      </div>
+
+      <div id="detailsContent" class="details-content details-hidden">
+        <div class="drawer-heading">
+          <div>
+            <p id="detailsDevice" class="eyebrow">Fan-1_1</p>
+            <h2 id="detailsLabel">Фанкойл</h2>
+          </div>
+          <button id="detailsCloseButton" class="drawer-close" type="button" aria-label="Закрыть">×</button>
+        </div>
+
+        <div class="device-brief">
+          <span id="detailsStatusBadge" class="device-status-dot device-status-unknown" title="Ожидание данных" aria-label="Ожидание данных"></span>
+          <div class="temperature-primary"><strong id="detailsTemp">—</strong><span>температура в помещении</span></div>
+          <div id="detailsAlarm" class="alarm-brief">Данные ещё не получены</div>
+        </div>
+        <span id="detailsSetTemp" class="visually-hidden">—</span>
+        <span id="detailsPower" class="visually-hidden">—</span>
+        <span id="detailsMode" class="visually-hidden">—</span>
+        <span id="detailsSpeed" class="visually-hidden">—</span>
+        <p id="detailsUpdated" class="details-updated">Данные ещё не получены</p>
+
+        <section class="control-panel" aria-labelledby="controlPanelTitle">
+          <div class="control-heading">
+            <h3 id="controlPanelTitle">Управление</h3>
+            <span id="controlAvailability" class="control-availability control-unavailable">Ожидание данных</span>
+          </div>
+
+          <div class="control-row" data-control-row="Power">
+            <div class="control-copy"><strong>Питание</strong><span id="powerCommandState">Фактически: —</span></div>
+            <div class="segmented-control" aria-label="Питание">
+              <button type="button" data-command-control="Power" data-command-value="0">Выкл.</button>
+              <button type="button" data-command-control="Power" data-command-value="1">Вкл.</button>
+            </div>
+          </div>
+
+          <div class="control-row" data-control-row="Mode">
+            <div class="control-copy"><strong>Режим</strong><span id="modeCommandState">Фактически: —</span></div>
+            <div class="select-command">
+              <select id="modeCommand" aria-label="Выберите режим">
+                <option value="0">Охлаждение</option><option value="1">Нагрев</option><option value="2">Осушение</option><option value="3">Вентиляция</option><option value="4">Авто</option>
+              </select>
+              <button id="modeApplyButton" type="button">Применить</button>
+            </div>
+          </div>
+
+          <div class="control-row" data-control-row="Speed">
+            <div class="control-copy"><strong>Скорость</strong><span id="speedCommandState">Фактически: —</span></div>
+            <div class="select-command">
+              <select id="speedCommand" aria-label="Выберите скорость">
+                <option value="1">Низкая</option><option value="2">Средняя</option><option value="3">Высокая</option><option value="4">Авто</option>
+              </select>
+              <button id="speedApplyButton" type="button">Применить</button>
+            </div>
+          </div>
+
+          <div class="control-row" data-control-row="SetTemp">
+            <div class="control-copy"><strong>Уставка</strong><span id="setTempCommandState">Фактически: —</span></div>
+            <div class="temperature-command">
+              <button id="setTempMinusButton" type="button" aria-label="Уменьшить уставку">−</button>
+              <label><span class="visually-hidden">Температура</span><input id="setTempCommand" type="number" min="16" max="32" step="1" inputmode="numeric"></label>
+              <span>°C</span>
+              <button id="setTempPlusButton" type="button" aria-label="Увеличить уставку">＋</button>
+              <button id="setTempApplyButton" class="temperature-apply" type="button">Применить</button>
+            </div>
+          </div>
+
+          <p id="commandFeedback" class="command-feedback" role="status" aria-live="polite">Изменение отображается только после подтверждённого MQTT-состояния.</p>
+        </section>
+      </div>
+    </aside>
+
+    <aside id="groupPanel" class="side-drawer group-panel drawer-hidden group-panel-hidden" aria-labelledby="groupPanelTitle">
+      <div class="drawer-heading">
+        <div><p class="eyebrow">Массовые команды</p><h2 id="groupPanelTitle">Групповое управление</h2></div>
+        <button id="groupCloseButton" class="drawer-close" type="button" aria-label="Закрыть">×</button>
+      </div>
+      <p class="group-selection-hint">Нажимайте нужные фанкойлы на плане. Повторное нажатие снимает выбор.</p>
+      <div class="group-selection-summary"><strong id="groupSelectedCount">0</strong><span>выбрано</span></div>
+      <div class="group-selection-actions">
+        <button id="groupSelectVisibleButton" type="button">Выбрать видимые</button>
+        <button id="groupClearButton" type="button">Снять выбор</button>
+      </div>
+      <div class="group-command-grid">
+        <label class="group-command-card"><span class="group-command-title"><input id="groupPowerEnabled" type="checkbox"> Питание</span><select id="groupPowerValue" disabled><option value="1">Включить</option><option value="0">Выключить</option></select></label>
+        <label class="group-command-card"><span class="group-command-title"><input id="groupModeEnabled" type="checkbox"> Режим</span><select id="groupModeValue" disabled><option value="0">Охлаждение</option><option value="1">Нагрев</option><option value="2">Осушение</option><option value="3">Вентиляция</option><option value="4">Авто</option></select></label>
+        <label class="group-command-card"><span class="group-command-title"><input id="groupSpeedEnabled" type="checkbox"> Скорость</span><select id="groupSpeedValue" disabled><option value="1">Низкая</option><option value="2">Средняя</option><option value="3">Высокая</option><option value="4">Авто</option></select></label>
+        <label class="group-command-card"><span class="group-command-title"><input id="groupSetTempEnabled" type="checkbox"> Уставка</span><span class="group-temperature-input"><input id="groupSetTempValue" type="number" min="16" max="32" step="1" value="24" disabled><span>°C</span></span></label>
+      </div>
+      <p id="groupFeedback" class="group-feedback" role="status" aria-live="polite">Выберите фанкойлы и параметры для изменения.</p>
+      <button id="groupApplyButton" class="group-apply-button" type="button" disabled>Отправить команды</button>
+    </aside>
+
+    <aside id="schedulePanel" class="side-drawer drawer-hidden" aria-labelledby="schedulePanelTitle">
+      <div class="drawer-heading">
+        <div><p class="eyebrow">Автоматизация</p><h2 id="schedulePanelTitle">Расписание</h2></div>
+        <button id="scheduleCloseButton" class="drawer-close" type="button" aria-label="Закрыть">×</button>
+      </div>
+      <div class="schedule-placeholder">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v3m12-3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/><path d="M8 13h3v3H8z"/></svg>
+        <strong>Расписание будет добавлено следующим этапом</strong>
+        <p>Задания будут выполняться на Wiren Board независимо от открытого браузера.</p>
+      </div>
+    </aside>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

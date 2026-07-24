@@ -1,3 +1,4 @@
+import { DashboardEditor } from "./dashboard-editor.js";
 import { TinyMqttClient } from "./mqtt-client.js";
 import {
   busCommandTopic,
@@ -61,8 +62,11 @@ const state = {
   client: null,
 };
 
+const dashboardEditor = new DashboardEditor();
+
 function setConnection(connected) {
   state.connected = connected;
+  dashboardEditor.setConnected(connected);
   if (!connected) {
     state.pendingBusActions.clear();
   }
@@ -251,7 +255,7 @@ function openEditor(bus = null) {
   elements.busPortInput.value = bus ? bus.port : "";
   elements.busAddressesInput.value = bus ? bus.addresses.join(", ") : "";
   elements.busEnabledInput.checked = bus ? bus.enabled : true;
-  elements.editorPanel.className = "editor-panel";
+  elements.editorPanel.className = "editor-panel bus-editor-drawer";
   elements.busIdInput.focus();
 }
 
@@ -259,7 +263,7 @@ function closeEditor() {
   state.editingOriginalId = null;
   elements.busEditorForm.reset();
   hideEditorError();
-  elements.editorPanel.className = "editor-panel editor-panel-hidden";
+  elements.editorPanel.className = "editor-panel bus-editor-drawer editor-panel-hidden";
 }
 
 function saveEditorToDraft() {
@@ -445,10 +449,14 @@ function sendBusCommand(busId, command) {
 }
 
 function handleMessage(topic, payload) {
+  if (dashboardEditor.handleMessage(topic, payload)) {
+    return;
+  }
   try {
     if (topic === "/mdvwb/config") {
       const incoming = normalizeConfiguration(parseJsonPayload(payload, "конфигурация"));
       state.config = cloneConfiguration(incoming);
+      dashboardEditor.setBusConfiguration(incoming);
 
       if (!state.dirty || state.pendingApply || !state.receivedConfig) {
         state.draft = cloneConfiguration(incoming);
@@ -517,16 +525,18 @@ function handleMessage(topic, payload) {
 
 function loadDemoData() {
   state.demo = true;
+  dashboardEditor.loadDemoData();
   state.connected = true;
   state.config = normalizeConfiguration({
     version: 1,
     buses: [
       { id: 1, enabled: true, port: "/dev/ttyRS485-1", addresses: [1, 2, 3] },
       { id: 2, enabled: true, port: "/dev/ttyUSB0", addresses: [5, 10, 18] },
-      { id: 3, enabled: false, port: "/dev/ttyUSB1", addresses: [] },
+      { id: 3, enabled: false, port: "/dev/ttyUSB1", addresses: [2, 4, 6] },
     ],
   });
   state.draft = cloneConfiguration(state.config);
+  dashboardEditor.setBusConfiguration(state.config);
   state.receivedConfig = true;
   state.manager = { state: "demo", message: "Демонстрационный режим" };
   state.statuses.set(1, { service: "active", autostart: true });
@@ -540,6 +550,33 @@ function loadDemoData() {
   refreshDirtyState();
   render();
 }
+
+function activateSection(section) {
+  document.body.classList.toggle("dashboard-mode", section === "dashboard");
+  document.querySelectorAll("[data-section-panel]").forEach((panel) => {
+    panel.classList.toggle("section-panel-hidden", panel.dataset.sectionPanel !== section);
+  });
+  document.querySelectorAll(".section-tab").forEach((button) => {
+    const active = button.dataset.section === section;
+    button.classList.toggle("section-tab-active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  const hash = section === "dashboard" ? "#dashboard" : "#buses";
+  if (window.location.hash !== hash) {
+    const url = new URL(window.location.href);
+    url.hash = hash;
+    history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+}
+
+document.querySelectorAll(".section-tab").forEach((button) => {
+  button.addEventListener("click", () => activateSection(button.dataset.section));
+});
+document.getElementById("dashboardBackButton")?.addEventListener("click", () => activateSection("buses"));
+window.addEventListener("hashchange", () => {
+  activateSection(window.location.hash === "#dashboard" ? "dashboard" : "buses");
+});
+activateSection(window.location.hash === "#dashboard" ? "dashboard" : "buses");
 
 elements.addBusButton.addEventListener("click", () => openEditor());
 elements.resetConfigButton.addEventListener("click", resetDraft);
@@ -585,10 +622,16 @@ if (new URLSearchParams(window.location.search).get("demo") === "1") {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const mqttUrl = `${protocol}//${window.location.host}/mqtt`;
   state.client = new TinyMqttClient({ url: mqttUrl, keepAliveSeconds: 30, reconnectDelayMs: 2000 });
+  dashboardEditor.setClient(state.client);
 
   state.client.subscribe("/mdvwb/config");
   state.client.subscribe("/mdvwb/config/result");
   state.client.subscribe("/mdvwb/status");
+  state.client.subscribe("/mdvwb/dashboard/config");
+  state.client.subscribe("/mdvwb/dashboard/config/result");
+  state.client.subscribe("/mdvwb/dashboard/status");
+  state.client.subscribe("/mdvwb/dashboard/background/upload/status");
+  state.client.subscribe("/mdvwb/dashboard/background/upload/result");
   state.client.subscribe("/mdvwb/buses/+/status");
   state.client.subscribe("/mdvwb/buses/+/result");
   state.client.subscribe("/mdvwb/buses/+/discovery/status");

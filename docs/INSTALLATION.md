@@ -1969,3 +1969,75 @@ README.md
 ```
 
 `INSTALLATION.md` описывает deployment и эксплуатационные команды. Изменения внутренней архитектуры должны дополнительно отражаться в `DEVELOPER.md` и `AGENTS.md`.
+
+
+## 53. Backend конфигурации визуальной панели
+
+Файл панели:
+
+```text
+/etc/mdvwb/dashboard.json
+```
+
+Менеджер автоматически создаёт пустой файл при первом запуске. Путь можно
+переопределить в `/etc/default/mdvwb-manager`:
+
+```bash
+MDVWB_DASHBOARD_CONFIG="/etc/mdvwb/dashboard.json"
+```
+
+Топики:
+
+```text
+/mdvwb/dashboard/config
+/mdvwb/dashboard/config/set
+/mdvwb/dashboard/config/result
+/mdvwb/dashboard/status
+```
+
+Проверка текущего файла:
+
+```bash
+cat /etc/mdvwb/dashboard.json
+```
+
+Проверка retained-конфигурации:
+
+```bash
+mosquitto_sub -v -C 1 -W 10 -t '/mdvwb/dashboard/config'
+```
+
+Проверка статуса backend:
+
+```bash
+mosquitto_sub -v -C 1 -W 10 -t '/mdvwb/dashboard/status'
+```
+
+Сохранение выполняется редактором через non-retained `/set`. Поле `revision`
+защищает от одновременной перезаписи из двух вкладок. Изменение панели не
+перезапускает `mdvwb@N.service`.
+
+
+## 54. Каталог изображений визуальной панели
+
+Менеджер использует:
+
+```bash
+MDVWB_DASHBOARD_ASSET_DIR="/var/www/fancoils/assets"
+```
+
+Каталог создаётся при первой загрузке изображения. Подложки передаются через
+MQTT бинарными частями, проверяются по SHA-256 и заголовку PNG/JPEG/WebP, после
+чего `dashboard.json` обновляется автоматически. Максимальный размер — 10 МиБ,
+максимальное разрешение — 8192 × 8192. SVG не принимается.
+
+Статус загрузки:
+
+```bash
+mosquitto_sub -v \
+  -t '/mdvwb/dashboard/background/upload/status' \
+  -t '/mdvwb/dashboard/background/upload/result'
+```
+
+Ручная публикация бинарных chunks не предназначена для обычной эксплуатации;
+её будет выполнять редактор панели. Загрузка не перезапускает процессы шин.

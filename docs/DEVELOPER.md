@@ -93,34 +93,47 @@ mdvwb-manager
 
 ## 4. Структура исходников
 
-### 4.1. Основной драйвер
+Корень проекта содержит только CMake, документацию и каталоги компонентов. C++-исходники разделены на драйвер и менеджер.
+
+### 4.1. `src/driver`
 
 | Файл | Ответственность |
 |---|---|
-| `MDVWB.cpp`, `MDVWB.h` | Точка входа, выбор режима запуска, self-test и запуск основного цикла |
-| `mdv_config.cpp`, `mdv_config.h` | Разбор параметров командной строки драйвера |
-| `mdv_protocol.cpp`, `mdv_protocol.h` | Формирование кадров, checksum, проверка и разбор ответов |
-| `mdv_serial.cpp`, `mdv_serial.h` | Последовательный порт, тайминги и выполнение транзакций |
-| `mdv_device.cpp`, `mdv_device.h` | Состояние устройства, кеш полного C3-кадра, ожидающие изменения |
-| `mdv_driver.cpp`, `mdv_driver.h` | Очереди команд, опрос, приоритеты, подтверждающие чтения |
-| `mdv_discovery.cpp`, `mdv_discovery.h` | Трёхпроходный поиск адресов `0..63` |
-| `mdv_mqtt.cpp`, `mdv_mqtt.h` | MQTT-контракт фанкойлов и системного устройства |
-| `mdv_metadata.cpp`, `mdv_metadata.h` | Retained metadata для стандартного интерфейса Wiren Board |
-| `mdv_mosquitto.cpp`, `mdv_mosquitto.h` | Реализация MQTT-клиента на libmosquitto |
+| `src/driver/MDVWB.cpp`, `src/driver/MDVWB.h` | Точка входа, выбор режима запуска, self-test и запуск основного цикла |
+| `src/driver/mdv_config.cpp`, `src/driver/mdv_config.h` | Разбор параметров командной строки драйвера |
+| `src/driver/mdv_protocol.cpp`, `src/driver/mdv_protocol.h` | Формирование кадров, checksum, проверка и разбор ответов |
+| `src/driver/mdv_serial.cpp`, `src/driver/mdv_serial.h` | Последовательный порт, тайминги и выполнение транзакций |
+| `src/driver/mdv_device.cpp`, `src/driver/mdv_device.h` | Состояние устройства, кеш полного C3-кадра, ожидающие изменения |
+| `src/driver/mdv_driver.cpp`, `src/driver/mdv_driver.h` | Очереди команд, опрос, приоритеты, подтверждающие чтения |
+| `src/driver/mdv_discovery.cpp`, `src/driver/mdv_discovery.h` | Трёхпроходный поиск адресов `0..63` |
+| `src/driver/mdv_mqtt.cpp`, `src/driver/mdv_mqtt.h` | MQTT-контракт фанкойлов и системного устройства |
+| `src/driver/mdv_metadata.cpp`, `src/driver/mdv_metadata.h` | Retained metadata для стандартного интерфейса Wiren Board |
+| `src/driver/mdv_mosquitto.cpp`, `src/driver/mdv_mosquitto.h` | Реализация MQTT-клиента на libmosquitto; используется также менеджером |
 
-### 4.2. Менеджер
+### 4.2. `src/manager`
 
 | Файл | Ответственность |
 |---|---|
-| `mdv_buses_config.cpp`, `mdv_buses_config.h` | Строгий parser/validator/serializer `buses.json` |
-| `mdvwb_service_sync.cpp`, `mdvwb_service_sync.h` | Планирование и применение изменений systemd |
-| `mdvwb_manager_cli.cpp`, `mdvwb_manager_cli.h` | CLI-команды менеджера |
-| `mdvwb_manager_main.cpp` | Точка входа `mdvwb-manager` |
-| `mdvwb_manager_mqtt.cpp`, `mdvwb_manager_mqtt.h` | Долгоживущий MQTT-демон менеджера |
-| `mdvwb_discovery_runner.cpp`, `mdvwb_discovery_runner.h` | Запуск `MDVWB --discover` и разбор результата |
-| `mdvwb_migration.cpp`, `mdvwb_migration.h` | Миграция старых per-bus environment-файлов |
+| `src/manager/mdv_buses_config.cpp`, `src/manager/mdv_buses_config.h` | Строгий parser/validator/serializer `buses.json` |
+| `src/manager/mdv_dashboard_config.cpp`, `src/manager/mdv_dashboard_config.h` | Модель и проверка `dashboard.json`, относительных координат и ссылок на устройства |
+| `src/manager/mdvwb_dashboard_upload.cpp`, `src/manager/mdvwb_dashboard_upload.h` | Бинарная загрузка подложки, SHA-256, проверка PNG/JPEG/WebP и временные файлы |
+| `src/manager/mdvwb_service_sync.cpp`, `src/manager/mdvwb_service_sync.h` | Планирование и применение изменений systemd |
+| `src/manager/mdvwb_manager_cli.cpp`, `src/manager/mdvwb_manager_cli.h` | CLI-команды менеджера |
+| `src/manager/mdvwb_manager_main.cpp` | Точка входа `mdvwb-manager` |
+| `src/manager/mdvwb_manager_mqtt.cpp`, `src/manager/mdvwb_manager_mqtt.h` | Долгоживущий MQTT-демон менеджера |
+| `src/manager/mdvwb_discovery_runner.cpp`, `src/manager/mdvwb_discovery_runner.h` | Запуск `MDVWB --discover` и разбор результата |
+| `src/manager/mdvwb_migration.cpp`, `src/manager/mdvwb_migration.h` | Миграция старых per-bus environment-файлов |
 
-### 4.3. Развёртывание
+### 4.3. Тесты
+
+```text
+tests/manager/   — C++-тесты конфигурации, manager MQTT, migration и systemd
+tests/web/       — тесты JavaScript-моделей
+```
+
+Self-test протокола и драйвера остаётся встроенным в `MDVWB --self-test`.
+
+### 4.4. Развёртывание
 
 ```text
 deploy/mdvwb@.service
@@ -133,12 +146,15 @@ deploy/offline-install.sh
 deploy/buses.example.json
 ```
 
-### 4.4. Веб-интерфейс
+### 4.5. Веб-интерфейс
 
 ```text
 www/mdvwb/index.html
 www/mdvwb/app.js
 www/mdvwb/model.js
+www/mdvwb/dashboard-editor.js
+www/mdvwb/dashboard-model.js
+www/mdvwb/dashboard-placement-editor.js
 www/mdvwb/mqtt-client.js
 www/mdvwb/styles.css
 ```
@@ -210,7 +226,7 @@ MDVWB --self-test
 cmake --preset x64-debug
 cmake --build out/build/x64-debug
 ctest --test-dir out/build/x64-debug -C Debug --output-on-failure
-node tests/mdvwb_web_model_test.mjs
+node tests/web/mdvwb_web_model_test.mjs
 ```
 
 ### 7.2. Обычная CMake-сборка
@@ -1016,7 +1032,7 @@ mdvwb_migration_test
 Веб-модель:
 
 ```bash
-node tests/mdvwb_web_model_test.mjs
+node tests/web/mdvwb_web_model_test.mjs
 ```
 
 ### 27.1. Что тестировать при изменении протокола
@@ -1305,7 +1321,68 @@ Offline-путь установки обязан оставаться полно
 - [ ] ARM64/Bullseye совместимость сохранена.
 - [ ] Старые сервисы и wb-rules мигрируются безопасно.
 
-## 39. Связанные документы
+
+## 39. Dashboard configuration backend
+
+Runtime file:
+
+```text
+/etc/mdvwb/dashboard.json
+```
+
+MQTT contract:
+
+```text
+/mdvwb/dashboard/config
+/mdvwb/dashboard/config/set
+/mdvwb/dashboard/config/result
+/mdvwb/dashboard/status
+```
+
+The manager creates the default empty dashboard if the file is missing. Current
+configuration and status are retained; save requests and results are
+non-retained. Payload limit is 1 MiB.
+
+The editor submits the revision it last received. A successful write increments
+revision, atomically replaces the file, publishes the canonical JSON and does
+not touch systemd services. A mismatched revision is rejected to prevent two
+browser tabs from overwriting each other.
+
+References to removed buses or addresses are accepted and counted as
+`referenceIssues`. This allows the editor to repair stale markers without losing
+layout data after a temporary bus change. Saving `buses.json` republishes the
+dashboard status so this warning count remains current.
+
+
+## 40. Загрузка изображения панели
+
+Backend принимает изображение частями через MQTT. Start содержит `uploadId`,
+исходное имя, полный размер, SHA-256 и текущую revision панели. Chunk topic
+содержит `uploadId` и последовательный индекс; payload является бинарным.
+
+Ограничения:
+
+- один активный upload;
+- 48 KiB на chunk;
+- 10 MiB на файл;
+- PNG, JPEG или WebP;
+- реальные размеры `1..8192` читаются из заголовка;
+- SHA-256 проверяется после получения полного файла;
+- SVG и retained-команды запрещены;
+- finish повторно проверяет dashboard revision.
+
+После проверки temporary file переименовывается в content-addressed
+`background-<sha-prefix>.<ext>`, затем атомарно обновляется `dashboard.json`.
+Если запись JSON не удалась, новый файл удаляется. Предыдущий управляемый asset
+удаляется только после полного успеха. Сервисы шин не затрагиваются.
+
+Environment:
+
+```bash
+MDVWB_DASHBOARD_ASSET_DIR="/var/www/fancoils/assets"
+```
+
+## 41. Связанные документы
 
 ```text
 AGENTS.md
@@ -1322,3 +1399,71 @@ README.md
 - `INSTALLATION.md` — установка, настройка, эксплуатационные команды и диагностика;
 - `WEB_AND_FANCOILS.md` — инструкция пользователя веб-интерфейса и управление фанкойлами;
 - `README.md` — краткая точка входа в проект.
+
+
+## Dashboard marker placement editor
+
+The engineering dashboard editor builds the available device catalog from the applied `/mdvwb/config`. Devices from any configured bus can be placed on one plan. Placements use normalized `x` and `y` coordinates in the `0..1` range, so background zoom and browser resizing do not rewrite positions.
+
+`dashboard-placement-editor.js` owns the catalog, marker drag handling, keyboard movement, selection and property inspector. It updates only the `fans` array in the dashboard draft; saving still uses the existing complete `/mdvwb/dashboard/config/set` payload and revision protection.
+
+One `bus/address` may appear only once. Missing references are rendered as repairable warnings and are retained until the user removes or reassigns them.
+
+## Operational fan-coil page
+
+The separate static application in `www/fancoils/` is served at `/fancoils/` and is independent from the engineering editor UI. It imports `../mdvwb/mqtt-client.js` and `../mdvwb/dashboard-model.js` so MQTT framing and dashboard validation stay shared.
+
+Subscriptions:
+
+```text
+/mdvwb/dashboard/config
+/mdvwb/dashboard/status
+/devices/+/controls/+
+```
+
+`www/fancoils/model.js` parses only factual base control topics for known controls. Topics ending in `/on1` are intentionally ignored. `app.js` keeps the latest retained state per `bus:address`, renders only placements with `visible=true`, and uses relative `x/y` coordinates inside the natural background dimensions.
+
+Individual commands use `fanCommandTopic()` and `normalizeFanCommand()` and are published with `retain=false`. The browser does not update its factual cache when publishing. It tracks one pending command per device/control and completes it only when the corresponding factual base topic equals the requested value. Old C3-era state may arrive while a command is pending and must not be treated as failure; the UI waits up to 10 seconds for C0-confirmed state.
+
+The map canvas is rendered at its natural pixel dimensions and scaled as one unit. This causes the background and markers to zoom together while preserving relative positions. The page supports `contain`, `width`, `actual` and `custom` initial scale modes plus temporary operator zoom.
+
+
+## Working-panel group commands
+
+Group control is implemented in the browser as a plan of individual MQTT operations. The model validates enabled fields, filters offline and unknown devices, skips parameters that already have an outstanding confirmation, and builds one `/devices/Fan-<bus>_<address>/controls/<Control>/on1` operation per target. The browser publishes every operation with `retain=false` and tracks confirmation independently through factual base topics. Supported group fields are `Power`, `Mode`, `Speed`, and `SetTemp`.
+
+
+### Compact `/fancoils/` layout
+
+The operational page uses a fixed compact top bar and a full-height map viewport. Details and group controls are overlay drawers on the right. It intentionally contains no link to `/mdvwb/`, no editor controls, and no Blinds/Blok user controls. `user-select: none` is scoped to `www/fancoils/styles.css`; the engineering web remains selectable.
+
+<!-- Step 9.2 UI correction: wheel zoom, compact numbered markers, map remains interactive while side drawers are open, direct individual/group selection, no status filter in header. -->
+
+### Map interaction correction
+
+The operational viewport keeps free space around the scaled canvas, centers it after initial load and Fit, and uses scroll-backed pointer panning. Wheel and toolbar zoom preserve the point under the cursor or viewport center. Marker hover tooltips are DOM-built from factual state and show the label, device number, mode, room temperature and speed.
+
+
+### Compact dashboard editor correction
+
+The engineering dashboard editor is now a single-header, map-first workspace. General settings and background upload share the temporary Parameters drawer, the search field is removed, markers use the approved fan icon, and every placement has a unique editable user number from 1 to 200. Existing configurations without a number are migrated sequentially.
+
+## Editor UI invariants
+
+`DashboardPlacementEditor` must render bus groups dynamically from the manager bus configuration. Do not hard-code bus 1 or bus 2 in production behavior. Device visibility is edited with delegated checkbox events, and map coordinates are snapped with `Math.round(value * 100) / 100`. The administrative bus page and dashboard editor each use a single compact toolbar.
+
+
+## 41. Multiple independent dashboard panels
+
+The canonical `dashboard.json` schema is version 2. `DashboardCollection` contains a global optimistic-concurrency revision, `defaultPanel`, and up to 64 `DashboardPanel` records. `ParseDashboardCollection()` accepts legacy version 1 and wraps it as `main`; serialization always emits version 2.
+
+The retained `/mdvwb/dashboard/config` payload is the complete collection. The admin editor keeps a collection draft and converts the selected panel to the existing single-panel editing model. Creation, copy, deletion, ID rename and default selection are saved together through `/mdvwb/dashboard/config/set`.
+
+The operator page reads `panel` from the URL and selects that panel from the retained collection. Unknown requested IDs fall back to `defaultPanel` with a visible warning. There is intentionally no operator-side panel selector.
+
+Background upload start carries `panelId`. `ManagerMqttService` validates that the panel exists before accepting bytes and updates only its background after revision and image validation. Content-addressed files may be shared by several panels and must not be removed while still referenced.
+
+
+### Step 9.8 editor interaction correction
+
+The dashboard editor keeps the 1% grid switch inside **Panel settings**. The editor header contains no zoom controls; wheel input over the map changes only the temporary editor preview scale. The saved opening scale remains the explicit setting in the drawer. Marker rotation is no longer exposed or rendered; legacy `rotation` values are accepted for compatibility and normalized to zero on the next save.

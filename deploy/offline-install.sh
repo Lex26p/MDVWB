@@ -9,7 +9,7 @@ fi
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 EXPECTED_ARCH="arm64"
 ACTUAL_ARCH=$(dpkg --print-architecture 2>/dev/null || true)
-WWW_ROOT=${MDVWB_WWW_ROOT:-/mnt/data/www}
+WWW_ROOT=${MDVWB_WWW_ROOT:-/var/www}
 
 if [ "$ACTUAL_ARCH" != "$EXPECTED_ARCH" ]; then
     echo "Unsupported architecture: $ACTUAL_ARCH. Expected: $EXPECTED_ARCH." >&2

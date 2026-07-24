@@ -3,112 +3,218 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MDVWB — управление шинами</title>
+  <title>MDVWB — настройка системы</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
   <main class="page">
-    <header class="page-header">
-      <div>
-        <p class="eyebrow">Wiren Board</p>
-        <h1>MDVWB — шины RS-485</h1>
-        <p class="subtitle">Настройка, управление и поиск устройств</p>
+    <header class="admin-topbar">
+      <div class="admin-brand">
+        <span class="admin-brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M4 6.5h16M7 3.5v6M17 3.5v6M5 13h5v7H5zM14 13h5v7h-5z"/></svg>
+        </span>
+        <div><strong>MDVWB</strong><span id="managerStatus">Ожидание менеджера…</span></div>
       </div>
-      <div id="connectionBadge" class="status-badge status-offline" aria-live="polite">
-        MQTT: отключено
+
+      <nav class="section-tabs" aria-label="Разделы настройки">
+        <button class="section-tab section-tab-active" type="button" data-section="buses" aria-selected="true">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v5H5zM5 14h14v5H5zM8 10v4M16 10v4"/></svg>
+          <span>Шины</span>
+        </button>
+        <button class="section-tab" type="button" data-section="dashboard" aria-selected="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM4 15l4-4 3 3 3-4 6 6M16.5 8.5h.01"/></svg>
+          <span>Веб-панель</span>
+        </button>
+      </nav>
+
+      <div class="admin-topbar-stats" aria-label="Состояние системы">
+        <span id="connectionBadge" class="status-badge status-offline">MQTT: отключено</span>
+        <span class="admin-counter" title="Настроено шин">Шин <strong id="busCount">0</strong></span>
+        <span class="admin-counter" title="Активных шин">Активно <strong id="enabledCount">0</strong></span>
+        <span class="admin-counter" title="Работающих процессов">Работает <strong id="runningCount">0</strong></span>
+      </div>
+
+      <div class="admin-topbar-actions">
+        <button id="addBusButton" class="button button-secondary button-compact" type="button"><span aria-hidden="true">＋</span> Шина</button>
+        <button id="resetConfigButton" class="button button-secondary button-compact" type="button" disabled>Отменить</button>
+        <button id="applyConfigButton" class="button button-primary button-compact" type="button" disabled>Сохранить</button>
       </div>
     </header>
 
-    <section class="summary" aria-label="Общее состояние">
-      <article class="summary-card">
-        <span class="summary-label">Настроено шин</span>
-        <strong id="busCount">0</strong>
-      </article>
-      <article class="summary-card">
-        <span class="summary-label">Активных в конфигурации</span>
-        <strong id="enabledCount">0</strong>
-      </article>
-      <article class="summary-card">
-        <span class="summary-label">Работающих процессов</span>
-        <strong id="runningCount">0</strong>
-      </article>
-    </section>
-
-    <section class="manager-panel" aria-labelledby="managerTitle">
-      <div>
-        <h2 id="managerTitle">Менеджер MDVWB</h2>
-        <p id="managerStatus" class="muted">Ожидание данных MQTT…</p>
-      </div>
-      <p id="lastUpdate" class="last-update">Нет обновлений</p>
-    </section>
-
-    <section class="configuration-panel" aria-labelledby="configurationTitle">
-      <div class="configuration-header">
-        <div>
-          <h2 id="configurationTitle">Конфигурация шин</h2>
-          <p id="draftStatus" class="muted">Ожидание текущей конфигурации…</p>
-        </div>
-        <div class="button-row">
-          <button id="addBusButton" class="button button-secondary" type="button">Добавить шину</button>
-          <button id="resetConfigButton" class="button button-secondary" type="button" disabled>Отменить изменения</button>
-          <button id="applyConfigButton" class="button button-primary" type="button" disabled>Сохранить конфигурацию</button>
-        </div>
+    <section id="busesSection" class="section-panel buses-compact-page" data-section-panel="buses">
+      <div class="buses-status-line">
+        <span id="draftStatus" class="muted">Ожидание текущей конфигурации…</span>
+        <span id="lastUpdate" class="last-update">Нет обновлений</span>
       </div>
       <div id="configResult" class="operation-result operation-result-hidden" role="status" aria-live="polite"></div>
-    </section>
+      <div id="notice" class="notice" role="status" aria-live="polite">Подключение к MQTT…</div>
 
-    <section id="editorPanel" class="editor-panel editor-panel-hidden" aria-labelledby="editorTitle">
-      <div class="editor-header">
-        <div>
-          <p class="eyebrow">Редактор</p>
-          <h2 id="editorTitle">Новая шина</h2>
+      <section id="editorPanel" class="editor-panel editor-panel-hidden bus-editor-drawer" aria-labelledby="editorTitle">
+        <div class="editor-header">
+          <div><p class="eyebrow">Настройка шины</p><h2 id="editorTitle">Новая шина</h2></div>
+          <button id="closeEditorButton" class="icon-button" type="button" aria-label="Закрыть редактор">×</button>
         </div>
-        <button id="closeEditorButton" class="icon-button" type="button" aria-label="Закрыть редактор">×</button>
-      </div>
+        <form id="busEditorForm" novalidate>
+          <div class="form-grid">
+            <label class="field">
+              <span>Номер шины</span>
+              <input id="busIdInput" type="number" min="1" max="999" step="1" required>
+              <small>Идентификатор в имени Fan-&lt;шина&gt;_&lt;адрес&gt;.</small>
+            </label>
+            <label class="field">
+              <span>Порт RS-485</span>
+              <input id="busPortInput" type="text" placeholder="/dev/ttyRS485-1" autocomplete="off" required>
+            </label>
+            <label class="field field-wide">
+              <span>Опрашиваемые адреса</span>
+              <input id="busAddressesInput" type="text" placeholder="1, 2, 3" autocomplete="off">
+              <small>Адреса 0–63 через запятую.</small>
+            </label>
+            <label class="checkbox-field field-wide">
+              <input id="busEnabledInput" type="checkbox">
+              <span>Запускать шину автоматически</span>
+            </label>
+          </div>
+          <div id="editorError" class="form-error form-error-hidden" role="alert"></div>
+          <div class="button-row editor-actions">
+            <button id="cancelEditorButton" class="button button-secondary" type="button">Отмена</button>
+            <button class="button button-primary" type="submit">Добавить в черновик</button>
+          </div>
+        </form>
+      </section>
 
-      <form id="busEditorForm" novalidate>
-        <div class="form-grid">
-          <label class="field">
-            <span>Номер шины</span>
-            <input id="busIdInput" type="number" min="1" max="999" step="1" required>
-            <small>Число от 1 до 999. Используется в имени Fan-&lt;шина&gt;_&lt;адрес&gt;.</small>
-          </label>
-
-          <label class="field">
-            <span>Порт RS-485</span>
-            <input id="busPortInput" type="text" placeholder="/dev/ttyRS485-1" autocomplete="off" required>
-            <small>Допустим любой безопасный путь устройства, начинающийся с /dev/.</small>
-          </label>
-
-          <label class="field field-wide">
-            <span>Опрашиваемые адреса</span>
-            <input id="busAddressesInput" type="text" placeholder="1, 2, 3" autocomplete="off">
-            <small>Адреса 0–63 через запятую. Для отключённой шины список может быть пустым.</small>
-          </label>
-
-          <label class="checkbox-field field-wide">
-            <input id="busEnabledInput" type="checkbox">
-            <span>Шина активна и должна запускаться автоматически</span>
-          </label>
-        </div>
-
-        <div id="editorError" class="form-error form-error-hidden" role="alert"></div>
-        <div class="button-row editor-actions">
-          <button id="cancelEditorButton" class="button button-secondary" type="button">Отмена</button>
-          <button class="button button-primary" type="submit">Сохранить в черновик</button>
-        </div>
-      </form>
-    </section>
-
-    <section aria-labelledby="busesTitle">
-      <div class="section-heading">
-        <h2 id="busesTitle">Настроенные шины</h2>
-        <p class="muted">Управление доступно только когда черновик сохранён и совпадает с конфигурацией контроллера.</p>
-      </div>
-      <div id="notice" class="notice" role="status" aria-live="polite">
-        Подключение к MQTT…
-      </div>
       <div id="busGrid" class="bus-grid" aria-live="polite"></div>
+    </section>
+
+    <section id="dashboardSection" class="section-panel section-panel-hidden dashboard-editor-shell" data-section-panel="dashboard">
+      <header class="dashboard-editor-toolbar">
+        <div class="dashboard-toolbar-left">
+          <button id="dashboardBackButton" class="button button-secondary button-compact" type="button" aria-label="Вернуться к шинам">← Шины</button>
+          <div class="dashboard-panel-switcher" aria-label="Выбор пользовательской панели">
+            <select id="dashboardPanelSelect" aria-label="Пользовательская панель"></select>
+            <button id="dashboardNewPanelButton" class="icon-button icon-button-small" type="button" title="Создать новую панель" aria-label="Создать новую панель">＋</button>
+          </div>
+          <div class="dashboard-toolbar-title">
+            <strong id="dashboardToolbarTitle">Панель фанкойлов</strong>
+            <span id="dashboardBackgroundMeta">Изображение не загружено</span>
+          </div>
+          <span id="dashboardDirtyBadge" class="mini-badge mini-badge-hidden">Не сохранено</span>
+        </div>
+        <div class="dashboard-toolbar-actions">
+          <span id="dashboardStatusBadge" class="status-badge status-offline">Ожидание</span>
+          <span class="dashboard-toolbar-counter"><strong id="dashboardFanCount">0</strong> на карте</span>
+          <span class="dashboard-toolbar-counter dashboard-toolbar-counter-hidden">R<strong id="dashboardRevision">0</strong></span>
+          <span class="dashboard-toolbar-counter dashboard-toolbar-counter-hidden"><strong id="dashboardReferenceIssues">0</strong> ошибок</span>
+          <button id="dashboardSettingsButton" class="button button-secondary button-compact" type="button">Параметры</button>
+          <button id="dashboardResetButton" class="button button-secondary button-compact" type="button" disabled>Отменить</button>
+          <button id="dashboardSaveButton" class="button button-primary button-compact" type="button" disabled>Сохранить</button>
+          <a id="dashboardOpenPanelLink" class="button button-secondary button-compact" href="/fancoils/?panel=main" target="_blank" rel="noopener">Открыть</a>
+        </div>
+      </header>
+
+      <div id="dashboardConfigResult" class="operation-result operation-result-hidden dashboard-toolbar-result" role="status" aria-live="polite"></div>
+
+      <div class="dashboard-editor-workspace">
+        <aside class="device-catalog" aria-labelledby="dashboardDevicesTitle">
+          <div class="placement-pane-heading">
+            <div>
+              <h4 id="dashboardDevicesTitle">Фанкойлы</h4>
+            </div>
+            <span class="device-count"><strong id="dashboardPlacedDeviceCount">0</strong>/<span id="dashboardAvailableDeviceCount">0</span></span>
+          </div>
+          <div id="dashboardDeviceList" class="device-list"></div>
+          <div id="dashboardDeviceEmpty" class="device-empty device-empty-hidden">Нет настроенных фанкойлов.</div>
+        </aside>
+
+        <section class="placement-canvas-column dashboard-editor-map" aria-labelledby="dashboardPreviewTitle">
+          <h3 id="dashboardPreviewTitle" class="visually-hidden">Фанкойлы на плане</h3>
+          <div id="dashboardPreviewViewport" class="dashboard-preview-viewport" tabindex="0">
+            <div id="dashboardPreviewStage" class="dashboard-preview-stage">
+              <div id="dashboardImageCanvas" class="dashboard-image-canvas dashboard-image-canvas-empty dashboard-grid-enabled">
+                <img id="dashboardPreviewImage" class="dashboard-preview-image-hidden" alt="Подложка панели фанкойлов">
+                <div id="dashboardPreviewPlaceholder" class="dashboard-preview-placeholder">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM4 15l4-4 3 3 3-4 6 6M16.5 8.5h.01"/></svg>
+                  <strong>Карта готова</strong>
+                  <span>Добавьте фанкойлы и при необходимости загрузите изображение.</span>
+                </div>
+                <div id="dashboardMarkerLayer" class="dashboard-marker-layer" aria-label="Маркеры фанкойлов"></div>
+              </div>
+            </div>
+          </div>
+          <div class="preview-footer dashboard-editor-footer">
+            <span id="dashboardPreviewMode">Вписать в окно · 100%</span>
+            <span>Колесо мыши — масштаб · шаг перемещения 1% по X и Y.</span>
+          </div>
+        </section>
+
+        <aside class="marker-inspector" aria-labelledby="dashboardInspectorTitle">
+          <div class="placement-pane-heading">
+            <div><h4 id="dashboardInspectorTitle">Фанкойл</h4><p class="muted">Номер, помещение и координаты</p></div>
+          </div>
+          <div id="dashboardInspectorEmpty" class="marker-inspector-empty">
+            <span class="inspector-fan-icon" aria-hidden="true">✣</span>
+            <strong>Выберите фанкойл</strong>
+            <p>Включите чекбокс слева, затем выберите устройство или маркер.</p>
+          </div>
+          <div id="dashboardInspectorForm" class="marker-inspector-form marker-inspector-form-hidden">
+            <div class="marker-reference"><span>MQTT-устройство</span><strong id="dashboardInspectorReference"></strong></div>
+            <div id="dashboardMarkerIssue" class="marker-issue marker-issue-hidden"></div>
+            <label class="field">
+              <span>Номер фанкойла</span>
+              <input id="dashboardMarkerNumber" type="number" min="1" max="200" step="1">
+              <small>Уникальное число 1–200, показываемое пользователю.</small>
+            </label>
+            <label class="field">
+              <span>Название помещения</span>
+              <input id="dashboardMarkerLabel" type="text" maxlength="120">
+            </label>
+            <div class="coordinate-grid">
+              <label class="field"><span>X, %</span><input id="dashboardMarkerX" type="number" min="0" max="100" step="1"></label>
+              <label class="field"><span>Y, %</span><input id="dashboardMarkerY" type="number" min="0" max="100" step="1"></label>
+            </div>
+            <div class="marker-inspector-actions">
+              <button id="dashboardMarkerCenter" class="button button-secondary" type="button">В центр</button>
+              <button id="dashboardMarkerRemove" class="button button-danger" type="button">Убрать</button>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <div id="dashboardDrawerBackdrop" class="dashboard-drawer-backdrop dashboard-drawer-hidden"></div>
+      <aside id="dashboardSettingsDrawer" class="dashboard-drawer dashboard-drawer-wide dashboard-drawer-hidden" aria-labelledby="dashboardSettingsTitle">
+        <div class="dashboard-drawer-header"><h3 id="dashboardSettingsTitle">Параметры панели</h3><button class="icon-button dashboard-drawer-close" type="button" aria-label="Закрыть">×</button></div>
+        <div class="stack-fields">
+          <label class="field"><span>ID ссылки</span><input id="dashboardPanelIdInput" type="text" maxlength="48" pattern="[A-Za-z0-9_-]+"><small>Адрес: <code id="dashboardPanelUrlPreview">/fancoils/?panel=main</code></small></label>
+          <label class="field"><span>Название</span><input id="dashboardTitleInput" type="text" maxlength="160" placeholder="Панель фанкойлов"></label>
+          <label class="toggle-row"><input id="dashboardDefaultPanelInput" type="checkbox"><span><strong>Панель по умолчанию</strong><small>Открывается по ссылке /fancoils/ без параметра panel.</small></span></label>
+          <div class="button-row dashboard-panel-actions">
+            <button id="dashboardDuplicatePanelButton" class="button button-secondary" type="button">Создать копию</button>
+            <button id="dashboardDeletePanelButton" class="button button-danger" type="button">Удалить панель</button>
+          </div>
+          <label class="field"><span>Режим отображения</span><select id="dashboardFitSelect"><option value="contain">Вписать в окно</option><option value="width">По ширине</option><option value="actual">Фактический размер</option><option value="custom">Пользовательский масштаб</option></select></label>
+          <label class="field"><span>Масштаб при открытии: <strong id="dashboardScaleValue">100%</strong></span><input id="dashboardScaleInput" class="range-input" type="range" min="25" max="400" step="5" value="100"></label>
+          <label class="field"><span>Размер всех маркеров: <strong id="dashboardGlobalMarkerScaleValue">100%</strong></span><input id="dashboardGlobalMarkerScale" class="range-input" type="range" min="50" max="300" step="5" value="100"><small>Применяется ко всем фанкойлам на этой панели.</small></label>
+          <label class="toggle-row"><input id="dashboardGridInput" type="checkbox" checked><span><strong>Показывать сетку 1%</strong><small>Сетка помогает ровно размещать фанкойлы. Координаты всегда изменяются с шагом 1%.</small></span></label>
+
+          <section class="dashboard-settings-section" aria-labelledby="backgroundUploadTitle">
+            <div class="dashboard-settings-section-heading"><h4 id="backgroundUploadTitle">Изображение карты</h4><span id="dashboardBackgroundSettingsMeta" class="muted">Не загружено</span></div>
+            <label id="backgroundDropZone" class="upload-drop-zone upload-drop-zone-compact" for="backgroundFileInput">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg>
+              <strong>Выбрать изображение</strong>
+              <span>PNG, JPEG или WebP · до 10 МиБ</span>
+              <input id="backgroundFileInput" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp">
+            </label>
+            <div id="selectedBackgroundInfo" class="selected-file selected-file-hidden"></div>
+            <div class="upload-progress upload-progress-hidden" id="backgroundUploadProgressBlock"><div class="upload-progress-heading"><span id="backgroundUploadText">Подготовка…</span><strong id="backgroundUploadPercent">0%</strong></div><progress id="backgroundUploadProgress" max="100" value="0"></progress></div>
+            <div id="backgroundUploadResult" class="operation-result operation-result-hidden" role="status" aria-live="polite"></div>
+            <div class="button-row dashboard-actions">
+              <button id="backgroundClearSelectionButton" class="button button-secondary" type="button" disabled>Очистить</button>
+              <button id="backgroundCancelUploadButton" class="button button-danger button-hidden" type="button">Отменить</button>
+              <button id="backgroundUploadButton" class="button button-primary" type="button" disabled>Загрузить</button>
+            </div>
+          </section>
+        </div>
+      </aside>
     </section>
   </main>
 
@@ -123,22 +229,10 @@
       </div>
 
       <dl class="bus-details">
-        <div>
-          <dt>Порт</dt>
-          <dd class="bus-port"></dd>
-        </div>
-        <div>
-          <dt>Адреса</dt>
-          <dd class="bus-addresses"></dd>
-        </div>
-        <div>
-          <dt>Конфигурация</dt>
-          <dd class="bus-enabled"></dd>
-        </div>
-        <div>
-          <dt>Автозапуск</dt>
-          <dd class="bus-autostart"></dd>
-        </div>
+        <div><dt>Порт</dt><dd class="bus-port"></dd></div>
+        <div><dt>Адреса</dt><dd class="bus-addresses"></dd></div>
+        <div><dt>Конфигурация</dt><dd class="bus-enabled"></dd></div>
+        <div><dt>Автозапуск</dt><dd class="bus-autostart"></dd></div>
       </dl>
 
       <section class="bus-control-block" aria-label="Управление шиной">
@@ -154,10 +248,7 @@
 
       <section class="discovery-block">
         <div class="discovery-heading">
-          <div>
-            <h4>Поиск устройств</h4>
-            <p class="bus-discovery-status muted">Нет данных</p>
-          </div>
+          <div><h4>Поиск устройств</h4><p class="bus-discovery-status muted">Нет данных</p></div>
           <button class="button button-secondary bus-command bus-discover" data-command="discovery" type="button">Найти устройства</button>
         </div>
         <p class="bus-discovery-result"></p>

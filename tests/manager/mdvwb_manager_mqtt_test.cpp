@@ -117,6 +117,26 @@ std::string ReadFile(const std::filesystem::path& path) {
     return std::string(std::istreambuf_iterator<char>(input), {});
 }
 
+std::string PngHeader(int width, int height) {
+    std::string data(32, '\0');
+    const unsigned char signature[] = {
+        0x89U, 0x50U, 0x4eU, 0x47U, 0x0dU, 0x0aU, 0x1aU, 0x0aU};
+    for (std::size_t index = 0; index < 8U; ++index) {
+        data[index] = static_cast<char>(signature[index]);
+    }
+    data[11] = 13;
+    data.replace(12, 4, "IHDR");
+    data[16] = static_cast<char>((width >> 24) & 0xff);
+    data[17] = static_cast<char>((width >> 16) & 0xff);
+    data[18] = static_cast<char>((width >> 8) & 0xff);
+    data[19] = static_cast<char>(width & 0xff);
+    data[20] = static_cast<char>((height >> 24) & 0xff);
+    data[21] = static_cast<char>((height >> 16) & 0xff);
+    data[22] = static_cast<char>((height >> 8) & 0xff);
+    data[23] = static_cast<char>(height & 0xff);
+    return data;
+}
+
 const mdv::MqttPublication* LastPublication(
     const FakeMqttClient& client,
     std::string_view topic) {
@@ -143,6 +163,7 @@ bool HasCommand(
 struct Fixture {
     TemporaryDirectory temporary;
     std::filesystem::path config = temporary.Path() / "etc/mdvwb/buses.json";
+    std::filesystem::path dashboard = temporary.Path() / "etc/mdvwb/dashboard.json";
     mdvwb::ServiceSyncPaths paths;
     FakeMqttClient client;
     RecordingRunner runner;
@@ -173,19 +194,29 @@ void TestStartPublishesConfigurationAndBusStatuses() {
         fixture.client, fixture.config, fixture.paths, fixture.runner, &fixture.discovery);
     service.Start();
 
-    Require(fixture.client.subscriptions.size() == 6,
-            "manager must create six subscriptions");
+    Require(fixture.client.subscriptions.size() == 11,
+            "manager must create eleven subscriptions");
     Require(fixture.client.subscriptions[0] == mdvwb::ManagerMqttService::ConfigSetTopic,
             "manager subscribed to wrong configuration topic");
-    Require(fixture.client.subscriptions[1] == mdvwb::ManagerMqttService::BusStartFilter,
+    Require(fixture.client.subscriptions[1] == mdvwb::ManagerMqttService::DashboardConfigSetTopic,
+            "manager subscribed to wrong dashboard configuration topic");
+    Require(fixture.client.subscriptions[2] == mdvwb::ManagerMqttService::BackgroundUploadStartTopic,
+            "manager subscribed to wrong upload start topic");
+    Require(fixture.client.subscriptions[3] == mdvwb::ManagerMqttService::BackgroundUploadChunkFilter,
+            "manager subscribed to wrong upload chunk filter");
+    Require(fixture.client.subscriptions[4] == mdvwb::ManagerMqttService::BackgroundUploadFinishFilter,
+            "manager subscribed to wrong upload finish filter");
+    Require(fixture.client.subscriptions[5] == mdvwb::ManagerMqttService::BackgroundUploadCancelFilter,
+            "manager subscribed to wrong upload cancel filter");
+    Require(fixture.client.subscriptions[6] == mdvwb::ManagerMqttService::BusStartFilter,
             "manager subscribed to wrong start filter");
-    Require(fixture.client.subscriptions[2] == mdvwb::ManagerMqttService::BusStopFilter,
+    Require(fixture.client.subscriptions[7] == mdvwb::ManagerMqttService::BusStopFilter,
             "manager subscribed to wrong stop filter");
-    Require(fixture.client.subscriptions[3] == mdvwb::ManagerMqttService::BusRestartFilter,
+    Require(fixture.client.subscriptions[8] == mdvwb::ManagerMqttService::BusRestartFilter,
             "manager subscribed to wrong restart filter");
-    Require(fixture.client.subscriptions[4] == mdvwb::ManagerMqttService::BusStatusGetFilter,
+    Require(fixture.client.subscriptions[9] == mdvwb::ManagerMqttService::BusStatusGetFilter,
             "manager subscribed to wrong status filter");
-    Require(fixture.client.subscriptions[5] == mdvwb::ManagerMqttService::BusDiscoveryStartFilter,
+    Require(fixture.client.subscriptions[10] == mdvwb::ManagerMqttService::BusDiscoveryStartFilter,
             "manager subscribed to wrong discovery filter");
 
     const auto* config = LastPublication(
@@ -207,6 +238,26 @@ void TestStartPublishesConfigurationAndBusStatuses() {
             "active service state is missing");
     Require(busStatus->payload.find("\"port\":\"/dev/ttyRS485-1\"") != std::string::npos,
             "bus port is missing from status");
+
+    Require(std::filesystem::exists(fixture.dashboard),
+            "default dashboard configuration was not created");
+    const auto* dashboardConfig = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::DashboardConfigTopic);
+    Require(dashboardConfig != nullptr && dashboardConfig->retained,
+            "current dashboard configuration must be retained");
+    Require(dashboardConfig->payload.find("\"revision\": 0") != std::string::npos,
+            "default dashboard revision is wrong");
+    const auto* dashboardStatus = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::DashboardStatusTopic);
+    Require(dashboardStatus != nullptr && dashboardStatus->retained,
+            "dashboard status must be retained");
+    Require(dashboardStatus->payload.find("\"state\":\"ready\"") != std::string::npos,
+            "dashboard did not publish ready state");
+    const auto* uploadStatus = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::BackgroundUploadStatusTopic);
+    Require(uploadStatus != nullptr && uploadStatus->retained &&
+                uploadStatus->payload.find("\"state\":\"idle\"") != std::string::npos,
+            "background upload did not publish idle state");
 }
 
 void TestValidConfigurationIsSavedAndApplied() {
@@ -429,6 +480,280 @@ void TestRemovedDevicesClearRetainedTopics() {
             "removed bus system device was not cleared");
 }
 
+void TestDashboardConfigurationIsSavedWithRevisionAndWarnings() {
+    Fixture fixture;
+    mdvwb::ManagerMqttService service(
+        fixture.client, fixture.config, fixture.paths, fixture.runner, &fixture.discovery);
+    service.Start();
+    fixture.client.publications.clear();
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::DashboardConfigSetTopic,
+        R"json({
+          "version":1,
+          "revision":0,
+          "title":"Главная панель",
+          "background":{
+            "file":"","naturalWidth":0,"naturalHeight":0,
+            "defaultScale":1,"fit":"contain"
+          },
+          "fans":[
+            {"id":"fan-1-1","bus":1,"address":1,"label":"Кабинет 1",
+             "x":0.25,"y":0.5,"markerScale":1,"rotation":0,"visible":true},
+            {"id":"fan-2-18","bus":2,"address":18,"label":"Переговорная",
+             "x":0.75,"y":0.5,"markerScale":1.2,"rotation":15,"visible":true}
+          ]
+        })json");
+
+    const auto result = service.ProcessOne();
+    Require(result.has_value() && result->success && result->saved &&
+                result->command == "dashboard-config",
+            "valid dashboard configuration was not saved");
+    const std::string saved = ReadFile(fixture.dashboard);
+    Require(saved.find("\"revision\": 1") != std::string::npos,
+            "manager did not increment dashboard revision");
+    Require(saved.find("\"number\": 1") != std::string::npos &&
+                saved.find("\"number\": 2") != std::string::npos,
+            "manager did not migrate user-facing fan numbers");
+    Require(saved.find("\"id\": \"fan-1-1\"") <
+                saved.find("\"id\": \"fan-2-18\""),
+            "saved dashboard was not canonicalized");
+
+    const auto* config = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::DashboardConfigTopic);
+    Require(config != nullptr && config->retained &&
+                config->payload.find("\"revision\": 1") != std::string::npos,
+            "saved dashboard was not republished retained");
+    const auto* operation = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::DashboardConfigResultTopic);
+    Require(operation != nullptr && !operation->retained,
+            "dashboard operation result must not be retained");
+    Require(operation->payload.find("\"success\":true") != std::string::npos &&
+                operation->payload.find("\"referenceIssues\":1") != std::string::npos,
+            "dashboard result does not report stale reference warning");
+}
+
+void TestDashboardRevisionConflictPreservesFile() {
+    Fixture fixture;
+    WriteFile(fixture.dashboard, R"json({
+      "version":1,"revision":7,"title":"Current",
+      "background":{"file":"","naturalWidth":0,"naturalHeight":0,
+                    "defaultScale":1,"fit":"contain"},
+      "fans":[]
+    })json");
+    mdvwb::ManagerMqttService service(
+        fixture.client, fixture.config, fixture.paths, fixture.runner, &fixture.discovery);
+    service.Start();
+    const std::string original = ReadFile(fixture.dashboard);
+    fixture.client.publications.clear();
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::DashboardConfigSetTopic,
+        R"json({
+          "version":1,"revision":6,"title":"Stale editor",
+          "background":{"file":"","naturalWidth":0,"naturalHeight":0,
+                        "defaultScale":1,"fit":"contain"},
+          "fans":[]
+        })json");
+    const auto result = service.ProcessOne();
+    Require(result.has_value() && !result->success && !result->saved,
+            "stale dashboard revision was accepted");
+    Require(ReadFile(fixture.dashboard) == original,
+            "revision conflict changed dashboard file");
+    const auto* operation = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::DashboardConfigResultTopic);
+    Require(operation != nullptr &&
+                operation->payload.find("revision conflict") != std::string::npos &&
+                operation->payload.find("\"revision\":7") != std::string::npos,
+            "revision conflict result is incomplete");
+}
+
+void TestInvalidAndRetainedDashboardCommandsAreRejected() {
+    Fixture fixture;
+    mdvwb::ManagerMqttService service(
+        fixture.client, fixture.config, fixture.paths, fixture.runner, &fixture.discovery);
+    service.Start();
+    const std::string original = ReadFile(fixture.dashboard);
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::DashboardConfigSetTopic,
+        R"json({"version":1,"revision":0,"title":"Broken"})json");
+    auto result = service.ProcessOne();
+    Require(result.has_value() && !result->success && !result->saved,
+            "invalid dashboard configuration was accepted");
+    Require(ReadFile(fixture.dashboard) == original,
+            "invalid dashboard configuration changed file");
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::DashboardConfigSetTopic,
+        R"json({
+          "version":1,"revision":0,"title":"Retained",
+          "background":{"file":"","naturalWidth":0,"naturalHeight":0,
+                        "defaultScale":1,"fit":"contain"},"fans":[]
+        })json",
+        true);
+    result = service.ProcessOne();
+    Require(result.has_value() && !result->success && !result->saved,
+            "retained dashboard configuration was accepted");
+    Require(ReadFile(fixture.dashboard) == original,
+            "retained dashboard command changed file");
+}
+
+void TestBackgroundUploadUpdatesDashboardWithoutServiceRestart() {
+    Fixture fixture;
+    mdvwb::ManagerMqttService service(
+        fixture.client, fixture.config, fixture.paths, fixture.runner, &fixture.discovery);
+    service.Start();
+    fixture.runner.commands.clear();
+    fixture.client.publications.clear();
+
+    const std::string image = PngHeader(2048, 1024);
+    const std::string uploadId = "floor_plan_1";
+    const std::string sha256 = mdvwb::ComputeSha256Hex(image);
+    const std::string startPayload =
+        "{\"version\":1,\"uploadId\":\"" + uploadId +
+        "\",\"fileName\":\"floor.png\",\"size\":" +
+        std::to_string(image.size()) + ",\"sha256\":\"" + sha256 +
+        "\",\"revision\":0}";
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::BackgroundUploadStartTopic, startPayload);
+    auto result = service.ProcessOne();
+    Require(result.has_value() && result->success && !result->saved &&
+                result->command == "background-upload-start",
+            "background upload did not start");
+
+    fixture.client.Inject(
+        "/mdvwb/dashboard/background/upload/chunk/" + uploadId + "/0",
+        std::string(std::string_view(image).substr(0, 12)));
+    result = service.ProcessOne();
+    Require(result.has_value() && result->success,
+            "first background upload chunk failed");
+
+    fixture.client.Inject(
+        "/mdvwb/dashboard/background/upload/chunk/" + uploadId + "/1",
+        std::string(std::string_view(image).substr(12)));
+    result = service.ProcessOne();
+    Require(result.has_value() && result->success,
+            "second background upload chunk failed");
+
+    fixture.client.Inject(
+        "/mdvwb/dashboard/background/upload/finish/" + uploadId, "");
+    result = service.ProcessOne();
+    Require(result.has_value() && result->success && result->saved &&
+                result->command == "background-upload-finish",
+            "background upload did not finish");
+    Require(fixture.runner.commands.empty(),
+            "background upload unexpectedly invoked systemd");
+
+    const std::string saved = ReadFile(fixture.dashboard);
+    Require(saved.find("\"revision\": 1") != std::string::npos,
+            "background upload did not increment dashboard revision");
+    Require(saved.find("\"naturalWidth\": 2048") != std::string::npos &&
+                saved.find("\"naturalHeight\": 1024") != std::string::npos,
+            "background dimensions were not saved");
+    const std::string finalName = "background-" + sha256.substr(0, 16) + ".png";
+    Require(saved.find(finalName) != std::string::npos,
+            "content-addressed background file was not saved in dashboard config");
+    Require(std::filesystem::exists(
+                fixture.dashboard.parent_path() / "assets" / finalName),
+            "uploaded background asset is missing");
+
+    const auto* uploadResult = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::BackgroundUploadResultTopic);
+    Require(uploadResult != nullptr && !uploadResult->retained &&
+                uploadResult->payload.find("\"success\":true") != std::string::npos &&
+                uploadResult->payload.find("\"width\":2048") != std::string::npos &&
+                uploadResult->payload.find("\"revision\":1") != std::string::npos,
+            "background upload result is incomplete");
+    const auto* config = LastPublication(
+        fixture.client, mdvwb::ManagerMqttService::DashboardConfigTopic);
+    Require(config != nullptr && config->retained &&
+                config->payload.find(finalName) != std::string::npos,
+            "updated dashboard was not republished retained");
+}
+
+
+void TestMultiplePanelsAndPanelSpecificBackground() {
+    Fixture fixture;
+    mdvwb::ManagerMqttService service(
+        fixture.client, fixture.config, fixture.paths, fixture.runner, &fixture.discovery);
+    service.Start();
+    fixture.client.publications.clear();
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::DashboardConfigSetTopic,
+        R"json({
+          "version":2,
+          "revision":0,
+          "defaultPanel":"main",
+          "panels":[
+            {
+              "id":"main","title":"Главная",
+              "background":{"file":"","naturalWidth":0,"naturalHeight":0,"defaultScale":1,"fit":"contain"},
+              "fans":[{"id":"fan-1-1","number":1,"bus":1,"address":1,"label":"Приёмная","x":0.25,"y":0.5,"markerScale":1,"rotation":0,"visible":true}]
+            },
+            {
+              "id":"floor-2","title":"Второй этаж",
+              "background":{"file":"","naturalWidth":0,"naturalHeight":0,"defaultScale":1,"fit":"contain"},
+              "fans":[{"id":"fan-1-3","number":101,"bus":1,"address":3,"label":"Кабинет 201","x":0.75,"y":0.5,"markerScale":1,"rotation":0,"visible":true}]
+            }
+          ]
+        })json");
+    auto result = service.ProcessOne();
+    Require(result.has_value() && result->success && result->saved,
+            "multiple dashboard panels were not saved");
+
+    auto collection = mdvwb::LoadDashboardCollection(fixture.dashboard);
+    Require(collection.version == 2 && collection.panels.size() == 2U,
+            "saved dashboard collection does not contain two panels");
+    Require(mdvwb::FindDashboardPanel(collection, "floor-2") != nullptr,
+            "saved floor-2 panel is missing");
+
+    const std::string image = PngHeader(1200, 800);
+    const std::string uploadId = "floor2_image";
+    const std::string sha256 = mdvwb::ComputeSha256Hex(image);
+    const std::string startPayload =
+        "{\"version\":1,\"uploadId\":\"" + uploadId +
+        "\",\"fileName\":\"floor2.png\",\"panelId\":\"floor-2\",\"size\":" +
+        std::to_string(image.size()) + ",\"sha256\":\"" + sha256 +
+        "\",\"revision\":1}";
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::BackgroundUploadStartTopic, startPayload);
+    result = service.ProcessOne();
+    Require(result.has_value() && result->success,
+            "panel-specific background upload did not start");
+    fixture.client.Inject(
+        "/mdvwb/dashboard/background/upload/chunk/" + uploadId + "/0", image);
+    result = service.ProcessOne();
+    Require(result.has_value() && result->success,
+            "panel-specific background chunk failed");
+    fixture.client.Inject(
+        "/mdvwb/dashboard/background/upload/finish/" + uploadId, "");
+    result = service.ProcessOne();
+    Require(result.has_value() && result->success && result->saved,
+            "panel-specific background upload did not finish");
+
+    collection = mdvwb::LoadDashboardCollection(fixture.dashboard);
+    const auto* mainPanel = mdvwb::FindDashboardPanel(collection, "main");
+    const auto* floorPanel = mdvwb::FindDashboardPanel(collection, "floor-2");
+    Require(mainPanel != nullptr && mainPanel->background.file.empty(),
+            "upload for floor-2 changed main panel background");
+    Require(floorPanel != nullptr && !floorPanel->background.file.empty() &&
+                floorPanel->background.naturalWidth == 1200 &&
+                floorPanel->background.naturalHeight == 800,
+            "floor-2 background was not updated independently");
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::BackgroundUploadStartTopic,
+        "{\"version\":1,\"uploadId\":\"missing_panel\",\"fileName\":\"x.png\",\"panelId\":\"missing\",\"size\":" +
+        std::to_string(image.size()) + ",\"sha256\":\"" + sha256 +
+        "\",\"revision\":2}");
+    result = service.ProcessOne();
+    Require(result.has_value() && !result->success,
+            "upload for unknown panel was accepted");
+}
+
 void TestInvalidConfigurationAndSynchronizationFailure() {
     Fixture fixture;
     mdvwb::ManagerMqttService service(
@@ -471,11 +796,16 @@ int main() {
         TestDiscoveryStopsOnlySelectedBusAndPublishesResult();
         TestDiscoveryRejectsUnknownRetainedAndFailedRuns();
         TestRemovedDevicesClearRetainedTopics();
+        TestDashboardConfigurationIsSavedWithRevisionAndWarnings();
+        TestDashboardRevisionConflictPreservesFile();
+        TestInvalidAndRetainedDashboardCommandsAreRejected();
+        TestBackgroundUploadUpdatesDashboardWithoutServiceRestart();
+        TestMultiplePanelsAndPanelSpecificBackground();
         TestInvalidConfigurationAndSynchronizationFailure();
-        std::cout << "MDVWB manager MQTT discovery tests: OK\n";
+        std::cout << "MDVWB manager MQTT and dashboard tests: OK\n";
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << "MDVWB manager MQTT discovery tests: FAILED: "
+        std::cerr << "MDVWB manager MQTT and dashboard tests: FAILED: "
                   << error.what() << '\n';
         return 1;
     }

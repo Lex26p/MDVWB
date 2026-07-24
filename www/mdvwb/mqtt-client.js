@@ -146,7 +146,17 @@ export class TinyMqttClient {
     }
     const retain = options.retain === true;
     const header = 0x30 | (retain ? 0x01 : 0x00);
-    const body = concatenate([encodeString(topic), textEncoder.encode(String(payload))]);
+    let payloadBytes;
+    if (payload instanceof Uint8Array) {
+      payloadBytes = payload;
+    } else if (payload instanceof ArrayBuffer) {
+      payloadBytes = new Uint8Array(payload);
+    } else if (ArrayBuffer.isView(payload)) {
+      payloadBytes = new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+    } else {
+      payloadBytes = textEncoder.encode(String(payload));
+    }
+    const body = concatenate([encodeString(topic), payloadBytes]);
     this.socket.send(makePacket(header, body));
   }
 

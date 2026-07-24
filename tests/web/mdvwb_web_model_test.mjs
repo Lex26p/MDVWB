@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 
-const source = await fs.readFile(new URL("../www/mdvwb/model.js", import.meta.url), "utf8");
+const source = await fs.readFile(new URL("../../www/mdvwb/model.js", import.meta.url), "utf8");
 const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
 const model = await import(moduleUrl);
 

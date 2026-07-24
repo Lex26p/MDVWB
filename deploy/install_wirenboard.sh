@@ -9,7 +9,7 @@ fi
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SOURCE_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 BUILD_DIR=${MDVWB_BUILD_DIR:-$SOURCE_DIR/out/build/wirenboard-release}
-WWW_ROOT=${MDVWB_WWW_ROOT:-/mnt/data/www}
+WWW_ROOT=${MDVWB_WWW_ROOT:-/var/www}
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
