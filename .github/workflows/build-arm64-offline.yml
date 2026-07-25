@@ -2,20 +2,7 @@ name: Build ARM64 Offline Package
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - "*.cpp"
-      - "*.h"
-      - "src/**"
-      - "CMakeLists.txt"
-      - "deploy/**"
-      - "config/**"
-      - "tests/**"
-      - "www/**"
-      - ".github/workflows/build-arm64-offline.yml"
+  
 
 permissions:
   contents: read
