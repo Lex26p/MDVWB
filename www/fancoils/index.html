@@ -180,16 +180,81 @@
       <button id="groupApplyButton" class="group-apply-button" type="button" disabled>Отправить команды</button>
     </aside>
 
-    <aside id="schedulePanel" class="side-drawer drawer-hidden" aria-labelledby="schedulePanelTitle">
+    <aside id="schedulePanel" class="side-drawer schedule-drawer drawer-hidden" aria-labelledby="schedulePanelTitle">
       <div class="drawer-heading">
         <div><p class="eyebrow">Автоматизация</p><h2 id="schedulePanelTitle">Расписание</h2></div>
         <button id="scheduleCloseButton" class="drawer-close" type="button" aria-label="Закрыть">×</button>
       </div>
-      <div class="schedule-placeholder">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v3m12-3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/><path d="M8 13h3v3H8z"/></svg>
-        <strong>Расписание будет добавлено следующим этапом</strong>
-        <p>Задания будут выполняться на Wiren Board независимо от открытого браузера.</p>
-      </div>
+
+      <section id="scheduleListView" class="schedule-view">
+        <div class="schedule-service-row">
+          <span id="schedulerStatusBadge" class="schedule-service-badge schedule-service-offline"><span class="status-dot"></span>Служба недоступна</span>
+          <button id="scheduleNewButton" class="schedule-primary-small" type="button">＋ Новое</button>
+        </div>
+        <p id="scheduleListFeedback" class="schedule-feedback" role="status" aria-live="polite">Загрузка расписаний…</p>
+        <div id="scheduleList" class="schedule-list"></div>
+        <div id="scheduleEmpty" class="schedule-empty schedule-hidden">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v3m12-3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z"/><path d="M8 13h3v3H8z"/></svg>
+          <strong>Для этой панели расписаний нет</strong>
+          <span>Создайте первое задание для выбранных фанкойлов.</span>
+        </div>
+      </section>
+
+      <section id="scheduleEditorView" class="schedule-view schedule-hidden">
+        <div class="schedule-editor-toolbar">
+          <button id="scheduleBackButton" class="schedule-secondary-button" type="button">← К списку</button>
+          <button id="scheduleDuplicateButton" class="schedule-secondary-button" type="button">Копировать</button>
+        </div>
+
+        <label class="schedule-field"><span>Название</span><input id="scheduleNameInput" type="text" maxlength="128"></label>
+        <label class="schedule-switch-row"><input id="scheduleEnabledInput" type="checkbox"><span><strong>Автоматический запуск</strong><small>Ручной запуск доступен и при выключенном автозапуске.</small></span></label>
+
+        <div class="schedule-two-columns">
+          <label class="schedule-field"><span>Тип</span><select id="scheduleKindInput"><option value="weekly">Еженедельно</option><option value="once">Один раз</option></select></label>
+          <label class="schedule-field"><span>Время</span><input id="scheduleTimeInput" type="time" step="60"></label>
+        </div>
+
+        <fieldset id="scheduleDaysField" class="schedule-days-field">
+          <legend>Дни недели</legend>
+          <div class="schedule-days">
+            <label><input type="checkbox" data-schedule-day="1"><span>Пн</span></label>
+            <label><input type="checkbox" data-schedule-day="2"><span>Вт</span></label>
+            <label><input type="checkbox" data-schedule-day="3"><span>Ср</span></label>
+            <label><input type="checkbox" data-schedule-day="4"><span>Чт</span></label>
+            <label><input type="checkbox" data-schedule-day="5"><span>Пт</span></label>
+            <label><input type="checkbox" data-schedule-day="6"><span>Сб</span></label>
+            <label><input type="checkbox" data-schedule-day="7"><span>Вс</span></label>
+          </div>
+        </fieldset>
+        <label id="scheduleDateField" class="schedule-field schedule-hidden"><span>Дата</span><input id="scheduleDateInput" type="date"></label>
+
+        <section class="schedule-section">
+          <div class="schedule-section-heading"><div><strong>Фанкойлы</strong><span>Нажимайте маркеры на карте</span></div><b id="scheduleTargetCount">0</b></div>
+          <div class="schedule-selection-actions">
+            <button id="scheduleSelectAllButton" type="button">Выбрать все</button>
+            <button id="scheduleClearTargetsButton" type="button">Снять выбор</button>
+          </div>
+          <div id="scheduleTargetList" class="schedule-target-list"></div>
+        </section>
+
+        <section class="schedule-section">
+          <div class="schedule-section-heading"><div><strong>Что изменить</strong><span>Можно выбрать один или несколько параметров</span></div></div>
+          <div class="schedule-action-grid">
+            <label class="schedule-action-card"><span><input id="schedulePowerEnabled" type="checkbox"> Питание</span><select id="schedulePowerValue"><option value="true">Включить</option><option value="false">Выключить</option></select></label>
+            <label class="schedule-action-card"><span><input id="scheduleModeEnabled" type="checkbox"> Режим</span><select id="scheduleModeValue"><option value="0">Охлаждение</option><option value="1">Нагрев</option><option value="2">Осушение</option><option value="3">Вентиляция</option><option value="4">Авто</option></select></label>
+            <label class="schedule-action-card"><span><input id="scheduleSpeedEnabled" type="checkbox"> Скорость</span><select id="scheduleSpeedValue"><option value="1">Низкая</option><option value="2">Средняя</option><option value="3">Высокая</option><option value="4">Авто</option></select></label>
+            <label class="schedule-action-card"><span><input id="scheduleSetTempEnabled" type="checkbox"> Уставка</span><span class="schedule-temp-value"><input id="scheduleSetTempValue" type="number" min="16" max="32" step="1" value="24"><span>°C</span></span></label>
+          </div>
+        </section>
+
+        <p id="scheduleNextRun" class="schedule-next-run">Следующий запуск не определён</p>
+        <p id="scheduleEditorFeedback" class="schedule-feedback" role="status" aria-live="polite">Изменения выполняются на Wiren Board независимо от браузера.</p>
+        <div class="schedule-editor-actions">
+          <button id="scheduleRunButton" class="schedule-run-button" type="button">Запустить сейчас</button>
+          <button id="scheduleSaveButton" class="schedule-save-button" type="button">Сохранить</button>
+          <button id="scheduleDeleteButton" class="schedule-delete-button" type="button">Удалить</button>
+        </div>
+      </section>
     </aside>
   </main>
   <script type="module" src="./app.js"></script>

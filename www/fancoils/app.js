@@ -25,6 +25,23 @@ import {
   temperatureLabel,
 } from "./model.js";
 import { emptyDashboardConfiguration } from "../mdvwb/dashboard-model.js";
+import {
+  cloneSchedule,
+  createSchedule,
+  emptySchedulesConfiguration,
+  nextRunLabel,
+  nextScheduleIdentifier,
+  normalizeSchedule,
+  normalizeSchedulesConfiguration,
+  parseScheduleResultTopic,
+  runStateLabel,
+  scheduleTargetKey,
+  scheduleTimingLabel,
+  schedulesConfigurationToJson,
+  schedulesForPanel,
+  setScheduleTarget,
+  targetSet,
+} from "./schedule-model.js";
 
 const COMMAND_CONFIRM_TIMEOUT_MS = 10000;
 const DEMO_CONFIRM_DELAY_MS = 550;
@@ -39,6 +56,39 @@ const elements = {
   scheduleButton: document.getElementById("scheduleButton"),
   schedulePanel: document.getElementById("schedulePanel"),
   scheduleCloseButton: document.getElementById("scheduleCloseButton"),
+  scheduleListView: document.getElementById("scheduleListView"),
+  scheduleEditorView: document.getElementById("scheduleEditorView"),
+  schedulerStatusBadge: document.getElementById("schedulerStatusBadge"),
+  scheduleNewButton: document.getElementById("scheduleNewButton"),
+  scheduleListFeedback: document.getElementById("scheduleListFeedback"),
+  scheduleList: document.getElementById("scheduleList"),
+  scheduleEmpty: document.getElementById("scheduleEmpty"),
+  scheduleBackButton: document.getElementById("scheduleBackButton"),
+  scheduleDuplicateButton: document.getElementById("scheduleDuplicateButton"),
+  scheduleNameInput: document.getElementById("scheduleNameInput"),
+  scheduleEnabledInput: document.getElementById("scheduleEnabledInput"),
+  scheduleKindInput: document.getElementById("scheduleKindInput"),
+  scheduleTimeInput: document.getElementById("scheduleTimeInput"),
+  scheduleDaysField: document.getElementById("scheduleDaysField"),
+  scheduleDateField: document.getElementById("scheduleDateField"),
+  scheduleDateInput: document.getElementById("scheduleDateInput"),
+  scheduleTargetCount: document.getElementById("scheduleTargetCount"),
+  scheduleTargetList: document.getElementById("scheduleTargetList"),
+  scheduleSelectAllButton: document.getElementById("scheduleSelectAllButton"),
+  scheduleClearTargetsButton: document.getElementById("scheduleClearTargetsButton"),
+  schedulePowerEnabled: document.getElementById("schedulePowerEnabled"),
+  schedulePowerValue: document.getElementById("schedulePowerValue"),
+  scheduleModeEnabled: document.getElementById("scheduleModeEnabled"),
+  scheduleModeValue: document.getElementById("scheduleModeValue"),
+  scheduleSpeedEnabled: document.getElementById("scheduleSpeedEnabled"),
+  scheduleSpeedValue: document.getElementById("scheduleSpeedValue"),
+  scheduleSetTempEnabled: document.getElementById("scheduleSetTempEnabled"),
+  scheduleSetTempValue: document.getElementById("scheduleSetTempValue"),
+  scheduleNextRun: document.getElementById("scheduleNextRun"),
+  scheduleEditorFeedback: document.getElementById("scheduleEditorFeedback"),
+  scheduleRunButton: document.getElementById("scheduleRunButton"),
+  scheduleSaveButton: document.getElementById("scheduleSaveButton"),
+  scheduleDeleteButton: document.getElementById("scheduleDeleteButton"),
   drawerBackdrop: document.getElementById("drawerBackdrop"),
   notice: document.getElementById("notice"),
   placedCount: document.getElementById("placedCount"),
@@ -125,6 +175,17 @@ const state = {
   groupOperation: null,
   groupSequence: 0,
   scheduleOpen: false,
+  schedules: emptySchedulesConfiguration(),
+  receivedSchedules: false,
+  scheduleStatus: null,
+  schedulerStatus: null,
+  scheduleResults: new Map(),
+  scheduleDraft: null,
+  scheduleDraftPersisted: false,
+  scheduleDirty: false,
+  scheduleSaving: false,
+  scheduleFeedback: "",
+  scheduleFeedbackKind: "info",
   viewInitialized: false,
 };
 
@@ -145,6 +206,346 @@ function setCommandFeedback(message, kind = "info") {
 function setGroupFeedback(message, kind = "info") {
   elements.groupFeedback.textContent = message;
   elements.groupFeedback.className = `group-feedback group-feedback-${kind}`;
+}
+
+function setScheduleListFeedback(message, kind = "info") {
+  elements.scheduleListFeedback.textContent = message;
+  elements.scheduleListFeedback.className = `schedule-feedback schedule-feedback-${kind}`;
+}
+
+function setScheduleEditorFeedback(message, kind = "info") {
+  state.scheduleFeedback = String(message || "");
+  state.scheduleFeedbackKind = kind;
+  elements.scheduleEditorFeedback.textContent = state.scheduleFeedback;
+  elements.scheduleEditorFeedback.className = `schedule-feedback schedule-feedback-${kind}`;
+}
+
+function panelSchedules() {
+  return state.schedules.schedules.filter((schedule) => schedule.panelId === state.panelId);
+}
+
+function visibleScheduleFans() {
+  return state.dashboard.fans.filter((fan) => fan.visible);
+}
+
+function scheduleDraftTargets() {
+  return targetSet(state.scheduleDraft || { targets: [] });
+}
+
+function scheduleResultFor(id) {
+  return state.scheduleResults.get(String(id)) || null;
+}
+
+function renderSchedulerStatus() {
+  const schedulerState = state.demo ? "ready" : String(state.schedulerStatus?.state || "offline");
+  const ready = schedulerState === "ready";
+  const busy = schedulerState === "executing";
+  elements.schedulerStatusBadge.className = `schedule-service-badge ${ready ? "schedule-service-ready" : busy ? "schedule-service-busy" : "schedule-service-offline"}`;
+  elements.schedulerStatusBadge.innerHTML = `<span class="status-dot"></span>${ready ? "Служба работает" : busy ? "Выполняется расписание" : state.connected ? "Служба недоступна" : "MQTT отключён"}`;
+}
+
+function renderScheduleList() {
+  renderSchedulerStatus();
+  elements.scheduleList.textContent = "";
+  const schedules = panelSchedules();
+  elements.scheduleNewButton.disabled = !state.demo && (!state.connected || !state.receivedSchedules);
+  elements.scheduleEmpty.classList.toggle("schedule-hidden", schedules.length > 0);
+  if (!state.receivedSchedules && !state.demo) {
+    setScheduleListFeedback("Загрузка расписаний…", "info");
+  } else if (!state.connected && !state.demo) {
+    setScheduleListFeedback("MQTT отключён. Показаны последние полученные данные.", "warning");
+  } else {
+    setScheduleListFeedback(`${schedules.length} расписаний для панели «${state.dashboard.title || state.panelId}».`, "info");
+  }
+
+  const fragment = document.createDocumentFragment();
+  schedules.forEach((schedule) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `schedule-list-item${schedule.enabled ? " schedule-list-item-enabled" : ""}`;
+    const status = document.createElement("span");
+    status.className = "schedule-list-status";
+    const copy = document.createElement("span");
+    copy.className = "schedule-list-copy";
+    const title = document.createElement("strong");
+    title.textContent = schedule.name;
+    const timing = document.createElement("span");
+    timing.textContent = scheduleTimingLabel(schedule);
+    const detail = document.createElement("small");
+    const run = scheduleResultFor(schedule.id);
+    detail.textContent = run ? `${runStateLabel(run.state)} · ${schedule.targets.length} фанкойлов` : `${nextRunLabel(schedule)} · ${schedule.targets.length} фанкойлов`;
+    copy.append(title, timing, detail);
+    const arrow = document.createElement("span");
+    arrow.className = "schedule-list-arrow";
+    arrow.textContent = "›";
+    button.append(status, copy, arrow);
+    button.addEventListener("click", () => openScheduleEditor(schedule, true));
+    fragment.appendChild(button);
+  });
+  elements.scheduleList.appendChild(fragment);
+}
+
+function setScheduleActionAvailability() {
+  elements.schedulePowerValue.disabled = !elements.schedulePowerEnabled.checked;
+  elements.scheduleModeValue.disabled = !elements.scheduleModeEnabled.checked;
+  elements.scheduleSpeedValue.disabled = !elements.scheduleSpeedEnabled.checked;
+  elements.scheduleSetTempValue.disabled = !elements.scheduleSetTempEnabled.checked;
+}
+
+function updateScheduleDraftFromInputs() {
+  if (!state.scheduleDraft) {
+    return;
+  }
+  state.scheduleDraft.name = elements.scheduleNameInput.value;
+  state.scheduleDraft.enabled = elements.scheduleEnabledInput.checked;
+  state.scheduleDraft.kind = elements.scheduleKindInput.value;
+  state.scheduleDraft.time = elements.scheduleTimeInput.value;
+  state.scheduleDraft.days = [...document.querySelectorAll("[data-schedule-day]:checked")].map((input) => Number(input.dataset.scheduleDay));
+  state.scheduleDraft.date = elements.scheduleDateInput.value;
+  const actions = {};
+  if (elements.schedulePowerEnabled.checked) actions.power = elements.schedulePowerValue.value === "true";
+  if (elements.scheduleModeEnabled.checked) actions.mode = Number(elements.scheduleModeValue.value);
+  if (elements.scheduleSpeedEnabled.checked) actions.speed = Number(elements.scheduleSpeedValue.value);
+  if (elements.scheduleSetTempEnabled.checked) actions.setTemp = Number(elements.scheduleSetTempValue.value);
+  state.scheduleDraft.actions = actions;
+  state.scheduleDirty = true;
+  elements.scheduleDaysField.classList.toggle("schedule-hidden", state.scheduleDraft.kind !== "weekly");
+  elements.scheduleDateField.classList.toggle("schedule-hidden", state.scheduleDraft.kind !== "once");
+  setScheduleActionAvailability();
+  try {
+    elements.scheduleNextRun.textContent = nextRunLabel({ ...state.scheduleDraft, actions: Object.keys(actions).length ? actions : { power: true } });
+  } catch (_error) {
+    elements.scheduleNextRun.textContent = "Следующий запуск не определён";
+  }
+  renderMarkers();
+  updateScheduleEditorButtons();
+}
+
+function updateScheduleEditorButtons() {
+  const hasDraft = Boolean(state.scheduleDraft);
+  const connected = state.demo || state.connected;
+  const schedulerAvailable = state.demo || ["ready", "executing", "warning"].includes(String(state.schedulerStatus?.state || ""));
+  elements.scheduleSaveButton.disabled = !hasDraft || !connected || state.scheduleSaving;
+  elements.scheduleDeleteButton.disabled = !hasDraft || state.scheduleSaving || (state.scheduleDraftPersisted && !connected);
+  elements.scheduleDuplicateButton.disabled = !hasDraft || state.scheduleSaving;
+  elements.scheduleRunButton.disabled = !hasDraft || !state.scheduleDraftPersisted || state.scheduleDirty || !connected || !schedulerAvailable || state.scheduleSaving;
+}
+
+function renderScheduleTargetList() {
+  const draft = state.scheduleDraft;
+  elements.scheduleTargetList.textContent = "";
+  const selected = draft ? scheduleDraftTargets() : new Set();
+  elements.scheduleTargetCount.textContent = String(selected.size);
+  const fans = visibleScheduleFans().filter((fan) => selected.has(scheduleTargetKey(fan.bus, fan.address)));
+  if (!fans.length) {
+    const empty = document.createElement("span");
+    empty.className = "schedule-target-empty";
+    empty.textContent = "Фанкойлы не выбраны";
+    elements.scheduleTargetList.appendChild(empty);
+    return;
+  }
+  fans.sort((left, right) => Number(left.number) - Number(right.number));
+  fans.forEach((fan) => {
+    const chip = document.createElement("span");
+    chip.className = "schedule-target-chip";
+    chip.textContent = `№${fan.number} ${fan.label}`;
+    elements.scheduleTargetList.appendChild(chip);
+  });
+}
+
+function renderScheduleEditor() {
+  const draft = state.scheduleDraft;
+  elements.scheduleListView.classList.toggle("schedule-hidden", Boolean(draft));
+  elements.scheduleEditorView.classList.toggle("schedule-hidden", !draft);
+  if (!draft) {
+    renderScheduleList();
+    renderMarkers();
+    return;
+  }
+
+  elements.scheduleNameInput.value = draft.name || "";
+  elements.scheduleEnabledInput.checked = draft.enabled !== false;
+  elements.scheduleKindInput.value = draft.kind || "weekly";
+  elements.scheduleTimeInput.value = draft.time || "00:00";
+  elements.scheduleDateInput.value = draft.date || "";
+  document.querySelectorAll("[data-schedule-day]").forEach((input) => {
+    input.checked = (draft.days || []).includes(Number(input.dataset.scheduleDay));
+  });
+  elements.scheduleDaysField.classList.toggle("schedule-hidden", draft.kind !== "weekly");
+  elements.scheduleDateField.classList.toggle("schedule-hidden", draft.kind !== "once");
+  elements.schedulePowerEnabled.checked = Object.hasOwn(draft.actions || {}, "power");
+  elements.schedulePowerValue.value = String(draft.actions?.power ?? true);
+  elements.scheduleModeEnabled.checked = Object.hasOwn(draft.actions || {}, "mode");
+  elements.scheduleModeValue.value = String(draft.actions?.mode ?? 0);
+  elements.scheduleSpeedEnabled.checked = Object.hasOwn(draft.actions || {}, "speed");
+  elements.scheduleSpeedValue.value = String(draft.actions?.speed ?? 4);
+  elements.scheduleSetTempEnabled.checked = Object.hasOwn(draft.actions || {}, "setTemp");
+  elements.scheduleSetTempValue.value = String(draft.actions?.setTemp ?? 24);
+  setScheduleActionAvailability();
+  elements.scheduleNextRun.textContent = nextRunLabel(draft);
+  if (!state.scheduleFeedback) {
+    setScheduleEditorFeedback("Нажимайте фанкойлы на карте, затем сохраните расписание.", "info");
+  } else {
+    setScheduleEditorFeedback(state.scheduleFeedback, state.scheduleFeedbackKind);
+  }
+  renderScheduleTargetList();
+  updateScheduleEditorButtons();
+  renderMarkers();
+}
+
+function renderSchedulePanel() {
+  if (!state.scheduleOpen) {
+    return;
+  }
+  renderScheduleEditor();
+}
+
+function openScheduleEditor(schedule, persisted) {
+  state.scheduleDraft = cloneSchedule(schedule);
+  state.scheduleDraft.panelId = state.panelId;
+  state.scheduleDraftPersisted = Boolean(persisted);
+  state.scheduleDirty = false;
+  state.scheduleSaving = false;
+  state.scheduleFeedback = "";
+  state.selectedKey = "";
+  elements.detailsPanel.classList.add("drawer-hidden");
+  renderScheduleEditor();
+}
+
+function openNewSchedule() {
+  const draft = createSchedule(state.panelId, state.schedules);
+  openScheduleEditor(draft, false);
+}
+
+function returnToScheduleList() {
+  state.scheduleDraft = null;
+  state.scheduleDraftPersisted = false;
+  state.scheduleDirty = false;
+  state.scheduleSaving = false;
+  state.scheduleFeedback = "";
+  renderSchedulePanel();
+}
+
+function duplicateCurrentSchedule() {
+  if (!state.scheduleDraft) {
+    return;
+  }
+  const copy = cloneSchedule(state.scheduleDraft);
+  copy.id = nextScheduleIdentifier(state.schedules);
+  copy.name = `${copy.name} — копия`;
+  openScheduleEditor(copy, false);
+}
+
+function scheduleConfigurationWithDraft(deleteDraft = false) {
+  const config = {
+    version: 1,
+    revision: state.schedules.revision,
+    schedules: state.schedules.schedules.map(cloneSchedule),
+  };
+  const id = state.scheduleDraft?.id;
+  config.schedules = config.schedules.filter((schedule) => schedule.id !== id);
+  if (!deleteDraft && state.scheduleDraft) {
+    config.schedules.push(normalizeSchedule(state.scheduleDraft));
+  }
+  config.schedules.sort((left, right) => left.id.localeCompare(right.id));
+  return normalizeSchedulesConfiguration(config);
+}
+
+function applyDemoScheduleConfiguration(config, message) {
+  state.schedules = { ...config, revision: state.schedules.revision + 1 };
+  state.receivedSchedules = true;
+  state.scheduleSaving = false;
+  if (state.scheduleDraft) {
+    const saved = state.schedules.schedules.find((schedule) => schedule.id === state.scheduleDraft.id);
+    if (saved) {
+      state.scheduleDraft = cloneSchedule(saved);
+      state.scheduleDraftPersisted = true;
+      state.scheduleDirty = false;
+    } else {
+      state.scheduleDraft = null;
+      state.scheduleDraftPersisted = false;
+    }
+  }
+  setScheduleEditorFeedback(message, "success");
+  renderSchedulePanel();
+}
+
+function saveCurrentSchedule() {
+  if (!state.scheduleDraft) {
+    return;
+  }
+  updateScheduleDraftFromInputs();
+  try {
+    const config = scheduleConfigurationWithDraft(false);
+    if (state.demo) {
+      applyDemoScheduleConfiguration(config, "Расписание сохранено в демонстрационном режиме.");
+      return;
+    }
+    state.client.publish("/mdvwb/schedules/config/set", schedulesConfigurationToJson(config), { retain: false });
+    state.scheduleSaving = true;
+    setScheduleEditorFeedback("Расписание отправлено на Wiren Board. Ожидается подтверждение сохранения.", "info");
+    updateScheduleEditorButtons();
+  } catch (error) {
+    state.scheduleSaving = false;
+    setScheduleEditorFeedback(error.message, "error");
+    updateScheduleEditorButtons();
+  }
+}
+
+function deleteCurrentSchedule() {
+  if (!state.scheduleDraft) {
+    return;
+  }
+  if (!state.scheduleDraftPersisted) {
+    returnToScheduleList();
+    return;
+  }
+  try {
+    const config = scheduleConfigurationWithDraft(true);
+    if (state.demo) {
+      applyDemoScheduleConfiguration(config, "Расписание удалено в демонстрационном режиме.");
+      return;
+    }
+    state.client.publish("/mdvwb/schedules/config/set", schedulesConfigurationToJson(config), { retain: false });
+    state.scheduleSaving = true;
+    setScheduleEditorFeedback("Удаление отправлено. Ожидается подтверждение.", "info");
+    updateScheduleEditorButtons();
+  } catch (error) {
+    setScheduleEditorFeedback(error.message, "error");
+  }
+}
+
+function runCurrentSchedule() {
+  if (!state.scheduleDraft || !state.scheduleDraftPersisted || state.scheduleDirty) {
+    setScheduleEditorFeedback("Сначала сохраните изменения расписания.", "warning");
+    return;
+  }
+  if (state.demo) {
+    const result = { success: true, scheduleId: state.scheduleDraft.id, state: "completed", source: "manual", commands: 1, confirmed: 1, message: "Demo run completed" };
+    state.scheduleResults.set(state.scheduleDraft.id, result);
+    setScheduleEditorFeedback("Демонстрационный запуск завершён.", "success");
+    renderScheduleEditor();
+    return;
+  }
+  try {
+    state.client.publish(`/mdvwb/schedules/${state.scheduleDraft.id}/run`, "run", { retain: false });
+    setScheduleEditorFeedback("Расписание поставлено в очередь. Ожидается результат службы.", "info");
+  } catch (error) {
+    setScheduleEditorFeedback(error.message, "error");
+  }
+}
+
+function toggleScheduleTarget(bus, address) {
+  if (!state.scheduleDraft) {
+    return;
+  }
+  const key = scheduleTargetKey(bus, address);
+  const selected = scheduleDraftTargets();
+  setScheduleTarget(state.scheduleDraft, bus, address, !selected.has(key));
+  state.scheduleDirty = true;
+  renderScheduleTargetList();
+  renderMarkers();
+  updateScheduleEditorButtons();
 }
 
 function selectedGroupFans() {
@@ -197,7 +598,10 @@ function setScheduleOpen(enabled) {
     if (state.groupMode) {
       setGroupMode(false);
     }
+    state.selectedKey = "";
     elements.detailsPanel.classList.add("drawer-hidden");
+    renderSchedulePanel();
+    renderMarkers();
   }
   updateDrawerBackdrop();
 }
@@ -311,6 +715,7 @@ function setConnection(connected) {
   }
   renderDetails();
   renderGroupPanel();
+  renderSchedulePanel();
 }
 
 function naturalSize() {
@@ -456,7 +861,9 @@ function renderMarkers() {
       const hasPending = [...state.pendingCommands.values()].some((pending) => pending.deviceKey === key);
       marker.type = "button";
       const groupSelected = state.groupSelected.has(key);
-      marker.className = `fan-marker fan-marker-${semantic}${!state.groupMode && state.selectedKey === key ? " fan-marker-selected" : ""}${groupSelected ? " fan-marker-group-selected" : ""}${state.groupMode ? " fan-marker-group-mode" : ""}${hasPending ? " fan-marker-pending" : ""}`;
+      const scheduleMode = Boolean(state.scheduleOpen && state.scheduleDraft);
+      const scheduleSelected = scheduleMode && scheduleDraftTargets().has(key);
+      marker.className = `fan-marker fan-marker-${semantic}${!state.groupMode && !scheduleMode && state.selectedKey === key ? " fan-marker-selected" : ""}${groupSelected ? " fan-marker-group-selected" : ""}${state.groupMode ? " fan-marker-group-mode" : ""}${scheduleSelected ? " fan-marker-schedule-selected" : ""}${scheduleMode ? " fan-marker-schedule-mode" : ""}${hasPending ? " fan-marker-pending" : ""}`;
       marker.style.left = `${fan.x * 100}%`;
       marker.style.top = `${fan.y * 100}%`;
       marker.style.setProperty("--marker-scale", fan.markerScale);
@@ -472,6 +879,12 @@ function renderMarkers() {
       marker.addEventListener("blur", hideMarkerTooltip);
       marker.addEventListener("click", () => {
         hideMarkerTooltip();
+        if (state.scheduleOpen) {
+          if (state.scheduleDraft) {
+            toggleScheduleTarget(fan.bus, fan.address);
+          }
+          return;
+        }
         if (state.groupMode) {
           if (state.groupSelected.has(key)) {
             state.groupSelected.delete(key);
@@ -694,6 +1107,7 @@ function renderDashboard() {
   renderSummary();
   renderDetails();
   renderGroupPanel();
+  renderSchedulePanel();
 }
 
 function commandDisplayValue(control, value) {
@@ -896,6 +1310,70 @@ function handleMessage(topic, payload) {
       return;
     }
 
+    if (topic === "/mdvwb/schedules/config") {
+      const wasSaving = state.scheduleSaving;
+      state.schedules = normalizeSchedulesConfiguration(payload);
+      state.receivedSchedules = true;
+      state.scheduleSaving = false;
+      if (state.scheduleDraft) {
+        const saved = state.schedules.schedules.find((schedule) => schedule.id === state.scheduleDraft.id);
+        if (wasSaving) {
+          if (saved) {
+            state.scheduleDraft = cloneSchedule(saved);
+            state.scheduleDraftPersisted = true;
+            state.scheduleDirty = false;
+            state.scheduleFeedback = "Расписание сохранено на Wiren Board.";
+            state.scheduleFeedbackKind = "success";
+          } else {
+            state.scheduleDraft = null;
+            state.scheduleDraftPersisted = false;
+            state.scheduleDirty = false;
+            setScheduleListFeedback("Расписание удалено.", "success");
+          }
+        } else if (state.scheduleDraftPersisted && !state.scheduleDirty && saved) {
+          state.scheduleDraft = cloneSchedule(saved);
+        }
+      }
+      renderSchedulePanel();
+      return;
+    }
+
+    if (topic === "/mdvwb/schedules/status") {
+      state.scheduleStatus = JSON.parse(String(payload));
+      renderSchedulePanel();
+      return;
+    }
+
+    if (topic === "/mdvwb/scheduler/status") {
+      state.schedulerStatus = JSON.parse(String(payload));
+      renderSchedulePanel();
+      return;
+    }
+
+    if (topic === "/mdvwb/schedules/config/result") {
+      const result = JSON.parse(String(payload));
+      if (!result.success) {
+        state.scheduleSaving = false;
+        setScheduleEditorFeedback(result.message || "Не удалось сохранить расписание.", "error");
+        updateScheduleEditorButtons();
+      } else if (state.scheduleDraft) {
+        setScheduleEditorFeedback("Конфигурация принята. Ожидается обновлённая версия.", "success");
+      }
+      return;
+    }
+
+    const scheduleResultId = parseScheduleResultTopic(topic);
+    if (scheduleResultId) {
+      const result = JSON.parse(String(payload));
+      state.scheduleResults.set(scheduleResultId, result);
+      if (state.scheduleDraft?.id === scheduleResultId) {
+        const success = result.success === true && result.state !== "timeout";
+        setScheduleEditorFeedback(`${runStateLabel(result.state)}: ${result.message || "результат получен"}`, success ? "success" : (result.state === "executing" || result.state === "queued") ? "info" : "warning");
+      }
+      renderSchedulePanel();
+      return;
+    }
+
     const parsed = parseFanControlTopic(topic);
     if (!parsed) {
       return;
@@ -950,6 +1428,50 @@ function loadDemo() {
   state.dashboardCollection = selection.collection;
   state.panelId = selection.panelId;
   state.dashboard = selection.dashboard;
+  state.schedules = normalizeSchedulesConfiguration({
+    version: 1,
+    revision: 3,
+    schedules: [
+      {
+        id: "workday-start",
+        name: "Начало рабочего дня",
+        enabled: true,
+        panelId: "main",
+        kind: "weekly",
+        days: [1, 2, 3, 4, 5],
+        date: "",
+        time: "08:00",
+        targets: [{ bus: 1, address: 1 }, { bus: 1, address: 3 }, { bus: 2, address: 5 }],
+        actions: { power: true, mode: 0, speed: 2, setTemp: 23 },
+      },
+      {
+        id: "workday-stop",
+        name: "Конец рабочего дня",
+        enabled: true,
+        panelId: "main",
+        kind: "weekly",
+        days: [1, 2, 3, 4, 5],
+        date: "",
+        time: "19:00",
+        targets: [{ bus: 1, address: 1 }, { bus: 1, address: 3 }, { bus: 2, address: 5 }, { bus: 2, address: 18 }],
+        actions: { power: false },
+      },
+      {
+        id: "floor-2-morning",
+        name: "Второй этаж — утро",
+        enabled: true,
+        panelId: "floor-2",
+        kind: "weekly",
+        days: [1, 2, 3, 4, 5],
+        date: "",
+        time: "07:45",
+        targets: [{ bus: 1, address: 7 }, { bus: 2, address: 20 }],
+        actions: { power: true, mode: 0, setTemp: 22 },
+      },
+    ],
+  });
+  state.receivedSchedules = true;
+  state.schedulerStatus = { state: "ready", revision: 3, schedules: 3, enabled: 3, queued: 0, active: false };
 
   const samples = [
     [1, 1, { Power: 1, Mode: 0, Speed: 2, SetTemp: 23, Temp: 24.5, Blinds: 1, Blok: 0, Alarm: 0, AlarmCode: 0, Status: 1 }],
@@ -1097,6 +1619,46 @@ elements.setTempCommand.addEventListener("keydown", (event) => {
 elements.detailsCloseButton.addEventListener("click", closeDetails);
 elements.scheduleButton.addEventListener("click", () => setScheduleOpen(!state.scheduleOpen));
 elements.scheduleCloseButton.addEventListener("click", () => setScheduleOpen(false));
+elements.scheduleNewButton.addEventListener("click", openNewSchedule);
+elements.scheduleBackButton.addEventListener("click", returnToScheduleList);
+elements.scheduleDuplicateButton.addEventListener("click", duplicateCurrentSchedule);
+elements.scheduleSelectAllButton.addEventListener("click", () => {
+  if (!state.scheduleDraft) return;
+  visibleScheduleFans().forEach((fan) => setScheduleTarget(state.scheduleDraft, fan.bus, fan.address, true));
+  state.scheduleDirty = true;
+  renderScheduleTargetList();
+  renderMarkers();
+  updateScheduleEditorButtons();
+});
+elements.scheduleClearTargetsButton.addEventListener("click", () => {
+  if (!state.scheduleDraft) return;
+  state.scheduleDraft.targets = [];
+  state.scheduleDirty = true;
+  renderScheduleTargetList();
+  renderMarkers();
+  updateScheduleEditorButtons();
+});
+elements.scheduleSaveButton.addEventListener("click", saveCurrentSchedule);
+elements.scheduleDeleteButton.addEventListener("click", deleteCurrentSchedule);
+elements.scheduleRunButton.addEventListener("click", runCurrentSchedule);
+[
+  elements.scheduleNameInput,
+  elements.scheduleEnabledInput,
+  elements.scheduleKindInput,
+  elements.scheduleTimeInput,
+  elements.scheduleDateInput,
+  elements.schedulePowerEnabled,
+  elements.schedulePowerValue,
+  elements.scheduleModeEnabled,
+  elements.scheduleModeValue,
+  elements.scheduleSpeedEnabled,
+  elements.scheduleSpeedValue,
+  elements.scheduleSetTempEnabled,
+  elements.scheduleSetTempValue,
+  ...document.querySelectorAll("[data-schedule-day]"),
+].forEach((input) => {
+  input.addEventListener(input === elements.scheduleNameInput ? "input" : "change", updateScheduleDraftFromInputs);
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeAllDrawers();
@@ -1153,6 +1715,11 @@ if (new URLSearchParams(window.location.search).get("demo") === "1") {
   });
   state.client.subscribe("/mdvwb/dashboard/config");
   state.client.subscribe("/mdvwb/dashboard/status");
+  state.client.subscribe("/mdvwb/schedules/config");
+  state.client.subscribe("/mdvwb/schedules/status");
+  state.client.subscribe("/mdvwb/schedules/config/result");
+  state.client.subscribe("/mdvwb/schedules/+/result");
+  state.client.subscribe("/mdvwb/scheduler/status");
   state.client.subscribe("/devices/+/controls/+");
   state.client.onConnect = () => setConnection(true);
   state.client.onDisconnect = () => setConnection(false);

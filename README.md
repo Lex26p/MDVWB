@@ -16,7 +16,6 @@ Current documented version: **1.2.0**.
 - shared JSON bus configuration;
 - independent revisioned dashboard configuration over MQTT;
 - systemd service synchronization through `mdvwb-manager`;
-- independent `mdvwb-scheduler` execution of weekly and one-time schedules;
 - per-bus start, stop, restart and status;
 - per-bus device discovery;
 - static offline web configuration interface;
@@ -36,14 +35,9 @@ Mosquitto
         +-- mdvwb-manager.service
         |      |
         |      +-- /etc/mdvwb/buses.json
-        |      +-- /etc/mdvwb/dashboard.json
-        |      +-- /etc/mdvwb/schedules.json
         |      +-- /etc/default/mdvwb-N
         |      +-- mdvwb@N.service control
         |      `-- discovery for a selected bus
-        |
-        +-- mdvwb-scheduler.service
-        |      `-- schedule time + /on1 commands + factual confirmation
         |
         +-- mdvwb@1.service --> MDVWB --> RS-485 bus 1
         +-- mdvwb@2.service --> MDVWB --> RS-485 bus 2
@@ -103,18 +97,6 @@ Dashboard configuration is stored independently:
 The manager creates it on first start and exposes retained MQTT configuration
 with optimistic revision protection. Saving the dashboard does not restart bus
 processes.
-
-Schedule configuration is stored in:
-
-```text
-/etc/mdvwb/schedules.json
-```
-
-`mdvwb-scheduler.service` executes enabled weekly and one-time schedules using
-the controller local time. It publishes individual non-retained `/on1` commands
-and waits up to 10 seconds for factual base-topic confirmation. Automatic
-execution state is persisted in `/var/lib/mdvwb/scheduler-state.tsv`, preventing
-a restart in the same minute from running the same schedule twice.
 
 ## Fan-coil MQTT contract
 
@@ -254,9 +236,7 @@ It also installs the manager, systemd units and static web files, and migrates s
 /usr/local/bin/MDVWB --self-test
 /usr/local/bin/mdvwb-manager validate /etc/mdvwb/buses.json
 /usr/local/bin/mdvwb-manager summary /etc/mdvwb/buses.json
-/usr/local/bin/mdvwb-scheduler --help
 systemctl status mdvwb-manager.service --no-pager
-systemctl status mdvwb-scheduler.service --no-pager
 systemctl list-units 'mdvwb@*.service' --all --no-pager
 ```
 
@@ -343,6 +323,6 @@ Public links select a panel without exposing an admin selector:
 The dashboard editor keeps the 1% grid switch inside **Panel settings**. The editor header contains no zoom controls; wheel input over the map changes only the temporary editor preview scale. The saved opening scale remains the explicit setting in the drawer. Marker rotation is no longer exposed or rendered; legacy `rotation` values are accepted for compatibility and normalized to zero on the next save.
 
 
-## Schedule configuration backend
+## Schedules
 
-The manager owns `/etc/mdvwb/schedules.json` and exposes retained configuration/status plus non-retained save and manual-run commands under `/mdvwb/schedules/...`. Weekly and one-time schedules store a panel ID, explicit individual bus/address targets, local controller time and opt-in Power/Mode/Speed/SetTemp actions. Saves use optimistic revision control and reject targets that are missing from `buses.json` or the selected visible dashboard panel. See [`docs/schedules-config.md`](docs/schedules-config.md). Actual timed execution is introduced by the separate scheduler service in the next step.
+The manager owns `/etc/mdvwb/schedules.json`, while `mdvwb-scheduler.service` executes weekly and one-time schedules independently of the browser. The `/fancoils/` right-side schedule drawer lists only schedules belonging to the current `?panel=<id>` URL. Users can create, copy, enable, delete and manually run schedules, select targets directly on the floor plan, and opt in to Power, Mode, Speed and SetTemp actions independently. Saves use the retained configuration revision and non-retained `/mdvwb/schedules/config/set`; manual runs use `/mdvwb/schedules/<id>/run`. See [`docs/schedules-config.md`](docs/schedules-config.md).

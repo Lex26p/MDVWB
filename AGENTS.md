@@ -943,12 +943,11 @@ The dashboard editor keeps the 1% grid switch inside **Panel settings**. The edi
 - Retained save/run commands are forbidden. Configuration and status are retained; operation events/results are non-retained.
 
 
-## Scheduler execution invariant
+## User schedule editor invariant
 
-- `mdvwb-scheduler` is the only component that converts schedule time or `/execute` events into fan `/on1` commands.
-- Use controller local time; weekly days are Monday=1 through Sunday=7.
-- Persist automatic execution minute before queuing commands so restart in the same minute cannot duplicate a run.
-- Manual execution remains allowed when `enabled=false`; automatic execution does not.
-- Publish Mode, Speed, SetTemp, then Power, each non-retained and individually addressed.
-- A run completes only after matching factual base topics confirm every requested value; default timeout is 10 seconds.
-- Never use broadcast, retained commands, C3 replies, or optimistic state as confirmation.
+- The `/fancoils/` schedule drawer must list only schedules whose `panelId` matches the current public panel URL.
+- Schedule target selection is performed on the existing map markers; do not add a separate technical bus/address picker as the primary workflow.
+- Saves are full schema-version-1 configuration transactions using the last retained `revision`. Never overwrite other panels' schedules or publish retained write commands.
+- Power, Mode, Speed and SetTemp remain independent opt-in actions. At least one target and one action are required.
+- Manual run is available only for a persisted, unchanged schedule and uses non-retained `/mdvwb/schedules/<id>/run`.
+- The browser never performs timed commands itself. `mdvwb-scheduler.service` remains the sole executor so schedules survive browser closure and controller restart.
