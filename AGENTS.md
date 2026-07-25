@@ -822,20 +822,153 @@ When changing deployment:
 - keep ARM64/Bullseye compatibility;
 - do not require internet on the target controller for the offline path.
 
-## 23. Collaboration constraints
+## 23. Collaboration workflow with the project owner
 
-The project owner prefers incremental archive-based development on Windows.
+This section is mandatory for any AI agent working with the project owner. The
+project is developed incrementally through reviewable ZIP archives and Git
+commits. Do not replace this workflow with patches, background work, or an
+unreviewed large rewrite.
 
-For implementation steps:
+### 23.1 Interaction sequence
 
-- provide a ZIP archive;
-- use one-line PowerShell commands;
-- group commands by unpack, build/run, verification, and Git;
-- avoid helper apply scripts and unnecessary preflight checks;
-- create a local Git commit after every implementation step and require its hash before continuing;
-- do not trigger ARM64 CI until the final integration checkpoint;
-- use Git/CI only when an integrated checkpoint or new ARM64 artifact is required;
-- keep architecture compact and avoid unnecessary infrastructure.
+1. The project owner describes the requested change or the desired result.
+2. Read the request carefully and inspect the current repository when the
+   implementation depends on existing code or documentation.
+3. Ask additional questions only when the missing answer materially affects the
+   implementation. Recommendations and safer alternatives may be proposed at
+   any point.
+4. Before implementation, create a roadmap of reasonably sized steps. A step
+   must be cohesive and testable: not so small that it produces no meaningful
+   result, and not so large that several independent subsystems are changed at
+   once.
+5. The number of steps is chosen by the agent and may be changed later when new
+   dependencies, risks, or test results are discovered. Explain material roadmap
+   changes to the project owner.
+6. Implement only one step at a time.
+7. After each step, wait for either:
+   - the Git commit hash created by the project owner; or
+   - build/test output, an error report, or requested corrections.
+8. When a hash is provided, verify the commit in the current GitHub repository
+   before starting the next step. The verified repository state becomes the new
+   baseline.
+9. When an error or correction is provided instead of a hash, remain on the
+   current step and issue a corrected archive or instructions. Do not advance the
+   roadmap until the current step is accepted.
+
+### 23.2 Source-of-truth rules
+
+- The GitHub repository is the source of the current project files.
+- Use the latest commit hash confirmed by the project owner as the development
+  baseline. Do not silently work from an older cached copy.
+- Read only the files needed for the current step, but inspect all affected
+  contracts and tests before changing cross-component behavior.
+- Do not claim that files were applied, committed, pushed, built, or tested
+  unless that result was actually verified.
+- Preserve unrelated user changes and avoid broad formatting-only rewrites.
+
+### 23.3 Required structure of every implementation step
+
+Each step response should contain only the sections that are useful for that
+step, in this order:
+
+1. **Step summary**
+   - step number and short title;
+   - how many planned steps remain;
+   - concise goal and affected subsystem.
+2. **Archive**
+   - a ZIP archive containing the complete ready-to-use changed and new files;
+   - repository-relative directory structure must be preserved.
+3. **Unpack/copy commands**
+   - one copyable PowerShell block that extracts the archive directly over the
+     local project.
+4. **Build, run, and test commands**
+   - one copyable PowerShell block when the step needs compilation, execution, or
+     tests;
+   - omit this section when it adds no value, for example for a documentation-only
+     step.
+5. **Expected result / checks**
+   - only the meaningful behavior, output, or hardware checks required for this
+     step;
+   - do not add a generic checklist when there is nothing useful to verify.
+6. **Git commands**
+   - one copyable PowerShell block containing the required `git add`, `git commit`,
+     `git push`, and `git rev-parse HEAD` commands.
+
+### 23.4 Archive rules
+
+- Archives must contain complete final files, not unified diffs or patch files.
+- Do not use `.patch`, `git apply`, `apply.ps1`, or another helper application
+  script unless the project owner explicitly requests that format for a specific
+  step.
+- Preserve repository-relative paths, for example:
+
+  ```text
+  CMakeLists.txt
+  src/driver/mdv_driver.cpp
+  src/scheduler/mdvwb_scheduler.cpp
+  tests/scheduler/mdvwb_scheduler_test.cpp
+  ```
+
+- Include only files added or changed by the current step. Do not package the
+  whole repository or unrelated generated files.
+- The archive must be safe to extract directly into:
+
+  ```text
+  C:\Projects\MDVWB
+  ```
+
+- The usual download directory is:
+
+  ```text
+  C:\Users\pereverworkki\Downloads
+  ```
+
+- Before publishing an archive, verify its file list and directory structure.
+
+### 23.5 Command formatting
+
+- The development host is Windows and commands must use PowerShell syntax.
+- Group commands by purpose. Each purpose must be one copyable code block rather
+  than many isolated one-line blocks.
+- Typical groups are:
+  - unpack/copy;
+  - build/run/test;
+  - Git.
+- Multiple commands may appear on separate lines inside the same block so the
+  whole group can be copied with one action.
+- Use exact project and download paths when known.
+- Avoid unnecessary branch, baseline, clean-tree, or other preflight checks.
+- Do not add commands that are unrelated to applying or validating the current
+  step.
+
+### 23.6 Git completion handshake
+
+- Every accepted implementation step ends with a separate local commit and push.
+- The final Git block must print the commit hash with:
+
+  ```text
+  git rev-parse HEAD
+  ```
+
+- The project owner sends that hash back to the agent.
+- The agent verifies the commit contents in GitHub and only then proceeds to the
+  next step.
+- A commit message or hash alone is not proof that the expected files were
+  included; inspect the actual diff.
+- Do not trigger the ARM64 package workflow until an integrated checkpoint or
+  final artifact is required.
+
+### 23.7 Communication style
+
+- Keep explanations practical and tied to the current development decision.
+- Questions are allowed at any point when their answers materially improve
+  correctness or safety.
+- Recommendations are welcome, but distinguish them from requirements already
+  approved by the project owner.
+- Prefer a compact architecture and the minimum number of files needed for the
+  requested behavior.
+- Do not promise background work or a later result. Complete the current step in
+  the current interaction or clearly state what could not be completed.
 
 ## 24. Known historical failure modes
 
