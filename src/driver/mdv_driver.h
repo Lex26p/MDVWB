@@ -2,7 +2,6 @@
 
 #include "mdv_device.h"
 #include "mdv_serial.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -33,6 +32,10 @@ struct DriverResult {
     std::string error;
 };
 
+inline constexpr std::uint32_t kMaxSetCommandAttempts = 3;
+inline constexpr std::uint32_t kMaxBlockCommandAttempts = 3;
+inline constexpr std::size_t kMaxPriorityOperationsBeforePoll = 4;
+
 struct DeviceRuntime {
     explicit DeviceRuntime(std::uint8_t address, std::uint8_t masterId = 0)
         : device(address, masterId)
@@ -45,9 +48,16 @@ struct DeviceRuntime {
     bool blockQueueEntry = false;
     bool confirmQueueEntry = false;
 
+    std::uint64_t setAttemptRevision = 0;
+    std::uint32_t setAttempts = 0;
+    bool setRetryExhausted = false;
+
     bool desiredBlocked = false;
     bool blockPending = false;
     std::uint64_t blockRevision = 0;
+    std::uint64_t blockAttemptRevision = 0;
+    std::uint32_t blockAttempts = 0;
+    bool blockRetryExhausted = false;
 
     std::uint64_t successfulReads = 0;
     std::uint64_t failedReads = 0;
@@ -59,9 +69,10 @@ struct DeviceRuntime {
     std::string lastError;
 };
 
-// Owns the transaction order for one RS-485 line. Exactly one request is sent
-// per call. Confirmation reads have highest priority, then CC/CD, cached C3,
-// and finally the ordinary round-robin C0 poll.
+// Owns the transaction order for one RS-485 line. Confirmation reads have the
+// highest priority, then CC/CD and cached C3. A bounded priority burst is
+// followed by one ordinary round-robin C0 so one unconfirmed device cannot
+// starve all other addresses.
 class MdvDriver {
 public:
     MdvDriver(
@@ -70,14 +81,12 @@ public:
         std::uint8_t masterId = 0);
 
     [[nodiscard]] DriverResult ProcessNext();
-
     void SetPower(std::uint8_t address, bool power);
     void SetMode(std::uint8_t address, Mode mode);
     void SetFanSpeed(std::uint8_t address, FanSpeed speed);
     void SetTemperature(std::uint8_t address, std::uint8_t temperature);
     void SetBlinds(std::uint8_t address, bool enabled);
     void SetBlocked(std::uint8_t address, bool blocked);
-
     [[nodiscard]] bool HasQueuedWork() const noexcept;
     [[nodiscard]] std::size_t DeviceCount() const noexcept;
     [[nodiscard]] std::uint8_t NextPollAddress() const noexcept;
@@ -91,7 +100,8 @@ private:
         DriverOperation operation);
     [[nodiscard]] DriverResult ExecuteSet(DeviceRuntime& runtime);
     [[nodiscard]] DriverResult ExecuteBlock(DeviceRuntime& runtime);
-
+    void ResetSetRetry(DeviceRuntime& runtime) noexcept;
+    void ResetBlockRetry(DeviceRuntime& runtime) noexcept;
     void EnqueueSet(DeviceRuntime& runtime);
     void EnqueueBlock(DeviceRuntime& runtime);
     void EnqueueConfirmation(DeviceRuntime& runtime);
@@ -99,7 +109,6 @@ private:
     [[nodiscard]] DeviceRuntime& PopBlock();
     [[nodiscard]] DeviceRuntime& PopConfirmation();
     [[nodiscard]] DeviceRuntime& NextPollDevice() noexcept;
-
     void MarkReadSuccess(DeviceRuntime& runtime) noexcept;
     void MarkReadFailure(DeviceRuntime& runtime, std::string error);
     void MarkSetSuccess(DeviceRuntime& runtime) noexcept;
@@ -111,6 +120,7 @@ private:
     ITransactionTransport& transport_;
     std::uint8_t masterId_ = 0;
     std::size_t nextPollIndex_ = 0;
+    std::size_t priorityOperations_ = 0;
     std::deque<std::uint8_t> setQueue_;
     std::deque<std::uint8_t> blockQueue_;
     std::deque<std::uint8_t> confirmationQueue_;

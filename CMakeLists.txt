@@ -164,6 +164,15 @@ add_executable(mdvwb_mqtt_delivery_test
 )
 target_link_libraries(mdvwb_mqtt_delivery_test PRIVATE mdvwb_mosquitto_transport)
 
+add_executable(mdvwb_driver_fairness_test
+    ${MDVWB_DRIVER_TEST_DIR}/mdv_driver_fairness_test.cpp
+    ${MDVWB_DRIVER_DIR}/mdv_protocol.cpp
+    ${MDVWB_DRIVER_DIR}/mdv_device.cpp
+    ${MDVWB_DRIVER_DIR}/mdv_driver.cpp
+)
+target_compile_features(mdvwb_driver_fairness_test PRIVATE cxx_std_20)
+target_include_directories(mdvwb_driver_fairness_test PRIVATE ${MDVWB_DRIVER_DIR})
+
 add_executable(mdvwb_buses_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_buses_config_test.cpp
 )
@@ -218,6 +227,7 @@ set(MDVWB_PROJECT_TARGETS
     MDVWB
     mdvwb_mosquitto_transport
     mdvwb_mqtt_delivery_test
+    mdvwb_driver_fairness_test
     mdvwb_buses_config
     mdvwb_dashboard_config
     mdvwb_schedules_config
@@ -256,6 +266,7 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${MDVWB_DRIVER_SOURCES})
 enable_testing()
 add_test(NAME mdv_protocol_self_test COMMAND MDVWB --self-test)
 add_test(NAME mdvwb_mqtt_delivery_test COMMAND mdvwb_mqtt_delivery_test)
+add_test(NAME mdvwb_driver_fairness_test COMMAND mdvwb_driver_fairness_test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
 add_test(NAME mdvwb_dashboard_config_test COMMAND mdvwb_dashboard_config_test)
 add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)
