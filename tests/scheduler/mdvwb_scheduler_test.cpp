@@ -6,251 +6,407 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace {
 
-void Require(bool condition, std::string_view message) {
+using mdv::MqttMessage;
+using mdv::MqttPublication;
+using mdvwb::SchedulerClock;
+using mdvwb::SchedulerLocalMinute;
+using mdvwb::SchedulerPaths;
+using mdvwb::SchedulerService;
+
+class FakeClock final : public SchedulerClock {
+public:
+    SchedulerLocalMinute minute{
+        2026,
+        7,
+        20,
+        8,
+        0,
+        1};
+    std::chrono::steady_clock::time_point monotonic{};
+
+    [[nodiscard]] SchedulerLocalMinute LocalMinute() const override
+    {
+        return minute;
+    }
+
+    [[nodiscard]] std::chrono::steady_clock::time_point MonotonicNow() const override
+    {
+        return monotonic;
+    }
+
+    void AdvanceSeconds(int seconds)
+    {
+        monotonic += std::chrono::seconds(seconds);
+    }
+};
+
+class FakeMqttClient final : public mdv::IMqttClient {
+public:
+    void SetMessageHandler(MessageHandler handler) override
+    {
+        handler_ = std::move(handler);
+    }
+
+    void Subscribe(std::string_view filter) override
+    {
+        subscriptions.emplace_back(filter);
+    }
+
+    void Publish(
+        std::string_view topic,
+        std::string_view payload,
+        bool retained) override
+    {
+        publications.push_back(MqttPublication{
+            std::string(topic),
+            std::string(payload),
+            retained});
+    }
+
+    void Inject(std::string topic, std::string payload, bool retained = false)
+    {
+        if (!handler_) {
+            throw std::runtime_error("message handler is not installed");
+        }
+        handler_(MqttMessage{
+            std::move(topic),
+            std::move(payload),
+            retained});
+    }
+
+    [[nodiscard]] std::size_t CountTopic(std::string_view topic) const
+    {
+        std::size_t count = 0;
+        for (const MqttPublication& publication : publications) {
+            if (publication.topic == topic) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    [[nodiscard]] const MqttPublication* LastTopic(std::string_view topic) const
+    {
+        for (auto it = publications.rbegin(); it != publications.rend(); ++it) {
+            if (it->topic == topic) {
+                return &*it;
+            }
+        }
+        return nullptr;
+    }
+
+    MessageHandler handler_;
+    std::vector<std::string> subscriptions;
+    std::vector<MqttPublication> publications;
+};
+
+struct TestEnvironment {
+    std::filesystem::path root;
+    SchedulerPaths paths;
+
+    TestEnvironment()
+    {
+        root = std::filesystem::temp_directory_path() /
+            ("mdvwb-scheduler-test-" + std::to_string(counter++));
+        std::filesystem::create_directories(root);
+        paths.schedules = root / "schedules.json";
+        paths.buses = root / "buses.json";
+        paths.dashboard = root / "dashboard.json";
+        paths.state = root / "scheduler-state.tsv";
+        paths.confirmationTimeoutSeconds = 10;
+        WriteFiles();
+    }
+
+    ~TestEnvironment()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+    }
+
+private:
+    void WriteFiles() const
+    {
+        Write(
+            paths.buses,
+            R"json({
+              "version":1,
+              "buses":[{"id":1,"enabled":true,"port":"/dev/ttyRS485-1","addresses":[1,2]}]
+            })json");
+        Write(
+            paths.dashboard,
+            R"json({
+              "version":2,
+              "revision":1,
+              "defaultPanel":"main",
+              "panels":[{
+                "id":"main","title":"Main",
+                "background":{"file":"","naturalWidth":0,"naturalHeight":0,"defaultScale":1,"fit":"contain"},
+                "fans":[
+                  {"id":"fan-1-1","number":1,"bus":1,"address":1,"label":"A","x":0.2,"y":0.3,"markerScale":1,"rotation":0,"visible":true},
+                  {"id":"fan-1-2","number":2,"bus":1,"address":2,"label":"B","x":0.4,"y":0.5,"markerScale":1,"rotation":0,"visible":true}
+                ]
+              }]
+            })json");
+        Write(
+            paths.schedules,
+            R"json({
+              "version":1,
+              "revision":1,
+              "schedules":[
+                {
+                  "id":"workday-start","name":"Workday start","panelId":"main","enabled":true,
+                  "kind":"weekly","days":[1],"date":"","time":"08:00",
+                  "targets":[{"bus":1,"address":1}],
+                  "actions":{"power":true,"mode":0,"speed":2,"setTemp":23}
+                },
+                {
+                  "id":"manual-off","name":"Manual off","panelId":"main","enabled":false,
+                  "kind":"once","days":[],"date":"2026-07-21","time":"18:00",
+                  "targets":[{"bus":1,"address":2}],"actions":{"power":false}
+                }
+              ]
+            })json");
+    }
+
+    static void Write(
+        const std::filesystem::path& path,
+        std::string_view contents)
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << contents;
+        if (!output) {
+            throw std::runtime_error("cannot write test fixture");
+        }
+    }
+
+    inline static int counter = 0;
+};
+
+void Require(bool condition, std::string_view message)
+{
     if (!condition) {
         throw std::runtime_error(std::string(message));
     }
 }
 
-class TemporaryDirectory final {
-public:
-    TemporaryDirectory() {
-        const auto token = std::chrono::steady_clock::now().time_since_epoch().count();
-        path_ = std::filesystem::temp_directory_path() /
-            ("mdvwb-scheduler-test-" + std::to_string(token));
-        std::filesystem::create_directories(path_);
-    }
-    ~TemporaryDirectory() {
-        std::error_code error;
-        std::filesystem::remove_all(path_, error);
-    }
-    const std::filesystem::path& Path() const { return path_; }
-private:
-    std::filesystem::path path_;
-};
-
-class FakeMqttClient final : public mdv::IMqttClient {
-public:
-    void SetMessageHandler(MessageHandler handler) override { handler_ = std::move(handler); }
-    void Subscribe(std::string_view topicFilter) override {
-        subscriptions.emplace_back(topicFilter);
-    }
-    void Publish(std::string_view topic, std::string_view payload, bool retained) override {
-        publications.push_back({std::string(topic), std::string(payload), retained});
-    }
-    void Inject(std::string topic, std::string payload, bool retained = false) {
-        Require(static_cast<bool>(handler_), "handler must be installed");
-        handler_({std::move(topic), std::move(payload), retained});
-    }
-
-    MessageHandler handler_;
-    std::vector<std::string> subscriptions;
-    std::vector<mdv::MqttPublication> publications;
-};
-
-class FakeClock final : public mdvwb::SchedulerClock {
-public:
-    mdvwb::SchedulerLocalMinute LocalMinute() const override { return minute; }
-    std::chrono::steady_clock::time_point MonotonicNow() const override { return monotonic; }
-
-    mdvwb::SchedulerLocalMinute minute{2026, 7, 27, 8, 0, 1};
-    std::chrono::steady_clock::time_point monotonic{};
-};
-
-void WriteFile(const std::filesystem::path& path, std::string_view content) {
-    std::filesystem::create_directories(path.parent_path());
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    output << content;
-    if (!output) {
-        throw std::runtime_error("cannot write test file");
+void Drain(SchedulerService& service)
+{
+    while (service.ProcessOne()) {
     }
 }
 
-const mdv::MqttPublication* LastPublication(
-    const FakeMqttClient& client,
-    std::string_view topic) {
-    for (auto iterator = client.publications.rbegin();
-         iterator != client.publications.rend(); ++iterator) {
-        if (iterator->topic == topic) {
-            return &*iterator;
-        }
-    }
-    return nullptr;
+std::string FactTopic(int address, std::string_view control)
+{
+    return "/devices/Fan-1_" + std::to_string(address) +
+        "/controls/" + std::string(control);
 }
 
-std::size_t CountTopic(const FakeMqttClient& client, std::string_view topic) {
-    std::size_t count = 0;
-    for (const auto& publication : client.publications) {
-        if (publication.topic == topic) {
-            ++count;
-        }
-    }
-    return count;
+std::string CommandTopic(int address, std::string_view control)
+{
+    return FactTopic(address, control) + "/on1";
 }
 
-struct Fixture {
-    TemporaryDirectory temporary;
-    mdvwb::SchedulerPaths paths;
-    FakeMqttClient client;
+void InjectDesiredWorkdayFacts(
+    FakeMqttClient& mqtt,
+    bool retained)
+{
+    mqtt.Inject(FactTopic(1, "Mode"), "0", retained);
+    mqtt.Inject(FactTopic(1, "Speed"), "2", retained);
+    mqtt.Inject(FactTopic(1, "SetTemp"), "23", retained);
+    mqtt.Inject(FactTopic(1, "Power"), "1", retained);
+}
+
+void TestSentCommandsRequireFreshLiveFacts()
+{
+    TestEnvironment environment;
     FakeClock clock;
-
-    Fixture() {
-        paths.buses = temporary.Path() / "etc/mdvwb/buses.json";
-        paths.dashboard = temporary.Path() / "etc/mdvwb/dashboard.json";
-        paths.schedules = temporary.Path() / "etc/mdvwb/schedules.json";
-        paths.state = temporary.Path() / "var/lib/mdvwb/scheduler-state.tsv";
-        paths.confirmationTimeoutSeconds = 10;
-
-        WriteFile(paths.buses, R"json({
-          "version":1,
-          "buses":[{"id":1,"enabled":true,"port":"/dev/ttyRS485-1","addresses":[1,2]}]
-        })json");
-        WriteFile(paths.dashboard, R"json({
-          "version":2,
-          "revision":0,
-          "defaultPanel":"main",
-          "panels":[{
-            "id":"main","title":"Main",
-            "background":{"file":"","naturalWidth":0,"naturalHeight":0,"defaultScale":1,"fit":"contain"},
-            "fans":[
-              {"id":"fan-1-1","number":1,"bus":1,"address":1,"label":"A","x":0.2,"y":0.3,"markerScale":1,"rotation":0,"visible":true},
-              {"id":"fan-1-2","number":2,"bus":1,"address":2,"label":"B","x":0.4,"y":0.5,"markerScale":1,"rotation":0,"visible":true}
-            ]
-          }]
-        })json");
-        WriteFile(paths.schedules, R"json({
-          "version":1,
-          "revision":3,
-          "schedules":[
-            {
-              "id":"workday-start","name":"Start","enabled":true,"panelId":"main",
-              "kind":"weekly","days":[1,2,3,4,5],"date":"","time":"08:00",
-              "targets":[{"bus":1,"address":1}],
-              "actions":{"power":true,"mode":0,"speed":2,"setTemp":23}
-            },
-            {
-              "id":"manual-off","name":"Manual","enabled":false,"panelId":"main",
-              "kind":"once","days":[],"date":"2026-12-31","time":"18:00",
-              "targets":[{"bus":1,"address":2}],"actions":{"power":false}
-            }
-          ]
-        })json");
-    }
-};
-
-void Drain(mdvwb::SchedulerService& service) {
-    while (service.ProcessOne().has_value()) {
-    }
-}
-
-void TestAutomaticExecutionAndConfirmation() {
-    Fixture fixture;
-    mdvwb::SchedulerService service(fixture.client, fixture.paths, fixture.clock);
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
     service.Start();
 
-    Require(fixture.client.subscriptions.size() == 3U, "scheduler must subscribe to three filters");
-    Require(fixture.client.subscriptions[0] == mdvwb::SchedulerService::ConfigTopic,
-            "wrong config subscription");
-    Require(fixture.client.subscriptions[1] == mdvwb::SchedulerService::ExecuteFilter,
-            "wrong execute subscription");
-    Require(fixture.client.subscriptions[2] == mdvwb::SchedulerService::FactsFilter,
-            "wrong fact subscription");
-
-    service.Tick();
-    Require(service.HasActiveRun(), "due schedule must become active");
-    const std::vector<std::string> expectedTopics = {
-        "/devices/Fan-1_1/controls/Mode/on1",
-        "/devices/Fan-1_1/controls/Speed/on1",
-        "/devices/Fan-1_1/controls/SetTemp/on1",
-        "/devices/Fan-1_1/controls/Power/on1",
-    };
-    for (const auto& topic : expectedTopics) {
-        Require(CountTopic(fixture.client, topic) == 1U, "missing scheduled control command");
-    }
-
-    fixture.client.Inject("/devices/Fan-1_1/controls/Mode", "0", true);
-    fixture.client.Inject("/devices/Fan-1_1/controls/Speed", "2", true);
-    fixture.client.Inject("/devices/Fan-1_1/controls/SetTemp", "23", true);
-    fixture.client.Inject("/devices/Fan-1_1/controls/Power", "1", true);
+    // These values match the schedule but no online Status is known. They must
+    // not suppress commands or confirm them after the run starts.
+    InjectDesiredWorkdayFacts(mqtt, true);
     Drain(service);
-    Require(!service.HasActiveRun(), "run must finish after all facts are confirmed");
-
-    const auto* result = LastPublication(
-        fixture.client, "/mdvwb/schedules/workday-start/result");
-    Require(result != nullptr && result->payload.find("\"state\":\"completed\"") != std::string::npos,
-            "completed result was not published");
 
     service.Tick();
-    Require(CountTopic(fixture.client, expectedTopics[0]) == 1U,
-            "automatic schedule must execute only once in the same minute");
-    Require(std::filesystem::exists(fixture.paths.state), "automatic execution state must be persisted");
+    Require(service.HasActiveRun(), "automatic run should wait for confirmation");
+    Require(mqtt.CountTopic(CommandTopic(1, "Mode")) == 1U,
+        "Mode command should be published");
+    Require(mqtt.CountTopic(CommandTopic(1, "Speed")) == 1U,
+        "Speed command should be published");
+    Require(mqtt.CountTopic(CommandTopic(1, "SetTemp")) == 1U,
+        "SetTemp command should be published");
+    Require(mqtt.CountTopic(CommandTopic(1, "Power")) == 1U,
+        "Power command should be published");
+
+    // A retained replay received after publication is still not a live
+    // confirmation of the physical command.
+    InjectDesiredWorkdayFacts(mqtt, true);
+    Drain(service);
+    Require(service.HasActiveRun(),
+        "retained factual replay must not confirm sent commands");
+
+    // Fresh non-retained factual updates after the commands confirm the run.
+    InjectDesiredWorkdayFacts(mqtt, false);
+    Drain(service);
+    Require(!service.HasActiveRun(),
+        "fresh live facts should complete the run");
+
+    const MqttPublication* result = mqtt.LastTopic(
+        "/mdvwb/schedules/workday-start/result");
+    Require(result != nullptr, "completed result should be published");
+    Require(result->payload.find("\"state\":\"completed\"") != std::string::npos,
+        "result should report completed state");
 }
 
-void TestRestartDoesNotRepeatSameMinute() {
-    Fixture fixture;
+void TestOnlineAlreadySatisfiedSkipsDuplicateCommand()
+{
+    TestEnvironment environment;
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+
+    mqtt.Inject(FactTopic(2, "Status"), "0", true);
+    mqtt.Inject(FactTopic(2, "Power"), "0", true);
+    Drain(service);
+
+    mqtt.Inject("/mdvwb/schedules/manual-off/execute", "1", false);
+    Drain(service);
+
+    Require(!service.HasActiveRun(),
+        "already satisfied online target should complete immediately");
+    Require(mqtt.CountTopic(CommandTopic(2, "Power")) == 0U,
+        "duplicate Power command should not be published");
+
+    const MqttPublication* result = mqtt.LastTopic(
+        "/mdvwb/schedules/manual-off/result");
+    Require(result != nullptr, "manual result should be published");
+    Require(result->payload.find("\"state\":\"completed\"") != std::string::npos,
+        "already satisfied run should complete");
+    Require(result->payload.find("\"commands\":0") != std::string::npos,
+        "already satisfied run should report zero commands");
+}
+
+void TestOfflineTargetFailsEvenWhenOldValueMatches()
+{
+    TestEnvironment environment;
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+
+    mqtt.Inject(FactTopic(2, "Power"), "0", true);
+    mqtt.Inject(FactTopic(2, "Status"), "7", true);
+    Drain(service);
+
+    mqtt.Inject("/mdvwb/schedules/manual-off/execute", "1", false);
+    Drain(service);
+
+    Require(!service.HasActiveRun(), "offline target should not remain active");
+    Require(mqtt.CountTopic(CommandTopic(2, "Power")) == 0U,
+        "offline target must not receive a command");
+
+    const MqttPublication* result = mqtt.LastTopic(
+        "/mdvwb/schedules/manual-off/result");
+    Require(result != nullptr, "offline result should be published");
+    Require(result->payload.find("\"state\":\"failed\"") != std::string::npos,
+        "offline run should fail");
+    Require(result->payload.find("offline") != std::string::npos,
+        "offline failure should explain the reason");
+}
+
+void TestTargetGoingOfflineFailsActiveRun()
+{
+    TestEnvironment environment;
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+
+    service.Tick();
+    Require(service.HasActiveRun(), "automatic run should be active");
+
+    mqtt.Inject(FactTopic(1, "Status"), "7", false);
+    Drain(service);
+
+    Require(!service.HasActiveRun(),
+        "active run should fail when target reports offline");
+    const MqttPublication* result = mqtt.LastTopic(
+        "/mdvwb/schedules/workday-start/result");
+    Require(result != nullptr, "offline transition result should be published");
+    Require(result->payload.find("\"state\":\"failed\"") != std::string::npos,
+        "offline transition should fail the run");
+}
+
+void TestAutomaticRunIsNotRepeatedAfterRestart()
+{
+    TestEnvironment environment;
+    FakeClock firstClock;
+    FakeMqttClient firstMqtt;
     {
-        mdvwb::SchedulerService first(fixture.client, fixture.paths, fixture.clock);
-        first.Start();
-        first.Tick();
+        SchedulerService service(firstMqtt, environment.paths, firstClock);
+        service.Start();
+        service.Tick();
+        Require(service.HasActiveRun(), "first automatic run should start");
     }
 
-    FakeMqttClient secondClient;
-    mdvwb::SchedulerService second(secondClient, fixture.paths, fixture.clock);
-    second.Start();
-    second.Tick();
-    Require(CountTopic(secondClient, "/devices/Fan-1_1/controls/Mode/on1") == 0U,
-            "restart in the same minute must not repeat automatic execution");
+    FakeClock secondClock;
+    FakeMqttClient secondMqtt;
+    SchedulerService restarted(secondMqtt, environment.paths, secondClock);
+    restarted.Start();
+    restarted.Tick();
+
+    Require(!restarted.HasActiveRun(),
+        "restart in same minute must not repeat automatic run");
+    Require(secondMqtt.CountTopic(CommandTopic(1, "Power")) == 0U,
+        "restart should not publish duplicate command");
 }
 
-void TestDisabledScheduleCanRunManually() {
-    Fixture fixture;
-    mdvwb::SchedulerService service(fixture.client, fixture.paths, fixture.clock);
+void TestConfirmationTimeout()
+{
+    TestEnvironment environment;
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
     service.Start();
-    fixture.client.Inject(
-        "/mdvwb/schedules/manual-off/execute",
-        "{\"version\":1,\"scheduleId\":\"manual-off\",\"source\":\"manual\"}");
-    Drain(service);
-    Require(CountTopic(fixture.client, "/devices/Fan-1_2/controls/Power/on1") == 1U,
-            "disabled schedule must support manual execution");
 
-    fixture.client.Inject("/devices/Fan-1_2/controls/Power", "0", true);
-    Drain(service);
-    const auto* result = LastPublication(fixture.client, "/mdvwb/schedules/manual-off/result");
-    Require(result != nullptr && result->payload.find("\"state\":\"completed\"") != std::string::npos,
-            "manual run must publish completed result");
-}
+    service.Tick();
+    Require(service.HasActiveRun(), "automatic run should start");
 
-void TestConfirmationTimeout() {
-    Fixture fixture;
-    mdvwb::SchedulerService service(fixture.client, fixture.paths, fixture.clock);
-    service.Start();
+    clock.AdvanceSeconds(11);
     service.Tick();
-    fixture.clock.monotonic += std::chrono::seconds(11);
-    service.Tick();
-    const auto* result = LastPublication(
-        fixture.client, "/mdvwb/schedules/workday-start/result");
-    Require(result != nullptr && result->payload.find("\"state\":\"timeout\"") != std::string::npos,
-            "unconfirmed run must time out");
+    Require(!service.HasActiveRun(), "run should stop after timeout");
+
+    const MqttPublication* result = mqtt.LastTopic(
+        "/mdvwb/schedules/workday-start/result");
+    Require(result != nullptr, "timeout result should be published");
+    Require(result->payload.find("\"state\":\"timeout\"") != std::string::npos,
+        "result should report timeout");
 }
 
 } // namespace
 
-int main() {
+int main()
+{
     try {
-        TestAutomaticExecutionAndConfirmation();
-        TestRestartDoesNotRepeatSameMinute();
-        TestDisabledScheduleCanRunManually();
+        TestSentCommandsRequireFreshLiveFacts();
+        TestOnlineAlreadySatisfiedSkipsDuplicateCommand();
+        TestOfflineTargetFailsEvenWhenOldValueMatches();
+        TestTargetGoingOfflineFailsActiveRun();
+        TestAutomaticRunIsNotRepeatedAfterRestart();
         TestConfirmationTimeout();
-        std::cout << "MDVWB scheduler tests: OK\n";
+        std::cout << "mdvwb_scheduler_test: OK\n";
         return 0;
-    } catch (const std::exception& error) {
-        std::cerr << "MDVWB scheduler tests: FAILED: " << error.what() << '\n';
+    }
+    catch (const std::exception& error) {
+        std::cerr << "mdvwb_scheduler_test: " << error.what() << '\n';
         return 1;
     }
 }

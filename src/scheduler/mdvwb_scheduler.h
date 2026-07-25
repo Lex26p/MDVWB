@@ -2,9 +2,9 @@
 
 #include "mdv_mqtt.h"
 #include "mdv_schedules_config.h"
-
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <iosfwd>
@@ -24,7 +24,6 @@ struct SchedulerLocalMinute {
     int hour = 0;
     int minute = 0;
     int weekday = 1; // Monday=1 .. Sunday=7
-
     [[nodiscard]] std::string DateText() const;
     [[nodiscard]] std::string TimeText() const;
     [[nodiscard]] std::string Key() const;
@@ -69,7 +68,6 @@ public:
         mdv::IMqttClient& client,
         SchedulerPaths paths,
         SchedulerClock& clock);
-
     void Start();
     [[nodiscard]] std::optional<SchedulerProcessResult> ProcessOne();
     void Tick();
@@ -96,9 +94,16 @@ private:
         std::string minuteKey;
     };
 
+    struct LatestFact {
+        std::string payload;
+        std::uint64_t sequence = 0;
+        bool retained = false;
+    };
+
     struct ExpectedFact {
         std::string key;
         std::string expected;
+        std::uint64_t afterSequence = 0;
         bool confirmed = false;
     };
 
@@ -120,17 +125,22 @@ private:
     [[nodiscard]] SchedulerProcessResult ProcessFact(
         std::string_view key,
         const mdv::MqttMessage& message);
-
     void ReloadFromDisk(bool force);
     void ValidateSelected(const ScheduleEntry& schedule) const;
     void QueueAutomaticSchedules(const SchedulerLocalMinute& minute);
     void QueueRun(const ScheduleEntry& schedule, std::string source, std::string minuteKey);
     void StartNextRun();
     void PublishCommands(ActiveRun& run);
-    void UpdateConfirmation(std::string_view key, std::string_view payload);
+    void UpdateConfirmation(
+        std::string_view key,
+        std::string_view payload,
+        std::uint64_t sequence,
+        bool retained);
+    [[nodiscard]] bool IsOfflineStatusForActive(
+        std::string_view key,
+        std::string_view payload) const;
     void CompleteActiveIfReady();
     void FailActive(std::string_view state, std::string_view message);
-
     void LoadState();
     void SaveState() const;
     void PruneState();
@@ -140,7 +150,6 @@ private:
         bool success,
         std::string_view state,
         std::string_view message) const;
-
     [[nodiscard]] static bool IsDue(
         const ScheduleEntry& schedule,
         const SchedulerLocalMinute& minute);
@@ -158,7 +167,8 @@ private:
     std::deque<IncomingMessage> inbox_;
     std::deque<QueuedRun> runQueue_;
     std::optional<ActiveRun> active_;
-    std::map<std::string, std::string> latestFacts_;
+    std::map<std::string, LatestFact> latestFacts_;
+    std::uint64_t factSequence_ = 0;
     std::map<std::string, std::string> lastAutomaticMinute_;
     SchedulesConfig schedules_;
     std::optional<std::filesystem::file_time_type> schedulesWriteTime_;
