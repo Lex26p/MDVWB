@@ -3,14 +3,12 @@
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
-
 #if defined(MDVWB_HAS_MOSQUITTO)
 #include <mosquitto.h>
 #endif
 
 namespace mdv {
 namespace {
-
 void ValidateOptions(const MqttConnectionOptions& options)
 {
     if (options.host.empty()) {
@@ -33,7 +31,6 @@ void ValidateOptions(const MqttConnectionOptions& options)
         throw std::invalid_argument("MQTT password requires a username");
     }
 }
-
 #if defined(MDVWB_HAS_MOSQUITTO)
 
 class MosquittoLibrary final {
@@ -53,13 +50,11 @@ public:
         mosquitto_lib_cleanup();
     }
 };
-
 MosquittoLibrary& Library()
 {
     static MosquittoLibrary library;
     return library;
 }
-
 #endif
 
 } // namespace
@@ -80,7 +75,6 @@ MosquittoMqttClient::~MosquittoMqttClient()
 {
     Stop();
 }
-
 void MosquittoMqttClient::Start()
 {
     {
@@ -89,7 +83,6 @@ void MosquittoMqttClient::Start()
             return;
         }
     }
-
 #if defined(MDVWB_HAS_MOSQUITTO)
     (void)Library();
 
@@ -97,7 +90,6 @@ void MosquittoMqttClient::Start()
     if (client == nullptr) {
         throw std::runtime_error("mosquitto_new failed");
     }
-
     mosquitto_connect_callback_set(
         client,
         [](mosquitto*, void* userData, int resultCode) {
@@ -120,7 +112,6 @@ void MosquittoMqttClient::Start()
                 message->payloadlen,
                 message->retain);
         });
-
     if (!options_.username.empty()) {
         const auto result = mosquitto_username_pw_set(
             client,
@@ -133,7 +124,6 @@ void MosquittoMqttClient::Start()
                 mosquitto_strerror(result));
         }
     }
-
     auto result = mosquitto_reconnect_delay_set(
         client,
         options_.reconnectDelaySeconds,
@@ -145,7 +135,6 @@ void MosquittoMqttClient::Start()
             std::string("mosquitto_reconnect_delay_set failed: ") +
             mosquitto_strerror(result));
     }
-
     {
         std::lock_guard lock(mutex_);
         implementation_->client = client;
@@ -153,7 +142,6 @@ void MosquittoMqttClient::Start()
         connected_ = false;
         lastError_.clear();
     }
-
     result = mosquitto_connect_async(
         client,
         options_.host.c_str(),
@@ -170,7 +158,6 @@ void MosquittoMqttClient::Start()
             std::string("mosquitto_connect_async failed: ") +
             mosquitto_strerror(result));
     }
-
     result = mosquitto_loop_start(client);
     if (result != MOSQ_ERR_SUCCESS) {
         {
@@ -188,7 +175,6 @@ void MosquittoMqttClient::Start()
         "libmosquitto support is not available in this build");
 #endif
 }
-
 void MosquittoMqttClient::Stop() noexcept
 {
 #if defined(MDVWB_HAS_MOSQUITTO)
@@ -203,7 +189,6 @@ void MosquittoMqttClient::Stop() noexcept
         client = implementation_->client;
         implementation_->client = nullptr;
     }
-
     if (client != nullptr) {
         mosquitto_disconnect(client);
         mosquitto_loop_stop(client, true);
@@ -230,7 +215,6 @@ bool MosquittoMqttClient::IsConnected() const noexcept
     std::lock_guard lock(mutex_);
     return connected_;
 }
-
 std::string MosquittoMqttClient::LastError() const
 {
     std::lock_guard lock(mutex_);
@@ -248,7 +232,6 @@ std::size_t MosquittoMqttClient::PendingPublicationCount() const
     std::lock_guard lock(mutex_);
     return pendingPublications_.size();
 }
-
 void MosquittoMqttClient::SetMessageHandler(MessageHandler handler)
 {
     std::lock_guard lock(mutex_);
@@ -260,7 +243,6 @@ void MosquittoMqttClient::Subscribe(std::string_view topicFilter)
     if (topicFilter.empty()) {
         throw std::invalid_argument("MQTT subscription topic cannot be empty");
     }
-
     std::string topic(topicFilter);
 #if defined(MDVWB_HAS_MOSQUITTO)
     mosquitto* client = nullptr;
@@ -277,7 +259,6 @@ void MosquittoMqttClient::Subscribe(std::string_view topicFilter)
         client = implementation_->client;
 #endif
     }
-
 #if defined(MDVWB_HAS_MOSQUITTO)
     if (connected && client != nullptr) {
         const auto result = mosquitto_subscribe(client, nullptr, topic.c_str(), 0);
@@ -291,7 +272,6 @@ void MosquittoMqttClient::Subscribe(std::string_view topicFilter)
     (void)connected;
 #endif
 }
-
 void MosquittoMqttClient::Publish(
     std::string_view topic,
     std::string_view payload,
@@ -306,23 +286,26 @@ void MosquittoMqttClient::Publish(
         .payload = std::string(payload),
         .retained = retained,
     };
-
 #if defined(MDVWB_HAS_MOSQUITTO)
     mosquitto* client = nullptr;
 #endif
-    bool connected = false;
+    bool canPublish = false;
     {
         std::lock_guard lock(mutex_);
-        connected = connected_;
 #if defined(MDVWB_HAS_MOSQUITTO)
         client = implementation_->client;
+        canPublish = connected_ && client != nullptr;
 #endif
-        if (!connected) {
-            pendingPublications_[publication.topic] = std::move(publication);
+        if (!canPublish) {
+            if (publication.retained) {
+                pendingPublications_[publication.topic] = std::move(publication);
+            } else {
+                lastError_ =
+                    "MQTT non-retained publication was dropped because the client is disconnected";
+            }
             return;
         }
     }
-
 #if defined(MDVWB_HAS_MOSQUITTO)
     const auto result = mosquitto_publish(
         client,
@@ -335,17 +318,17 @@ void MosquittoMqttClient::Publish(
     if (result != MOSQ_ERR_SUCCESS) {
         {
             std::lock_guard lock(mutex_);
-            pendingPublications_[publication.topic] = publication;
+            if (publication.retained) {
+                pendingPublications_[publication.topic] = publication;
+            }
+            lastError_ = std::string("mosquitto_publish failed: ") +
+                mosquitto_strerror(result);
         }
-        SetError(
-            std::string("mosquitto_publish failed: ") +
-            mosquitto_strerror(result));
     }
 #else
-    (void)connected;
+    (void)canPublish;
 #endif
 }
-
 void MosquittoMqttClient::SetError(std::string error)
 {
     std::lock_guard lock(mutex_);
@@ -364,7 +347,6 @@ void MosquittoMqttClient::HandleConnected(int resultCode) noexcept
 #else
     (void)resultCode;
 #endif
-
     {
         std::lock_guard lock(mutex_);
         connected_ = true;
@@ -381,7 +363,6 @@ void MosquittoMqttClient::HandleDisconnected(int resultCode) noexcept
         lastError_ = "MQTT connection lost with code " + std::to_string(resultCode);
     }
 }
-
 void MosquittoMqttClient::HandleMessage(
     const char* topic,
     const void* payload,
@@ -401,7 +382,6 @@ void MosquittoMqttClient::HandleMessage(
     if (!handler) {
         return;
     }
-
     try {
         MqttMessage message;
         message.topic = topic;
@@ -416,7 +396,6 @@ void MosquittoMqttClient::HandleMessage(
         // Never allow exceptions to cross the C callback boundary.
     }
 }
-
 void MosquittoMqttClient::FlushAfterConnect() noexcept
 {
 #if defined(MDVWB_HAS_MOSQUITTO)
@@ -430,11 +409,12 @@ void MosquittoMqttClient::FlushAfterConnect() noexcept
         publications.reserve(pendingPublications_.size());
         for (const auto& [topic, publication] : pendingPublications_) {
             (void)topic;
-            publications.push_back(publication);
+            if (publication.retained) {
+                publications.push_back(publication);
+            }
         }
         pendingPublications_.clear();
     }
-
     if (client == nullptr) {
         return;
     }
@@ -447,7 +427,6 @@ void MosquittoMqttClient::FlushAfterConnect() noexcept
                 mosquitto_strerror(result));
         }
     }
-
     for (const auto& publication : publications) {
         const auto result = mosquitto_publish(
             client,
@@ -456,7 +435,7 @@ void MosquittoMqttClient::FlushAfterConnect() noexcept
             static_cast<int>(publication.payload.size()),
             publication.payload.data(),
             0,
-            publication.retained);
+            true);
         if (result != MOSQ_ERR_SUCCESS) {
             std::lock_guard lock(mutex_);
             pendingPublications_[publication.topic] = publication;
@@ -466,5 +445,4 @@ void MosquittoMqttClient::FlushAfterConnect() noexcept
     }
 #endif
 }
-
 } // namespace mdv

@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.18)
 project(MDVWB VERSION 1.2.0 LANGUAGES CXX)
 
 set(MDVWB_DRIVER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/driver")
+set(MDVWB_DRIVER_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/driver")
 set(MDVWB_MANAGER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/manager")
 set(MDVWB_MANAGER_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/manager")
 set(MDVWB_SCHEDULER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/scheduler")
@@ -158,6 +159,11 @@ add_executable(mdvwb-scheduler
 )
 target_link_libraries(mdvwb-scheduler PRIVATE mdvwb_scheduler)
 
+add_executable(mdvwb_mqtt_delivery_test
+    ${MDVWB_DRIVER_TEST_DIR}/mdv_mqtt_delivery_test.cpp
+)
+target_link_libraries(mdvwb_mqtt_delivery_test PRIVATE mdvwb_mosquitto_transport)
+
 add_executable(mdvwb_buses_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_buses_config_test.cpp
 )
@@ -211,6 +217,7 @@ target_link_libraries(mdvwb_scheduler_test PRIVATE mdvwb_scheduler)
 set(MDVWB_PROJECT_TARGETS
     MDVWB
     mdvwb_mosquitto_transport
+    mdvwb_mqtt_delivery_test
     mdvwb_buses_config
     mdvwb_dashboard_config
     mdvwb_schedules_config
@@ -248,6 +255,7 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${MDVWB_DRIVER_SOURCES})
 
 enable_testing()
 add_test(NAME mdv_protocol_self_test COMMAND MDVWB --self-test)
+add_test(NAME mdvwb_mqtt_delivery_test COMMAND mdvwb_mqtt_delivery_test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
 add_test(NAME mdvwb_dashboard_config_test COMMAND mdvwb_dashboard_config_test)
 add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)

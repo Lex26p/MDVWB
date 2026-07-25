@@ -1,7 +1,6 @@
 #pragma once
 
 #include "mdv_mqtt.h"
-
 #include <cstddef>
 #include <memory>
 #include <mutex>
@@ -22,17 +21,15 @@ struct MqttConnectionOptions {
     unsigned int reconnectDelaySeconds = 1;
     unsigned int reconnectDelayMaxSeconds = 10;
 };
-
 // Real MQTT transport backed by libmosquitto. CMake enables the network part
 // automatically when both mosquitto.h and the mosquitto library are available.
-// Before the connection is ready, subscriptions are remembered and only the
-// latest publication for every topic is retained in memory. They are flushed
-// after a successful reconnect.
+// Before the connection is ready, subscriptions and retained states are
+// remembered and flushed after reconnect. Non-retained events and commands are
+// never queued because replaying them later could perform stale actions.
 class MosquittoMqttClient final : public IMqttClient {
 public:
     explicit MosquittoMqttClient(MqttConnectionOptions options = {});
     ~MosquittoMqttClient() override;
-
     MosquittoMqttClient(const MosquittoMqttClient&) = delete;
     MosquittoMqttClient& operator=(const MosquittoMqttClient&) = delete;
 
@@ -44,7 +41,6 @@ public:
     [[nodiscard]] std::string LastError() const;
     [[nodiscard]] std::size_t SubscriptionCount() const;
     [[nodiscard]] std::size_t PendingPublicationCount() const;
-
     void SetMessageHandler(MessageHandler handler) override;
     void Subscribe(std::string_view topicFilter) override;
     void Publish(
@@ -54,7 +50,6 @@ public:
 
 private:
     struct Implementation;
-
     void SetError(std::string error);
     void HandleConnected(int resultCode) noexcept;
     void HandleDisconnected(int resultCode) noexcept;
@@ -64,7 +59,6 @@ private:
         int payloadLength,
         bool retained) noexcept;
     void FlushAfterConnect() noexcept;
-
     MqttConnectionOptions options_;
     mutable std::mutex mutex_;
     MessageHandler messageHandler_;
