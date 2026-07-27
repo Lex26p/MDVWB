@@ -400,6 +400,18 @@ SchedulerProcessResult SchedulerService::ProcessExecute(
     try {
         ValidateSelected(*schedule);
         QueueRun(schedule->id, schedules_.revision, "manual", {});
+
+        ActiveRun accepted;
+        accepted.run.scheduleId = schedule->id;
+        accepted.run.configRevision = schedules_.revision;
+        accepted.run.source = "manual";
+        accepted.schedule = *schedule;
+        PublishRunResult(
+            accepted,
+            true,
+            "queued",
+            "Schedule accepted by scheduler");
+
         StartNextRun();
         return {
             true,
@@ -450,6 +462,7 @@ SchedulerProcessResult SchedulerService::ProcessFact(
 
 void SchedulerService::Tick()
 {
+    const SchedulerLocalMinute minute = clock_.LocalMinute();
     std::string reloadError;
     if (!ReloadFromDisk(false, &reloadError) && !reloadError.empty()) {
         PublishStatus(
@@ -457,7 +470,7 @@ void SchedulerService::Tick()
             "Cannot reload schedules configuration from disk: " +
                 reloadError);
     }
-    QueueAutomaticSchedules(clock_.LocalMinute());
+    QueueAutomaticSchedules(minute);
     StartNextRun();
     CompleteActiveIfReady();
 
@@ -477,6 +490,12 @@ void SchedulerService::Tick()
     }
 
     StartNextRun();
+
+    if (publishedControllerMinute_ != minute.Key()) {
+        const std::string currentState = statusState_;
+        const std::string currentMessage = statusMessage_;
+        PublishStatus(currentState, currentMessage);
+    }
 }
 
 std::size_t SchedulerService::PendingCount() const
@@ -937,13 +956,23 @@ void SchedulerService::PublishStatus(
     std::string_view state,
     std::string_view message)
 {
+    const SchedulerLocalMinute controllerMinute = clock_.LocalMinute();
+    statusState_ = std::string(state);
+    statusMessage_ = std::string(message);
+    publishedControllerMinute_ = controllerMinute.Key();
+
     std::string payload =
         "{\"state\":\"" + JsonEscape(state) + "\"" +
         ",\"revision\":" + std::to_string(schedules_.revision) +
         ",\"schedules\":" + std::to_string(schedules_.schedules.size()) +
         ",\"enabled\":" + std::to_string(EnabledCount(schedules_)) +
         ",\"queued\":" + std::to_string(runQueue_.size()) +
-        ",\"active\":" + std::string(active_ ? "true" : "false");
+        ",\"active\":" + std::string(active_ ? "true" : "false") +
+        ",\"controllerDate\":\"" + controllerMinute.DateText() + "\"" +
+        ",\"controllerTime\":\"" + controllerMinute.TimeText() + "\"" +
+        ",\"controllerMinute\":\"" + controllerMinute.Key() + "\"" +
+        ",\"controllerWeekday\":" +
+            std::to_string(controllerMinute.weekday);
     if (active_) {
         payload +=
             ",\"activeSchedule\":\"" +
@@ -970,11 +999,14 @@ void SchedulerService::PublishRunResult(
             [](const ExpectedFact& fact) {
                 return fact.confirmed;
             }));
+    const SchedulerLocalMinute controllerMinute = clock_.LocalMinute();
     const std::string payload =
         std::string("{\"success\":") + (success ? "true" : "false") +
         ",\"scheduleId\":\"" + JsonEscape(run.schedule.id) + "\"" +
         ",\"state\":\"" + JsonEscape(state) + "\"" +
         ",\"source\":\"" + JsonEscape(run.run.source) + "\"" +
+        ",\"origin\":\"scheduler\"" +
+        ",\"controllerMinute\":\"" + controllerMinute.Key() + "\"" +
         ",\"commands\":" + std::to_string(run.commandCount) +
         ",\"confirmed\":" + std::to_string(confirmed) +
         ",\"message\":\"" + JsonEscape(message) + "\"}";

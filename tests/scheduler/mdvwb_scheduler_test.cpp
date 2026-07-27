@@ -44,6 +44,11 @@ public:
     {
         monotonic += std::chrono::seconds(seconds);
     }
+
+    void SetMinute(int value)
+    {
+        minute.minute = value;
+    }
 };
 
 class FakeMqttClient final : public mdv::IMqttClient {
@@ -225,6 +230,73 @@ void InjectDesiredWorkdayFacts(
     mqtt.Inject(FactTopic(1, "Speed"), "2", retained);
     mqtt.Inject(FactTopic(1, "SetTemp"), "23", retained);
     mqtt.Inject(FactTopic(1, "Power"), "1", retained);
+}
+
+
+void TestManualRunIsAcknowledgedByScheduler()
+{
+    TestEnvironment environment;
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+
+    service.Tick();
+    Require(service.HasActiveRun(),
+        "automatic schedule should occupy the active slot");
+
+    mqtt.Inject("/mdvwb/schedules/manual-off/execute", "1", false);
+    const auto accepted = service.ProcessOne();
+    Require(accepted.has_value() && accepted->success,
+        "manual schedule should be accepted by scheduler");
+
+    const MqttPublication* result = mqtt.LastTopic(
+        "/mdvwb/schedules/manual-off/result");
+    Require(result != nullptr && !result->retained,
+        "scheduler acknowledgement must be non-retained");
+    Require(result->payload.find("\"state\":\"queued\"") != std::string::npos,
+        "scheduler should publish queued acknowledgement");
+    Require(result->payload.find("\"origin\":\"scheduler\"") != std::string::npos,
+        "scheduler result should identify its origin");
+    Require(result->payload.find("\"source\":\"manual\"") != std::string::npos,
+        "manual acknowledgement should preserve the source");
+    Require(result->payload.find(
+                "\"controllerMinute\":\"2026-07-20T08:00\"") !=
+            std::string::npos,
+        "manual acknowledgement should contain controller time");
+}
+
+void TestStatusPublishesControllerClockEveryMinute()
+{
+    TestEnvironment environment;
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+
+    const MqttPublication* initial = mqtt.LastTopic(SchedulerService::StatusTopic);
+    Require(initial != nullptr && initial->retained,
+        "scheduler status should be retained");
+    Require(initial->payload.find(
+                "\"controllerMinute\":\"2026-07-20T08:00\"") !=
+            std::string::npos,
+        "initial status should contain controller minute");
+    Require(initial->payload.find("\"controllerWeekday\":1") !=
+            std::string::npos,
+        "initial status should contain controller weekday");
+
+    const std::size_t before = mqtt.CountTopic(SchedulerService::StatusTopic);
+    clock.SetMinute(1);
+    service.Tick();
+    Require(mqtt.CountTopic(SchedulerService::StatusTopic) > before,
+        "scheduler should refresh retained status when controller minute changes");
+
+    const MqttPublication* refreshed = mqtt.LastTopic(SchedulerService::StatusTopic);
+    Require(refreshed != nullptr &&
+            refreshed->payload.find(
+                "\"controllerMinute\":\"2026-07-20T08:01\"") !=
+                std::string::npos,
+        "refreshed status should publish the new controller minute");
 }
 
 void TestSentCommandsRequireFreshLiveFacts()
@@ -590,6 +662,8 @@ void TestCompletedOneTimeScheduleIsNotLaterMarkedMissed()
 int main()
 {
     try {
+        TestManualRunIsAcknowledgedByScheduler();
+        TestStatusPublishesControllerClockEveryMinute();
         TestSentCommandsRequireFreshLiveFacts();
         TestOnlineAlreadySatisfiedSkipsDuplicateCommand();
         TestOfflineTargetFailsEvenWhenOldValueMatches();

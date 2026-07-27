@@ -185,6 +185,9 @@ private:
     SchedulesConfig schedules_;
     std::optional<std::filesystem::file_time_type> schedulesWriteTime_;
     std::optional<std::filesystem::file_time_type> rejectedSchedulesWriteTime_;
+    std::string statusState_ = "starting";
+    std::string statusMessage_;
+    std::string publishedControllerMinute_;
     bool started_ = false;
 };
 
