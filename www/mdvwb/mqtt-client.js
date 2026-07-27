@@ -1,5 +1,7 @@
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+const clients = new Set();
+const clientObservers = new Set();
 
 function encodeString(value) {
   const bytes = textEncoder.encode(String(value));
@@ -74,6 +76,14 @@ function readString(bytes, offset) {
   return { value: textDecoder.decode(bytes.subarray(start, end)), next: end };
 }
 
+function observeSet(set, listener) {
+  if (typeof listener !== "function") {
+    throw new TypeError("MQTT observer must be a function");
+  }
+  set.add(listener);
+  return () => set.delete(listener);
+}
+
 export class TinyMqttClient {
   constructor(options = {}) {
     this.url = options.url;
@@ -90,10 +100,54 @@ export class TinyMqttClient {
     this.keepAliveTimer = null;
     this.reconnectTimer = null;
     this.subscriptions = new Set();
+    this.messageListeners = new Set();
+    this.publishListeners = new Set();
+    this.connectionListeners = new Set();
     this.onConnect = () => {};
     this.onDisconnect = () => {};
     this.onMessage = () => {};
     this.onError = () => {};
+
+    clients.add(this);
+    [...clientObservers].forEach((observer) => {
+      try {
+        observer(this);
+      } catch (error) {
+        console.error("MQTT client observer failed", error);
+      }
+    });
+  }
+
+  static observeClients(observer) {
+    const unsubscribe = observeSet(clientObservers, observer);
+    [...clients].forEach((client) => observer(client));
+    return unsubscribe;
+  }
+
+  addMessageListener(listener) {
+    return observeSet(this.messageListeners, listener);
+  }
+
+  addPublishListener(listener) {
+    return observeSet(this.publishListeners, listener);
+  }
+
+  addConnectionListener(listener) {
+    return observeSet(this.connectionListeners, listener);
+  }
+
+  notifyListeners(listeners, ...argumentsList) {
+    [...listeners].forEach((listener) => {
+      try {
+        listener(...argumentsList);
+      } catch (error) {
+        try {
+          this.onError(error);
+        } catch (_ignored) {
+          console.error("MQTT listener failed", error);
+        }
+      }
+    });
   }
 
   connect() {
@@ -158,6 +212,7 @@ export class TinyMqttClient {
     }
     const body = concatenate([encodeString(topic), payloadBytes]);
     this.socket.send(makePacket(header, body));
+    this.notifyListeners(this.publishListeners, String(topic), payload, { retain });
   }
 
   sendConnect() {
@@ -227,6 +282,7 @@ export class TinyMqttClient {
       this.startKeepAlive();
       [...this.subscriptions].forEach((topic) => this.subscribe(topic));
       this.onConnect();
+      this.notifyListeners(this.connectionListeners, { connected: true, wasConnected: false });
       return;
     }
 
@@ -239,7 +295,9 @@ export class TinyMqttClient {
           payloadOffset += 2;
         }
         const payload = textDecoder.decode(body.subarray(payloadOffset));
-        this.onMessage(topic.value, payload, { retained: (header & 0x01) !== 0, qos });
+        const metadata = { retained: (header & 0x01) !== 0, qos };
+        this.onMessage(topic.value, payload, metadata);
+        this.notifyListeners(this.messageListeners, topic.value, payload, metadata);
       } catch (error) {
         this.onError(error);
       }
@@ -253,6 +311,7 @@ export class TinyMqttClient {
     this.socket = null;
     this.incoming = new Uint8Array(0);
     this.onDisconnect(wasConnected);
+    this.notifyListeners(this.connectionListeners, { connected: false, wasConnected });
     if (!this.closedByUser) {
       this.scheduleReconnect();
     }

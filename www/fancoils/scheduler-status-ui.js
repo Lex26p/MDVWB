@@ -1,8 +1,8 @@
 import { TinyMqttClient } from "../mdvwb/mqtt-client.js";
 
 const SCHEDULER_STATUS_TOPIC = "/mdvwb/scheduler/status";
-const SCHEDULE_RESULT_FILTER = "/mdvwb/schedules/+/result";
 const RESULT_TOPIC_PATTERN = /^\/mdvwb\/schedules\/([A-Za-z0-9_-]{1,64})\/result$/;
+const RUN_TOPIC_PATTERN = /^\/mdvwb\/schedules\/([A-Za-z0-9_-]{1,64})\/run$/;
 const TERMINAL_STATES = new Set(["completed", "timeout", "failed", "rejected", "missed"]);
 const WEEKDAYS = Object.freeze({
   1: "Пн",
@@ -177,10 +177,13 @@ export function installSchedulerStatusUi() {
   const clockElement = createClockElement(statusBadge);
   const demo = new URLSearchParams(window.location.search).get("demo") === "1";
   let schedulerStatus = null;
-  let bridgeConnected = false;
+  let mainClient = null;
   let feedbackOverride = null;
   let overrideTimer = 0;
   let safetyTimer = 0;
+  let detachMessage = () => {};
+  let detachPublish = () => {};
+  let detachConnection = () => {};
   const manualRun = {
     active: false,
     scheduleId: "",
@@ -201,7 +204,7 @@ export function installSchedulerStatusUi() {
       return;
     }
     clockElement.textContent = controllerClockLabel(schedulerStatus);
-    clockElement.classList.toggle("scheduler-clock-stale", !bridgeConnected || !schedulerStatus);
+    clockElement.classList.toggle("scheduler-clock-stale", !mainClient?.connected || !schedulerStatus);
     if (schedulerStatus?.message) {
       clockElement.title = String(schedulerStatus.message);
     }
@@ -209,9 +212,13 @@ export function installSchedulerStatusUi() {
 
   const enforceManualState = () => {
     if (manualRun.active) {
-      runButton.disabled = true;
-      runButton.dataset.schedulerWaiting = "true";
-    } else {
+      if (!runButton.disabled) {
+        runButton.disabled = true;
+      }
+      if (runButton.dataset.schedulerWaiting !== "true") {
+        runButton.dataset.schedulerWaiting = "true";
+      }
+    } else if (runButton.dataset.schedulerWaiting) {
       delete runButton.dataset.schedulerWaiting;
     }
     if (feedbackOverride && feedback.textContent !== feedbackOverride.text) {
@@ -239,16 +246,13 @@ export function installSchedulerStatusUi() {
     setOverride(presentation, 7000);
   };
 
-  const beginManualRun = () => {
-    if (runButton.disabled) {
-      return;
-    }
+  const beginManualRun = (scheduleId) => {
     manualRun.active = true;
-    manualRun.scheduleId = "";
+    manualRun.scheduleId = scheduleId;
     manualRun.schedulerConfirmed = false;
     setOverride({
       kind: "info",
-      text: "Запрос ручного запуска отправлен manager. Ожидается подтверждение scheduler…",
+      text: `Запрос запуска «${scheduleId}» отправлен manager. Ожидается подтверждение scheduler…`,
     });
     enforceManualState();
     window.clearTimeout(safetyTimer);
@@ -258,93 +262,104 @@ export function installSchedulerStatusUi() {
       }
       finishManualRun({
         kind: "warning",
-        text: "Подтверждение scheduler не получено. Проверьте MQTT и состояние службы.",
+        text: `Подтверждение scheduler для «${scheduleId}» не получено. Проверьте MQTT и состояние службы.`,
       });
     }, 90000);
   };
 
-  runButton.addEventListener("click", beginManualRun, { capture: true });
+  const processResult = (topic, payload) => {
+    const match = RESULT_TOPIC_PATTERN.exec(String(topic));
+    if (!match || !manualRun.active || match[1] !== manualRun.scheduleId) {
+      return;
+    }
+    const result = parseObject(payload, "результат запуска расписания");
+    const scheduleId = String(result.scheduleId || match[1]);
+    if (scheduleId !== manualRun.scheduleId || (result.source && result.source !== "manual")) {
+      return;
+    }
 
-  const observer = new MutationObserver(enforceManualState);
-  observer.observe(feedback, { childList: true, characterData: true, subtree: true });
-  observer.observe(runButton, { attributes: true, attributeFilter: ["disabled", "data-scheduler-waiting"] });
+    if (result.origin !== "scheduler") {
+      if (result.success === false) {
+        finishManualRun({
+          kind: "error",
+          text: `Manager отклонил ручной запуск: ${result.message || "причина не указана"}.`,
+        });
+      } else if (!manualRun.schedulerConfirmed) {
+        setOverride({
+          kind: "info",
+          text: `Manager принял запуск «${scheduleId}». Ожидается подтверждение непосредственно от scheduler…`,
+        });
+        enforceManualState();
+      }
+      return;
+    }
 
+    manualRun.schedulerConfirmed = true;
+    const presentation = schedulerRunMessage(result);
+    if (presentation.terminal) {
+      finishManualRun(presentation);
+    } else {
+      setOverride(presentation);
+      enforceManualState();
+    }
+  };
+
+  const attachClient = (client) => {
+    if (mainClient || !String(client?.clientId || "").startsWith("mdvwb-fancoils-")) {
+      return;
+    }
+    mainClient = client;
+    detachMessage = client.addMessageListener((topic, payload) => {
+      try {
+        if (topic === SCHEDULER_STATUS_TOPIC) {
+          schedulerStatus = parseObject(payload, "состояние scheduler");
+          renderClock();
+          return;
+        }
+        processResult(topic, payload);
+      } catch (error) {
+        if (manualRun.active) {
+          finishManualRun({ kind: "error", text: error.message });
+        }
+      }
+    });
+    detachPublish = client.addPublishListener((topic) => {
+      const match = RUN_TOPIC_PATTERN.exec(String(topic));
+      if (match) {
+        beginManualRun(match[1]);
+      }
+    });
+    detachConnection = client.addConnectionListener(({ connected }) => {
+      renderClock();
+      if (!connected && manualRun.active) {
+        finishManualRun({
+          kind: "warning",
+          text: `MQTT отключён во время запуска «${manualRun.scheduleId}». Результат мог быть потерян.`,
+        });
+      }
+    });
+    renderClock();
+  };
+
+  // Demo mode completes runs inside the main page and does not publish MQTT
+  // results. Do not install the manual-run bridge or button observers here.
   if (demo) {
     renderClock();
     window.setInterval(renderClock, 30000);
     return;
   }
 
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const client = new TinyMqttClient({
-    url: `${protocol}//${window.location.host}/mqtt`,
-    clientId: `mdvwb-scheduler-status-${Math.random().toString(16).slice(2, 10)}`,
-    keepAliveSeconds: 30,
-    reconnectDelayMs: 2000,
-  });
-  client.subscribe(SCHEDULER_STATUS_TOPIC);
-  client.subscribe(SCHEDULE_RESULT_FILTER);
+  const observer = new MutationObserver(enforceManualState);
+  observer.observe(feedback, { childList: true, characterData: true, subtree: true });
+  // Observe only the native disabled state. Watching our own
+  // data-scheduler-waiting attribute can create a MutationObserver feedback loop.
+  observer.observe(runButton, { attributes: true, attributeFilter: ["disabled"] });
 
-  client.onConnect = () => {
-    bridgeConnected = true;
-    renderClock();
-  };
-  client.onDisconnect = () => {
-    bridgeConnected = false;
-    renderClock();
-  };
-  client.onError = (error) => {
-    clockElement.title = `Не удалось получить время контроллера: ${error.message}`;
-  };
-  client.onMessage = (topic, payload) => {
-    try {
-      if (topic === SCHEDULER_STATUS_TOPIC) {
-        schedulerStatus = parseObject(payload, "состояние scheduler");
-        renderClock();
-        return;
-      }
-
-      const match = RESULT_TOPIC_PATTERN.exec(String(topic));
-      if (!match || !manualRun.active) {
-        return;
-      }
-      const result = parseObject(payload, "результат запуска расписания");
-      const scheduleId = String(result.scheduleId || match[1]);
-      if (manualRun.scheduleId && manualRun.scheduleId !== scheduleId) {
-        return;
-      }
-      manualRun.scheduleId = scheduleId;
-
-      if (result.origin !== "scheduler") {
-        if (result.success === false) {
-          finishManualRun({
-            kind: "error",
-            text: `Manager отклонил ручной запуск: ${result.message || "причина не указана"}.`,
-          });
-        } else if (!manualRun.schedulerConfirmed) {
-          setOverride({
-            kind: "info",
-            text: "Manager принял запрос. Ожидается подтверждение непосредственно от scheduler…",
-          });
-          enforceManualState();
-        }
-        return;
-      }
-
-      manualRun.schedulerConfirmed = true;
-      const presentation = schedulerRunMessage(result);
-      if (presentation.terminal) {
-        finishManualRun(presentation);
-      } else {
-        setOverride(presentation);
-        enforceManualState();
-      }
-    } catch (error) {
-      if (manualRun.active) {
-        finishManualRun({ kind: "error", text: error.message });
-      }
-    }
-  };
-  client.connect();
+  TinyMqttClient.observeClients(attachClient);
+  window.addEventListener("pagehide", () => {
+    detachMessage();
+    detachPublish();
+    detachConnection();
+  }, { once: true });
   renderClock();
 }
