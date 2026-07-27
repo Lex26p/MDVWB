@@ -183,6 +183,12 @@ std::string ActionValue(const std::optional<int>& value)
     return std::to_string(*value);
 }
 
+bool IsStoredAutomaticMarker(std::string_view value)
+{
+    return value.size() == 16U ||
+        (value.size() == 23U && value.rfind("missed:", 0U) == 0U);
+}
+
 } // namespace
 
 std::string SchedulerLocalMinute::DateText() const
@@ -252,7 +258,10 @@ void SchedulerService::Start()
     client_.Subscribe(ExecuteFilter);
     client_.Subscribe(FactsFilter);
     LoadState();
-    ReloadFromDisk(true);
+    std::string reloadError;
+    if (!ReloadFromDisk(true, &reloadError)) {
+        throw SchedulesConfigError(reloadError);
+    }
     started_ = true;
     PublishStatus("ready", "Scheduler started");
 }
@@ -337,28 +346,22 @@ std::optional<SchedulerProcessResult> SchedulerService::ProcessOne()
 SchedulerProcessResult SchedulerService::ProcessConfiguration(
     const mdv::MqttMessage& message)
 {
-    try {
-        SchedulesConfig submitted = ParseSchedulesConfig(message.payload);
-        ValidateScheduleReferences(
-            submitted,
-            LoadBusesConfig(paths_.buses),
-            LoadDashboardCollection(paths_.dashboard));
-        schedules_ = std::move(submitted);
-        PruneState();
-        PublishStatus("ready", "Schedules configuration updated");
-        return {
-            true,
-            "configuration",
-            {},
-            "Schedules configuration updated"};
-    }
-    catch (const std::exception& error) {
+    (void)message;
+    std::string reloadError;
+    if (!ReloadFromDisk(true, &reloadError)) {
         const std::string detail =
-            std::string("Cannot apply schedules configuration: ") +
-            error.what();
+            "Cannot reload schedules configuration from disk: " +
+            reloadError;
         PublishStatus("error", detail);
         return {false, "configuration", {}, detail};
     }
+
+    PublishStatus("ready", "Schedules configuration reloaded from disk");
+    return {
+        true,
+        "configuration",
+        {},
+        "Schedules configuration reloaded from disk"};
 }
 
 SchedulerProcessResult SchedulerService::ProcessExecute(
@@ -367,8 +370,9 @@ SchedulerProcessResult SchedulerService::ProcessExecute(
 {
     if (message.retained) {
         ActiveRun synthetic;
-        synthetic.run.schedule.id = std::string(scheduleId);
+        synthetic.run.scheduleId = std::string(scheduleId);
         synthetic.run.source = "manual";
+        synthetic.schedule.id = std::string(scheduleId);
         PublishRunResult(
             synthetic,
             false,
@@ -386,15 +390,16 @@ SchedulerProcessResult SchedulerService::ProcessExecute(
         const std::string detail =
             "Schedule '" + std::string(scheduleId) + "' does not exist";
         ActiveRun synthetic;
-        synthetic.run.schedule.id = std::string(scheduleId);
+        synthetic.run.scheduleId = std::string(scheduleId);
         synthetic.run.source = "manual";
+        synthetic.schedule.id = std::string(scheduleId);
         PublishRunResult(synthetic, false, "rejected", detail);
         return {false, "execute", std::string(scheduleId), detail};
     }
 
     try {
         ValidateSelected(*schedule);
-        QueueRun(*schedule, "manual", {});
+        QueueRun(schedule->id, schedules_.revision, "manual", {});
         StartNextRun();
         return {
             true,
@@ -406,8 +411,10 @@ SchedulerProcessResult SchedulerService::ProcessExecute(
         const std::string detail =
             std::string("Cannot execute schedule: ") + error.what();
         ActiveRun synthetic;
-        synthetic.run.schedule = *schedule;
+        synthetic.run.scheduleId = schedule->id;
+        synthetic.run.configRevision = schedules_.revision;
         synthetic.run.source = "manual";
+        synthetic.schedule = *schedule;
         PublishRunResult(synthetic, false, "rejected", detail);
         return {false, "execute", std::string(scheduleId), detail};
     }
@@ -443,7 +450,13 @@ SchedulerProcessResult SchedulerService::ProcessFact(
 
 void SchedulerService::Tick()
 {
-    ReloadFromDisk(false);
+    std::string reloadError;
+    if (!ReloadFromDisk(false, &reloadError) && !reloadError.empty()) {
+        PublishStatus(
+            "error",
+            "Cannot reload schedules configuration from disk: " +
+                reloadError);
+    }
     QueueAutomaticSchedules(clock_.LocalMinute());
     StartNextRun();
     CompleteActiveIfReady();
@@ -477,33 +490,55 @@ bool SchedulerService::HasActiveRun() const noexcept
     return active_.has_value();
 }
 
-void SchedulerService::ReloadFromDisk(bool force)
+bool SchedulerService::ReloadFromDisk(
+    bool force,
+    std::string* errorMessage)
 {
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+
     std::error_code error;
     const auto writeTime =
         std::filesystem::last_write_time(paths_.schedules, error);
     if (error) {
-        if (force) {
-            throw SchedulesConfigError(
+        if (force && errorMessage != nullptr) {
+            *errorMessage =
                 "cannot stat schedules configuration '" +
-                paths_.schedules.string() + "'");
+                paths_.schedules.string() + "'";
         }
-        return;
+        return !force;
     }
 
     if (!force && schedulesWriteTime_ &&
         *schedulesWriteTime_ == writeTime) {
-        return;
+        return true;
+    }
+    if (!force && rejectedSchedulesWriteTime_ &&
+        *rejectedSchedulesWriteTime_ == writeTime) {
+        return true;
     }
 
-    SchedulesConfig loaded = LoadSchedulesConfig(paths_.schedules);
-    ValidateScheduleReferences(
-        loaded,
-        LoadBusesConfig(paths_.buses),
-        LoadDashboardCollection(paths_.dashboard));
-    schedules_ = std::move(loaded);
-    schedulesWriteTime_ = writeTime;
-    PruneState();
+    try {
+        SchedulesConfig loaded = LoadSchedulesConfig(paths_.schedules);
+        ValidateScheduleReferences(
+            loaded,
+            LoadBusesConfig(paths_.buses),
+            LoadDashboardCollection(paths_.dashboard));
+        schedules_ = std::move(loaded);
+        schedulesWriteTime_ = writeTime;
+        rejectedSchedulesWriteTime_.reset();
+        lastAutomaticAttemptMinute_.clear();
+        PruneState();
+        return true;
+    }
+    catch (const std::exception& exception) {
+        rejectedSchedulesWriteTime_ = writeTime;
+        if (errorMessage != nullptr) {
+            *errorMessage = exception.what();
+        }
+        return false;
+    }
 }
 
 void SchedulerService::ValidateSelected(
@@ -521,29 +556,72 @@ void SchedulerService::ValidateSelected(
 void SchedulerService::QueueAutomaticSchedules(
     const SchedulerLocalMinute& minute)
 {
+    const std::string minuteKey = minute.Key();
     for (const ScheduleEntry& schedule : schedules_.schedules) {
-        if (!schedule.enabled || !IsDue(schedule, minute)) {
+        if (!schedule.enabled) {
             continue;
         }
 
-        const std::string minuteKey = minute.Key();
+        if (IsMissedOnce(schedule, minute)) {
+            const std::string scheduledKey =
+                schedule.date + "T" + schedule.time;
+            const std::string missedKey = "missed:" + scheduledKey;
+            const auto previous = lastAutomaticMinute_.find(schedule.id);
+            if (previous != lastAutomaticMinute_.end() &&
+                (previous->second == scheduledKey ||
+                 previous->second == missedKey)) {
+                continue;
+            }
+
+            lastAutomaticMinute_[schedule.id] = missedKey;
+            SaveState();
+            ActiveRun synthetic;
+            synthetic.run.scheduleId = schedule.id;
+            synthetic.run.configRevision = schedules_.revision;
+            synthetic.run.source = "automatic";
+            synthetic.run.minuteKey = minuteKey;
+            synthetic.schedule = schedule;
+            PublishRunResult(
+                synthetic,
+                false,
+                "missed",
+                "One-time schedule was missed while the scheduler was not running");
+            continue;
+        }
+
+        if (!IsDue(schedule, minute)) {
+            continue;
+        }
+
         const auto previous = lastAutomaticMinute_.find(schedule.id);
         if (previous != lastAutomaticMinute_.end() &&
             previous->second == minuteKey) {
             continue;
         }
+        const auto attempted = lastAutomaticAttemptMinute_.find(schedule.id);
+        if (attempted != lastAutomaticAttemptMinute_.end() &&
+            attempted->second == minuteKey) {
+            continue;
+        }
 
-        lastAutomaticMinute_[schedule.id] = minuteKey;
-        SaveState();
         try {
             ValidateSelected(schedule);
-            QueueRun(schedule, "automatic", minuteKey);
+            lastAutomaticMinute_[schedule.id] = minuteKey;
+            SaveState();
+            QueueRun(
+                schedule.id,
+                schedules_.revision,
+                "automatic",
+                minuteKey);
         }
         catch (const std::exception& error) {
+            lastAutomaticAttemptMinute_[schedule.id] = minuteKey;
             ActiveRun synthetic;
-            synthetic.run.schedule = schedule;
+            synthetic.run.scheduleId = schedule.id;
+            synthetic.run.configRevision = schedules_.revision;
             synthetic.run.source = "automatic";
             synthetic.run.minuteKey = minuteKey;
+            synthetic.schedule = schedule;
             PublishRunResult(
                 synthetic,
                 false,
@@ -554,12 +632,14 @@ void SchedulerService::QueueAutomaticSchedules(
 }
 
 void SchedulerService::QueueRun(
-    const ScheduleEntry& schedule,
+    std::string_view scheduleId,
+    int configRevision,
     std::string source,
     std::string minuteKey)
 {
     runQueue_.push_back(QueuedRun{
-        schedule,
+        std::string(scheduleId),
+        configRevision,
         std::move(source),
         std::move(minuteKey)});
     PublishStatus("ready", "Schedule queued");
@@ -567,42 +647,81 @@ void SchedulerService::QueueRun(
 
 void SchedulerService::StartNextRun()
 {
-    if (active_ || runQueue_.empty()) {
-        return;
-    }
+    while (!active_ && !runQueue_.empty()) {
+        QueuedRun request = std::move(runQueue_.front());
+        runQueue_.pop_front();
 
-    ActiveRun run;
-    run.run = std::move(runQueue_.front());
-    runQueue_.pop_front();
-    run.deadline = clock_.MonotonicNow() +
-        std::chrono::seconds(paths_.confirmationTimeoutSeconds);
-    active_ = std::move(run);
+        ActiveRun candidate;
+        candidate.run = request;
+        candidate.schedule.id = request.scheduleId;
 
-    try {
-        ValidateSelected(active_->run.schedule);
-        PublishCommands(*active_);
-        PublishRunResult(
-            *active_,
-            true,
-            "executing",
-            active_->commandCount == 0U
-                ? "Requested factual state is already satisfied"
-                : "Commands published; waiting for factual state");
-        PublishStatus(
-            "executing",
-            active_->commandCount == 0U
-                ? "Requested factual state is already satisfied"
-                : "Waiting for factual state confirmation");
-        CompleteActiveIfReady();
-    }
-    catch (const std::exception& error) {
-        FailActive("failed", error.what());
+        const auto reject = [this, &candidate](std::string message) {
+            PublishRunResult(
+                candidate,
+                false,
+                "rejected",
+                message);
+            PublishStatus("warning", message);
+        };
+
+        if (request.configRevision != schedules_.revision) {
+            reject(
+                "Queued schedule configuration changed before execution");
+            continue;
+        }
+
+        const ScheduleEntry* current =
+            FindSchedule(schedules_, request.scheduleId);
+        if (current == nullptr) {
+            reject("Queued schedule no longer exists");
+            continue;
+        }
+        if (request.source == "automatic" && !current->enabled) {
+            candidate.schedule = *current;
+            reject("Queued automatic schedule was disabled before execution");
+            continue;
+        }
+
+        candidate.schedule = *current;
+        try {
+            ValidateSelected(candidate.schedule);
+        }
+        catch (const std::exception& error) {
+            reject(
+                std::string("Queued schedule is no longer valid: ") +
+                error.what());
+            continue;
+        }
+
+        candidate.deadline = clock_.MonotonicNow() +
+            std::chrono::seconds(paths_.confirmationTimeoutSeconds);
+        active_ = std::move(candidate);
+
+        try {
+            PublishCommands(*active_);
+            PublishRunResult(
+                *active_,
+                true,
+                "executing",
+                active_->commandCount == 0U
+                    ? "Requested factual state is already satisfied"
+                    : "Commands published; waiting for factual state");
+            PublishStatus(
+                "executing",
+                active_->commandCount == 0U
+                    ? "Requested factual state is already satisfied"
+                    : "Waiting for factual state confirmation");
+            CompleteActiveIfReady();
+        }
+        catch (const std::exception& error) {
+            FailActive("failed", error.what());
+        }
     }
 }
 
 void SchedulerService::PublishCommands(ActiveRun& run)
 {
-    for (const ScheduleTarget& target : run.run.schedule.targets) {
+    for (const ScheduleTarget& target : run.schedule.targets) {
         const auto status = latestFacts_.find(FactKey(target, "Status"));
         if (status != latestFacts_.end() && status->second.payload == "7") {
             throw std::runtime_error(
@@ -641,31 +760,31 @@ void SchedulerService::PublishCommands(ActiveRun& run)
         ++run.commandCount;
     };
 
-    for (const ScheduleTarget& target : run.run.schedule.targets) {
+    for (const ScheduleTarget& target : run.schedule.targets) {
         // Power is sent last so the final transaction leaves the requested on/off state.
-        if (run.run.schedule.actions.mode) {
+        if (run.schedule.actions.mode) {
             publish(
                 target,
                 "Mode",
-                ActionValue(run.run.schedule.actions.mode));
+                ActionValue(run.schedule.actions.mode));
         }
-        if (run.run.schedule.actions.speed) {
+        if (run.schedule.actions.speed) {
             publish(
                 target,
                 "Speed",
-                ActionValue(run.run.schedule.actions.speed));
+                ActionValue(run.schedule.actions.speed));
         }
-        if (run.run.schedule.actions.setTemp) {
+        if (run.schedule.actions.setTemp) {
             publish(
                 target,
                 "SetTemp",
-                ActionValue(run.run.schedule.actions.setTemp));
+                ActionValue(run.schedule.actions.setTemp));
         }
-        if (run.run.schedule.actions.power) {
+        if (run.schedule.actions.power) {
             publish(
                 target,
                 "Power",
-                ActionValue(run.run.schedule.actions.power));
+                ActionValue(run.schedule.actions.power));
         }
     }
 
@@ -704,7 +823,7 @@ bool SchedulerService::IsOfflineStatusForActive(
         return false;
     }
 
-    for (const ScheduleTarget& target : active_->run.schedule.targets) {
+    for (const ScheduleTarget& target : active_->schedule.targets) {
         if (FactKey(target, "Status") == key) {
             return true;
         }
@@ -766,7 +885,7 @@ void SchedulerService::LoadState()
         }
         const std::string id = line.substr(0U, separator);
         const std::string minuteKey = line.substr(separator + 1U);
-        if (IsSafeId(id) && minuteKey.size() == 16U) {
+        if (IsSafeId(id) && IsStoredAutomaticMarker(minuteKey)) {
             lastAutomaticMinute_[id] = minuteKey;
         }
     }
@@ -799,6 +918,15 @@ void SchedulerService::PruneState()
             ++iterator;
         }
     }
+    for (auto iterator = lastAutomaticAttemptMinute_.begin();
+         iterator != lastAutomaticAttemptMinute_.end();) {
+        if (!validIds.contains(iterator->first)) {
+            iterator = lastAutomaticAttemptMinute_.erase(iterator);
+        }
+        else {
+            ++iterator;
+        }
+    }
 
     if (changed) {
         SaveState();
@@ -819,7 +947,7 @@ void SchedulerService::PublishStatus(
     if (active_) {
         payload +=
             ",\"activeSchedule\":\"" +
-            JsonEscape(active_->run.schedule.id) + "\"";
+            JsonEscape(active_->schedule.id) + "\"";
     }
     if (!message.empty()) {
         payload +=
@@ -844,14 +972,14 @@ void SchedulerService::PublishRunResult(
             }));
     const std::string payload =
         std::string("{\"success\":") + (success ? "true" : "false") +
-        ",\"scheduleId\":\"" + JsonEscape(run.run.schedule.id) + "\"" +
+        ",\"scheduleId\":\"" + JsonEscape(run.schedule.id) + "\"" +
         ",\"state\":\"" + JsonEscape(state) + "\"" +
         ",\"source\":\"" + JsonEscape(run.run.source) + "\"" +
         ",\"commands\":" + std::to_string(run.commandCount) +
         ",\"confirmed\":" + std::to_string(confirmed) +
         ",\"message\":\"" + JsonEscape(message) + "\"}";
     client_.Publish(
-        ResultTopic(run.run.schedule.id),
+        ResultTopic(run.schedule.id),
         payload,
         false);
 }
@@ -870,6 +998,16 @@ bool SchedulerService::IsDue(
                schedule.days.begin(),
                schedule.days.end(),
                minute.weekday) != schedule.days.end();
+}
+
+bool SchedulerService::IsMissedOnce(
+    const ScheduleEntry& schedule,
+    const SchedulerLocalMinute& minute)
+{
+    if (schedule.kind != ScheduleKind::Once) {
+        return false;
+    }
+    return schedule.date + "T" + schedule.time < minute.Key();
 }
 
 std::string SchedulerService::CommandTopic(

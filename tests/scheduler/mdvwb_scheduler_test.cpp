@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -126,6 +127,11 @@ struct TestEnvironment {
     {
         std::error_code error;
         std::filesystem::remove_all(root, error);
+    }
+
+    void WriteSchedules(std::string_view contents) const
+    {
+        Write(paths.schedules, contents);
     }
 
 private:
@@ -391,6 +397,194 @@ void TestConfirmationTimeout()
         "result should report timeout");
 }
 
+
+void TestConfigurationMessageReloadsDiskInsteadOfPayload()
+{
+    TestEnvironment environment;
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+
+    mqtt.Inject(FactTopic(2, "Status"), "0", true);
+    mqtt.Inject(FactTopic(2, "Power"), "1", true);
+    Drain(service);
+
+    mqtt.Inject(
+        SchedulerService::ConfigTopic,
+        R"json({"version":1,"revision":99,"schedules":[]})json",
+        false);
+    const auto configuration = service.ProcessOne();
+    Require(configuration.has_value() && configuration->success,
+        "configuration notification should reload the file");
+
+    mqtt.Inject("/mdvwb/schedules/manual-off/execute", "1", false);
+    Drain(service);
+
+    const MqttPublication* command = mqtt.LastTopic(CommandTopic(2, "Power"));
+    Require(command != nullptr,
+        "disk configuration should still contain manual-off");
+    Require(command->payload == "0",
+        "MQTT configuration payload must not replace the disk source of truth");
+}
+
+void TestInvalidReloadKeepsLastKnownGoodConfiguration()
+{
+    TestEnvironment environment;
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+
+    environment.WriteSchedules("{ invalid json");
+    mqtt.Inject(SchedulerService::ConfigTopic, "{}", false);
+    const auto configuration = service.ProcessOne();
+    Require(configuration.has_value() && !configuration->success,
+        "invalid disk configuration should be rejected");
+    Require(!service.HasActiveRun(),
+        "invalid reload must not create an active run");
+
+    mqtt.Inject(FactTopic(2, "Status"), "0", true);
+    mqtt.Inject(FactTopic(2, "Power"), "1", true);
+    Drain(service);
+    mqtt.Inject("/mdvwb/schedules/manual-off/execute", "1", false);
+    Drain(service);
+
+    const MqttPublication* command = mqtt.LastTopic(CommandTopic(2, "Power"));
+    Require(command != nullptr && command->payload == "0",
+        "last known good configuration should remain executable");
+    const MqttPublication* status = mqtt.LastTopic(SchedulerService::StatusTopic);
+    Require(status != nullptr,
+        "reload failure should publish scheduler status");
+}
+
+void TestQueuedRunIsRejectedAfterConfigurationRevisionChanges()
+{
+    TestEnvironment environment;
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+
+    service.Tick();
+    Require(service.HasActiveRun(),
+        "automatic schedule should hold the active slot");
+
+    mqtt.Inject("/mdvwb/schedules/manual-off/execute", "1", false);
+    Drain(service);
+    Require(service.PendingCount() >= 2U,
+        "manual schedule should wait in the run queue");
+
+    environment.WriteSchedules(
+        R"json({
+          "version":1,
+          "revision":2,
+          "schedules":[{
+            "id":"manual-off","name":"Changed manual off","panelId":"main","enabled":false,
+            "kind":"once","days":[],"date":"2026-07-21","time":"18:00",
+            "targets":[{"bus":1,"address":2}],"actions":{"power":true}
+          }]
+        })json");
+    mqtt.Inject(SchedulerService::ConfigTopic, "configuration changed", false);
+    const auto configuration = service.ProcessOne();
+    Require(configuration.has_value() && configuration->success,
+        "updated disk configuration should load");
+
+    InjectDesiredWorkdayFacts(mqtt, false);
+    Drain(service);
+    Require(!service.HasActiveRun(),
+        "first run should complete before queued run is reconsidered");
+
+    service.Tick();
+    Require(mqtt.CountTopic(CommandTopic(2, "Power")) == 0U,
+        "stale queued schedule must not publish old or new commands");
+    const MqttPublication* result = mqtt.LastTopic(
+        "/mdvwb/schedules/manual-off/result");
+    Require(result != nullptr,
+        "stale queued run should publish a result");
+    Require(result->payload.find("\"state\":\"rejected\"") != std::string::npos,
+        "stale queued run should be rejected");
+    Require(result->payload.find("changed before execution") != std::string::npos,
+        "rejection should explain the revision change");
+}
+
+void TestPastOneTimeScheduleIsMarkedMissedOnce()
+{
+    TestEnvironment environment;
+    environment.WriteSchedules(
+        R"json({
+          "version":1,
+          "revision":3,
+          "schedules":[{
+            "id":"past-once","name":"Past once","panelId":"main","enabled":true,
+            "kind":"once","days":[],"date":"2026-07-19","time":"18:00",
+            "targets":[{"bus":1,"address":1}],"actions":{"power":false}
+          }]
+        })json");
+
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+
+    service.Tick();
+    Require(mqtt.CountTopic("/mdvwb/schedules/past-once/result") == 1U,
+        "missed one-time schedule should publish one result");
+    const MqttPublication* result = mqtt.LastTopic(
+        "/mdvwb/schedules/past-once/result");
+    Require(result != nullptr &&
+            result->payload.find("\"state\":\"missed\"") != std::string::npos,
+        "past one-time schedule should report missed state");
+    Require(mqtt.CountTopic(CommandTopic(1, "Power")) == 0U,
+        "missed schedule must not execute late");
+
+    service.Tick();
+    Require(mqtt.CountTopic("/mdvwb/schedules/past-once/result") == 1U,
+        "missed result should not repeat every tick");
+
+    std::ifstream state(environment.paths.state, std::ios::binary);
+    const std::string stored(
+        (std::istreambuf_iterator<char>(state)),
+        std::istreambuf_iterator<char>());
+    Require(stored.find("missed:2026-07-19T18:00") != std::string::npos,
+        "missed marker should survive scheduler restart");
+}
+
+
+void TestCompletedOneTimeScheduleIsNotLaterMarkedMissed()
+{
+    TestEnvironment environment;
+    environment.WriteSchedules(
+        R"json({
+          "version":1,
+          "revision":4,
+          "schedules":[{
+            "id":"due-once","name":"Due once","panelId":"main","enabled":true,
+            "kind":"once","days":[],"date":"2026-07-20","time":"08:00",
+            "targets":[{"bus":1,"address":1}],"actions":{"power":false}
+          }]
+        })json");
+
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+
+    mqtt.Inject(FactTopic(1, "Status"), "0", true);
+    mqtt.Inject(FactTopic(1, "Power"), "0", true);
+    Drain(service);
+    service.Tick();
+    Require(!service.HasActiveRun(),
+        "already satisfied one-time schedule should complete");
+
+    const std::size_t resultCount =
+        mqtt.CountTopic("/mdvwb/schedules/due-once/result");
+    clock.minute.minute = 1;
+    service.Tick();
+    Require(mqtt.CountTopic("/mdvwb/schedules/due-once/result") == resultCount,
+        "completed one-time schedule must not later be marked missed");
+}
+
 } // namespace
 
 int main()
@@ -402,6 +596,11 @@ int main()
         TestTargetGoingOfflineFailsActiveRun();
         TestAutomaticRunIsNotRepeatedAfterRestart();
         TestConfirmationTimeout();
+        TestConfigurationMessageReloadsDiskInsteadOfPayload();
+        TestInvalidReloadKeepsLastKnownGoodConfiguration();
+        TestQueuedRunIsRejectedAfterConfigurationRevisionChanges();
+        TestPastOneTimeScheduleIsMarkedMissedOnce();
+        TestCompletedOneTimeScheduleIsNotLaterMarkedMissed();
         std::cout << "mdvwb_scheduler_test: OK\n";
         return 0;
     }

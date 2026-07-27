@@ -89,7 +89,8 @@ private:
     };
 
     struct QueuedRun {
-        ScheduleEntry schedule;
+        std::string scheduleId;
+        int configRevision = 0;
         std::string source;
         std::string minuteKey;
     };
@@ -109,6 +110,7 @@ private:
 
     struct ActiveRun {
         QueuedRun run;
+        ScheduleEntry schedule;
         std::size_t commandCount = 0;
         std::vector<ExpectedFact> expected;
         std::chrono::steady_clock::time_point deadline{};
@@ -125,10 +127,16 @@ private:
     [[nodiscard]] SchedulerProcessResult ProcessFact(
         std::string_view key,
         const mdv::MqttMessage& message);
-    void ReloadFromDisk(bool force);
+    [[nodiscard]] bool ReloadFromDisk(
+        bool force,
+        std::string* errorMessage = nullptr);
     void ValidateSelected(const ScheduleEntry& schedule) const;
     void QueueAutomaticSchedules(const SchedulerLocalMinute& minute);
-    void QueueRun(const ScheduleEntry& schedule, std::string source, std::string minuteKey);
+    void QueueRun(
+        std::string_view scheduleId,
+        int configRevision,
+        std::string source,
+        std::string minuteKey);
     void StartNextRun();
     void PublishCommands(ActiveRun& run);
     void UpdateConfirmation(
@@ -153,6 +161,9 @@ private:
     [[nodiscard]] static bool IsDue(
         const ScheduleEntry& schedule,
         const SchedulerLocalMinute& minute);
+    [[nodiscard]] static bool IsMissedOnce(
+        const ScheduleEntry& schedule,
+        const SchedulerLocalMinute& minute);
     [[nodiscard]] static std::string CommandTopic(
         const ScheduleTarget& target,
         std::string_view control);
@@ -170,8 +181,10 @@ private:
     std::map<std::string, LatestFact> latestFacts_;
     std::uint64_t factSequence_ = 0;
     std::map<std::string, std::string> lastAutomaticMinute_;
+    std::map<std::string, std::string> lastAutomaticAttemptMinute_;
     SchedulesConfig schedules_;
     std::optional<std::filesystem::file_time_type> schedulesWriteTime_;
+    std::optional<std::filesystem::file_time_type> rejectedSchedulesWriteTime_;
     bool started_ = false;
 };
 
