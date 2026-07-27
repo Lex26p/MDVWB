@@ -131,6 +131,20 @@ std::string ReadFile(const std::filesystem::path& path)
         std::istreambuf_iterator<char>());
 }
 
+std::size_t FindPublicationIndex(
+    const FakeMqttClient& client,
+    std::string_view topic,
+    std::size_t begin)
+{
+    for (std::size_t index = begin; index < client.publications.size(); ++index) {
+        if (client.publications[index].topic == topic) {
+            return index;
+        }
+    }
+    throw std::runtime_error(
+        "publication was not found after command: " + std::string(topic));
+}
+
 struct Fixture {
     TemporaryDirectory temporary;
     std::filesystem::path config =
@@ -244,6 +258,7 @@ void TestStaleRevisionIsRejected()
     auto service = fixture.CreateService();
     service.Start();
     const std::size_t commandCountBefore = fixture.runner.commands.size();
+    const std::size_t publicationCountBefore = fixture.client.publications.size();
 
     fixture.client.Inject(
         mdvwb::ManagerMqttService::ConfigSetTopic,
@@ -270,6 +285,17 @@ void TestStaleRevisionIsRejected()
     Require(current != nullptr && current->retained &&
             current->payload.find("\"revision\": 3") != std::string::npos,
         "current configuration was not republished after a conflict");
+
+    const std::size_t resultIndex = FindPublicationIndex(
+        fixture.client,
+        mdvwb::ManagerMqttService::ConfigResultTopic,
+        publicationCountBefore);
+    const std::size_t configIndex = FindPublicationIndex(
+        fixture.client,
+        mdvwb::ManagerMqttService::ConfigTopic,
+        publicationCountBefore);
+    Require(resultIndex < configIndex,
+        "rejection result must be published before the current configuration");
 }
 
 void TestNewBrokenReferencesAreRejected()
@@ -278,6 +304,7 @@ void TestNewBrokenReferencesAreRejected()
     auto service = fixture.CreateService();
     service.Start();
     const std::size_t commandCountBefore = fixture.runner.commands.size();
+    const std::size_t publicationCountBefore = fixture.client.publications.size();
 
     fixture.client.Inject(
         mdvwb::ManagerMqttService::ConfigSetTopic,
@@ -298,6 +325,17 @@ void TestNewBrokenReferencesAreRejected()
         "broken-reference rejection changed the revision");
     Require(saved.find("\"addresses\": [1]") != std::string::npos,
         "broken-reference rejection removed a referenced address");
+
+    const std::size_t resultIndex = FindPublicationIndex(
+        fixture.client,
+        mdvwb::ManagerMqttService::ConfigResultTopic,
+        publicationCountBefore);
+    const std::size_t configIndex = FindPublicationIndex(
+        fixture.client,
+        mdvwb::ManagerMqttService::ConfigTopic,
+        publicationCountBefore);
+    Require(resultIndex < configIndex,
+        "reference rejection must arrive before the current configuration");
 }
 
 void TestValidSaveIncrementsRevision()

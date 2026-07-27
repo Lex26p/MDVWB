@@ -1,5 +1,6 @@
 const DEVICE_PATH_PATTERN = /^\/dev\/[A-Za-z0-9/_+.:-]+$/;
 const BUS_COMMANDS = new Set(["start", "stop", "restart", "status", "discovery"]);
+let latestConfigurationRevision = 0;
 
 function requireInteger(value, minimum, maximum, description) {
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
@@ -75,9 +76,13 @@ export function normalizeConfiguration(value) {
     throw new Error("Некорректная конфигурация шин");
   }
 
-  const revision = value.revision === undefined
-    ? 0
-    : requireInteger(value.revision, 0, 2147483647, "Ревизия");
+  const hasExplicitRevision = value.revision !== undefined;
+  const revision = hasExplicitRevision
+    ? requireInteger(value.revision, 0, 2147483647, "Ревизия")
+    : latestConfigurationRevision;
+  if (hasExplicitRevision) {
+    latestConfigurationRevision = Math.max(latestConfigurationRevision, revision);
+  }
   const buses = value.buses.map(normalizeBus);
   const ids = new Set();
   const ports = new Set();

@@ -534,14 +534,14 @@ ManagerMqttResult ManagerMqttService::ProcessConfiguration(
             if (previousConfig.has_value()) {
                 const std::string currentCanonical =
                     SerializeBusesConfig(*previousConfig);
-                client_.Publish(ConfigTopic, currentCanonical, true);
-                PublishReadyStatus(
-                    previousConfig->buses.size(),
-                    EnabledCount(*previousConfig));
                 PublishResult(
                     false,
                     false,
                     detail,
+                    previousConfig->buses.size(),
+                    EnabledCount(*previousConfig));
+                client_.Publish(ConfigTopic, currentCanonical, true);
+                PublishReadyStatus(
                     previousConfig->buses.size(),
                     EnabledCount(*previousConfig));
             } else {
@@ -589,17 +589,17 @@ ManagerMqttResult ManagerMqttService::ProcessConfiguration(
                 std::to_string(newDashboardIssues) + ", schedules=" +
                 std::to_string(newScheduleIssues);
             if (previousConfig.has_value()) {
+                PublishResult(
+                    false,
+                    false,
+                    detail,
+                    previousConfig->buses.size(),
+                    EnabledCount(*previousConfig));
                 client_.Publish(
                     ConfigTopic,
                     SerializeBusesConfig(*previousConfig),
                     true);
                 PublishReadyStatus(
-                    previousConfig->buses.size(),
-                    EnabledCount(*previousConfig));
-                PublishResult(
-                    false,
-                    false,
-                    detail,
                     previousConfig->buses.size(),
                     EnabledCount(*previousConfig));
             } else {

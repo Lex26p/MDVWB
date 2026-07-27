@@ -50,7 +50,7 @@ assert.equal(model.nextAvailableBusId(config), 2);
 assert.equal(model.configurationsEqual(config, model.cloneConfiguration(config)), true);
 assert.equal(model.cloneConfiguration(config).revision, 17);
 assert.equal(JSON.parse(model.configurationToJson(config)).revision, 17);
-assert.equal(model.normalizeConfiguration({ version: 1, buses: [] }).revision, 0);
+assert.equal(model.normalizeConfiguration({ version: 1, buses: [] }).revision, 17);
 
 assert.throws(
   () => model.normalizeConfiguration({ version: 1, revision: -1, buses: [] }),
@@ -125,5 +125,18 @@ assert.equal(model.canRunBusCommand({ ...available, command: "stop", discoveryRu
 
 assert.equal(model.discoveryLabel("error"), "Ошибка поиска");
 assert.equal(model.commandLabel("restart"), "Перезапуск");
+
+const controllerRevision = model.normalizeConfiguration({
+  version: 1,
+  revision: 23,
+  buses: [{ id: 1, enabled: true, port: "/dev/ttyUSB0", addresses: [1] }],
+});
+const rebuiltDraft = model.normalizeConfiguration({
+  version: 1,
+  buses: [{ id: 1, enabled: true, port: "/dev/ttyUSB0", addresses: [1, 2] }],
+});
+assert.equal(controllerRevision.revision, 23);
+assert.equal(rebuiltDraft.revision, 23);
+assert.match(model.configurationToJson(rebuiltDraft), /"revision": 23/);
 
 console.log("MDVWB web control model tests: OK");
