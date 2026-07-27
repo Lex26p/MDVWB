@@ -4,6 +4,7 @@ const SCHEDULER_STATUS_TOPIC = "/mdvwb/scheduler/status";
 const RESULT_TOPIC_PATTERN = /^\/mdvwb\/schedules\/([A-Za-z0-9_-]{1,64})\/result$/;
 const RUN_TOPIC_PATTERN = /^\/mdvwb\/schedules\/([A-Za-z0-9_-]{1,64})\/run$/;
 const TERMINAL_STATES = new Set(["completed", "timeout", "failed", "rejected", "missed"]);
+const SCHEDULER_STALE_AFTER_SECONDS = 125;
 const WEEKDAYS = Object.freeze({
   1: "Пн",
   2: "Вт",
@@ -178,6 +179,7 @@ export function installSchedulerStatusUi() {
   const demo = new URLSearchParams(window.location.search).get("demo") === "1";
   let schedulerStatus = null;
   let mainClient = null;
+  let heartbeatTimer = 0;
   let feedbackOverride = null;
   let overrideTimer = 0;
   let safetyTimer = 0;
@@ -189,6 +191,18 @@ export function installSchedulerStatusUi() {
     scheduleId: "",
     schedulerConfirmed: false,
   };
+
+  const schedulerHeartbeatAge = () => {
+    const epoch = Number(schedulerStatus?.controllerEpoch);
+    if (!Number.isInteger(epoch) || epoch <= 0) {
+      return Number.POSITIVE_INFINITY;
+    }
+    return Math.max(0, Math.floor(Date.now() / 1000) - epoch);
+  };
+
+  const schedulerFresh = () =>
+    Boolean(mainClient?.connected && schedulerStatus &&
+      schedulerHeartbeatAge() <= SCHEDULER_STALE_AFTER_SECONDS);
 
   const renderClock = () => {
     if (demo) {
@@ -203,10 +217,25 @@ export function installSchedulerStatusUi() {
       clockElement.classList.remove("scheduler-clock-stale");
       return;
     }
-    clockElement.textContent = controllerClockLabel(schedulerStatus);
-    clockElement.classList.toggle("scheduler-clock-stale", !mainClient?.connected || !schedulerStatus);
-    if (schedulerStatus?.message) {
-      clockElement.title = String(schedulerStatus.message);
+
+    const fresh = schedulerFresh();
+    const baseLabel = controllerClockLabel(schedulerStatus);
+    clockElement.textContent = fresh
+      ? baseLabel
+      : `${baseLabel} · нет свежих данных`;
+    clockElement.classList.toggle("scheduler-clock-stale", !fresh);
+
+    if (!mainClient?.connected) {
+      clockElement.title = "MQTT отключён";
+    } else if (!schedulerStatus) {
+      clockElement.title = "Статус scheduler ещё не получен";
+    } else if (!fresh) {
+      const age = schedulerHeartbeatAge();
+      clockElement.title = Number.isFinite(age)
+        ? `Scheduler не обновлял heartbeat ${age} с`
+        : "Статус scheduler не содержит heartbeat";
+    } else {
+      clockElement.title = String(schedulerStatus.message || "Scheduler работает");
     }
   };
 
@@ -349,6 +378,18 @@ export function installSchedulerStatusUi() {
     return;
   }
 
+  runButton.addEventListener("click", (event) => {
+    if (schedulerFresh()) {
+      return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    setOverride({
+      kind: "warning",
+      text: "Ручной запуск недоступен: scheduler не присылает свежий heartbeat.",
+    }, 7000);
+  }, { capture: true });
+
   const observer = new MutationObserver(enforceManualState);
   observer.observe(feedback, { childList: true, characterData: true, subtree: true });
   // Observe only the native disabled state. Watching our own
@@ -356,7 +397,9 @@ export function installSchedulerStatusUi() {
   observer.observe(runButton, { attributes: true, attributeFilter: ["disabled"] });
 
   TinyMqttClient.observeClients(attachClient);
+  heartbeatTimer = window.setInterval(renderClock, 15000);
   window.addEventListener("pagehide", () => {
+    window.clearInterval(heartbeatTimer);
     detachMessage();
     detachPublish();
     detachConnection();

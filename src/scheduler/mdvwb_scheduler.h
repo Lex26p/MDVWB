@@ -33,12 +33,14 @@ class SchedulerClock {
 public:
     virtual ~SchedulerClock() = default;
     [[nodiscard]] virtual SchedulerLocalMinute LocalMinute() const = 0;
+    [[nodiscard]] virtual std::int64_t UnixTimeSeconds() const = 0;
     [[nodiscard]] virtual std::chrono::steady_clock::time_point MonotonicNow() const = 0;
 };
 
 class SystemSchedulerClock final : public SchedulerClock {
 public:
     [[nodiscard]] SchedulerLocalMinute LocalMinute() const override;
+    [[nodiscard]] std::int64_t UnixTimeSeconds() const override;
     [[nodiscard]] std::chrono::steady_clock::time_point MonotonicNow() const override;
 };
 

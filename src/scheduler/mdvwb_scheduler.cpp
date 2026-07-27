@@ -226,6 +226,11 @@ SchedulerLocalMinute SystemSchedulerClock::LocalMinute() const
     return result;
 }
 
+std::int64_t SystemSchedulerClock::UnixTimeSeconds() const
+{
+    return static_cast<std::int64_t>(std::time(nullptr));
+}
+
 std::chrono::steady_clock::time_point
 SystemSchedulerClock::MonotonicNow() const
 {
@@ -971,6 +976,8 @@ void SchedulerService::PublishStatus(
         ",\"controllerDate\":\"" + controllerMinute.DateText() + "\"" +
         ",\"controllerTime\":\"" + controllerMinute.TimeText() + "\"" +
         ",\"controllerMinute\":\"" + controllerMinute.Key() + "\"" +
+        ",\"controllerEpoch\":" +
+            std::to_string(clock_.UnixTimeSeconds()) +
         ",\"controllerWeekday\":" +
             std::to_string(controllerMinute.weekday);
     if (active_) {
@@ -1007,6 +1014,8 @@ void SchedulerService::PublishRunResult(
         ",\"source\":\"" + JsonEscape(run.run.source) + "\"" +
         ",\"origin\":\"scheduler\"" +
         ",\"controllerMinute\":\"" + controllerMinute.Key() + "\"" +
+        ",\"controllerEpoch\":" +
+            std::to_string(clock_.UnixTimeSeconds()) +
         ",\"commands\":" + std::to_string(run.commandCount) +
         ",\"confirmed\":" + std::to_string(confirmed) +
         ",\"message\":\"" + JsonEscape(message) + "\"}";

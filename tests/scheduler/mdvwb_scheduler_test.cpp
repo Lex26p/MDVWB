@@ -28,11 +28,17 @@ public:
         8,
         0,
         1};
+    std::int64_t unixTime = 1784534400;
     std::chrono::steady_clock::time_point monotonic{};
 
     [[nodiscard]] SchedulerLocalMinute LocalMinute() const override
     {
         return minute;
+    }
+
+    [[nodiscard]] std::int64_t UnixTimeSeconds() const override
+    {
+        return unixTime;
     }
 
     [[nodiscard]] std::chrono::steady_clock::time_point MonotonicNow() const override
@@ -42,6 +48,7 @@ public:
 
     void AdvanceSeconds(int seconds)
     {
+        unixTime += seconds;
         monotonic += std::chrono::seconds(seconds);
     }
 
@@ -264,6 +271,9 @@ void TestManualRunIsAcknowledgedByScheduler()
                 "\"controllerMinute\":\"2026-07-20T08:00\"") !=
             std::string::npos,
         "manual acknowledgement should contain controller time");
+    Require(result->payload.find("\"controllerEpoch\":1784534400") !=
+            std::string::npos,
+        "manual acknowledgement should contain controller heartbeat epoch");
 }
 
 void TestStatusPublishesControllerClockEveryMinute()
@@ -284,8 +294,12 @@ void TestStatusPublishesControllerClockEveryMinute()
     Require(initial->payload.find("\"controllerWeekday\":1") !=
             std::string::npos,
         "initial status should contain controller weekday");
+    Require(initial->payload.find("\"controllerEpoch\":1784534400") !=
+            std::string::npos,
+        "initial status should contain controller heartbeat epoch");
 
     const std::size_t before = mqtt.CountTopic(SchedulerService::StatusTopic);
+    clock.AdvanceSeconds(60);
     clock.SetMinute(1);
     service.Tick();
     Require(mqtt.CountTopic(SchedulerService::StatusTopic) > before,
@@ -297,6 +311,9 @@ void TestStatusPublishesControllerClockEveryMinute()
                 "\"controllerMinute\":\"2026-07-20T08:01\"") !=
                 std::string::npos,
         "refreshed status should publish the new controller minute");
+    Require(refreshed->payload.find("\"controllerEpoch\":1784534460") !=
+            std::string::npos,
+        "refreshed status should publish the new heartbeat epoch");
 }
 
 void TestSentCommandsRequireFreshLiveFacts()
