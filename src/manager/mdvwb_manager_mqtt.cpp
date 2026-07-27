@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <limits>
 #include <numeric>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -76,6 +77,36 @@ const BusConfig* FindBus(const BusesConfig& config, int busId) {
         config.buses.begin(), config.buses.end(),
         [busId](const BusConfig& bus) { return bus.id == busId; });
     return iterator == config.buses.end() ? nullptr : &*iterator;
+}
+
+std::string DashboardIssueKey(const DashboardReferenceIssue& issue) {
+    return std::to_string(static_cast<int>(issue.kind)) + "|" +
+        issue.panelId + "|" + issue.placementId + "|" +
+        std::to_string(issue.bus) + "|" + std::to_string(issue.address);
+}
+
+std::string ScheduleIssueKey(const ScheduleReferenceIssue& issue) {
+    return std::to_string(static_cast<int>(issue.kind)) + "|" +
+        issue.scheduleId + "|" + issue.panelId + "|" +
+        std::to_string(issue.bus) + "|" + std::to_string(issue.address);
+}
+
+template <typename Issue, typename KeyFunction>
+std::size_t CountNewReferenceIssues(
+    const std::vector<Issue>& current,
+    const std::vector<Issue>& submitted,
+    KeyFunction keyFunction) {
+    std::set<std::string> existing;
+    for (const Issue& issue : current) {
+        existing.insert(keyFunction(issue));
+    }
+
+    return static_cast<std::size_t>(std::count_if(
+        submitted.begin(),
+        submitted.end(),
+        [&](const Issue& issue) {
+            return existing.find(keyFunction(issue)) == existing.end();
+        }));
 }
 
 std::string JoinAddressesAsJson(const std::vector<int>& addresses) {
@@ -487,10 +518,98 @@ ManagerMqttResult ManagerMqttService::ProcessConfiguration(
         try {
             previousConfig = LoadBusesConfig(configPath_);
         } catch (const std::exception&) {
-            // A valid incoming configuration can recover a missing or damaged file.
+            // Revision 0 can recover a missing or damaged buses.json.
         }
 
-        const BusesConfig config = ParseBusesConfig(message.payload);
+        BusesConfig config = ParseBusesConfig(message.payload);
+        const int currentRevision =
+            previousConfig.has_value() ? previousConfig->revision : 0;
+
+        if (config.revision != currentRevision) {
+            const std::string detail =
+                "Configuration revision conflict: submitted " +
+                std::to_string(config.revision) + ", current " +
+                std::to_string(currentRevision);
+
+            if (previousConfig.has_value()) {
+                const std::string currentCanonical =
+                    SerializeBusesConfig(*previousConfig);
+                client_.Publish(ConfigTopic, currentCanonical, true);
+                PublishReadyStatus(
+                    previousConfig->buses.size(),
+                    EnabledCount(*previousConfig));
+                PublishResult(
+                    false,
+                    false,
+                    detail,
+                    previousConfig->buses.size(),
+                    EnabledCount(*previousConfig));
+            } else {
+                PublishResult(false, false, detail);
+            }
+            return ManagerMqttResult{
+                false, false, detail, std::nullopt, {}};
+        }
+
+        if (currentRevision == std::numeric_limits<int>::max()) {
+            throw BusesConfigError(
+                "configuration revision limit has been reached");
+        }
+
+        const DashboardCollection dashboards = LoadOrCreateDashboard();
+        const SchedulesConfig schedules = LoadOrCreateSchedules();
+
+        std::vector<DashboardReferenceIssue> currentDashboardIssues;
+        std::vector<ScheduleReferenceIssue> currentScheduleIssues;
+        if (previousConfig.has_value()) {
+            currentDashboardIssues =
+                InspectDashboardReferences(dashboards, *previousConfig);
+            currentScheduleIssues =
+                InspectScheduleReferences(
+                    schedules, *previousConfig, dashboards);
+        }
+
+        const std::vector<DashboardReferenceIssue> submittedDashboardIssues =
+            InspectDashboardReferences(dashboards, config);
+        const std::vector<ScheduleReferenceIssue> submittedScheduleIssues =
+            InspectScheduleReferences(schedules, config, dashboards);
+
+        const std::size_t newDashboardIssues = CountNewReferenceIssues(
+            currentDashboardIssues,
+            submittedDashboardIssues,
+            DashboardIssueKey);
+        const std::size_t newScheduleIssues = CountNewReferenceIssues(
+            currentScheduleIssues,
+            submittedScheduleIssues,
+            ScheduleIssueKey);
+
+        if (newDashboardIssues != 0U || newScheduleIssues != 0U) {
+            const std::string detail =
+                "Configuration would break references: dashboard=" +
+                std::to_string(newDashboardIssues) + ", schedules=" +
+                std::to_string(newScheduleIssues);
+            if (previousConfig.has_value()) {
+                client_.Publish(
+                    ConfigTopic,
+                    SerializeBusesConfig(*previousConfig),
+                    true);
+                PublishReadyStatus(
+                    previousConfig->buses.size(),
+                    EnabledCount(*previousConfig));
+                PublishResult(
+                    false,
+                    false,
+                    detail,
+                    previousConfig->buses.size(),
+                    EnabledCount(*previousConfig));
+            } else {
+                PublishResult(false, false, detail);
+            }
+            return ManagerMqttResult{
+                false, false, detail, std::nullopt, {}};
+        }
+
+        config.revision = currentRevision + 1;
         const std::string canonical = SerializeBusesConfig(config);
         const std::size_t enabledCount = EnabledCount(config);
 

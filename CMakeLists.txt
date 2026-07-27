@@ -208,6 +208,11 @@ add_executable(mdvwb_manager_mqtt_test
 )
 target_link_libraries(mdvwb_manager_mqtt_test PRIVATE mdvwb_manager_mqtt)
 
+add_executable(mdvwb_manager_revision_test
+    ${MDVWB_MANAGER_TEST_DIR}/mdvwb_manager_revision_test.cpp
+)
+target_link_libraries(mdvwb_manager_revision_test PRIVATE mdvwb_manager_mqtt)
+
 add_executable(mdvwb_discovery_runner_test
     ${MDVWB_MANAGER_TEST_DIR}/mdvwb_discovery_runner_test.cpp
 )
@@ -246,6 +251,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_manager_cli_test
     mdvwb_service_sync_test
     mdvwb_manager_mqtt_test
+    mdvwb_manager_revision_test
     mdvwb_discovery_runner_test
     mdvwb_migration_test
     mdvwb_scheduler_test
@@ -274,6 +280,7 @@ add_test(NAME mdvwb_dashboard_upload_test COMMAND mdvwb_dashboard_upload_test)
 add_test(NAME mdvwb_manager_cli_test COMMAND mdvwb_manager_cli_test)
 add_test(NAME mdvwb_service_sync_test COMMAND mdvwb_service_sync_test)
 add_test(NAME mdvwb_manager_mqtt_test COMMAND mdvwb_manager_mqtt_test)
+add_test(NAME mdvwb_manager_revision_test COMMAND mdvwb_manager_revision_test)
 add_test(NAME mdvwb_discovery_runner_test COMMAND mdvwb_discovery_runner_test)
 add_test(NAME mdvwb_migration_test COMMAND mdvwb_migration_test)
 add_test(NAME mdvwb_scheduler_test COMMAND mdvwb_scheduler_test)
