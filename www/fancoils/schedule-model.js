@@ -295,6 +295,16 @@ export function runStateLabel(state) {
     timeout: "Нет подтверждения",
     failed: "Ошибка",
     rejected: "Отклонено",
+    missed: "Пропущено",
   };
   return labels[String(state)] || String(state || "Нет запусков");
+}
+
+// The browser application imports this model before it initializes its own MQTT
+// client. Load the scheduler status bridge only in a real browser so Node-based
+// model tests remain pure and do not require DOM or WebSocket APIs.
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  import("./scheduler-status-ui.js")
+    .then(({ installSchedulerStatusUi }) => installSchedulerStatusUi())
+    .catch((error) => console.error("Scheduler status UI failed to start", error));
 }
