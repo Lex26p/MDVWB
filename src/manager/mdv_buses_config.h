@@ -18,6 +18,7 @@ struct BusConfig {
 struct BusesConfig {
     int version = 1;
     std::vector<BusConfig> buses;
+    int revision = 0;
 };
 
 class BusesConfigError final : public std::runtime_error {

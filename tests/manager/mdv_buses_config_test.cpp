@@ -29,6 +29,7 @@ void TestValidConfigurationAndCanonicalOrder() {
     const auto config = mdvwb::ParseBusesConfig(R"json(
 {
   "version": 1,
+  "revision": 7,
   "buses": [
     {"id": 3, "enabled": true, "port": "/dev/ttyUSB0", "addresses": [12, 2, 7]},
     {"id": 1, "enabled": true, "port": "/dev/ttyRS485-1", "addresses": [3, 1, 2]},
@@ -38,6 +39,7 @@ void TestValidConfigurationAndCanonicalOrder() {
 )json");
 
     Require(config.version == 1, "wrong schema version");
+    Require(config.revision == 7, "wrong configuration revision");
     Require(config.buses.size() == 3, "wrong bus count");
     Require(config.buses[0].id == 1 && config.buses[1].id == 2 && config.buses[2].id == 3,
             "buses are not sorted by id");
@@ -46,9 +48,20 @@ void TestValidConfigurationAndCanonicalOrder() {
     Require(config.buses[1].addresses.empty(), "disabled bus must allow an empty address list");
 }
 
+void TestLegacyConfigurationDefaultsRevisionToZero() {
+    const auto config = mdvwb::ParseBusesConfig(
+        R"json({"version":1,"buses":[]})json");
+    Require(config.revision == 0,
+            "legacy configuration without revision must migrate to revision zero");
+    const std::string serialized = mdvwb::SerializeBusesConfig(config);
+    Require(serialized.find("\"revision\": 0") != std::string::npos,
+            "canonical configuration must write the migrated revision");
+}
+
 void TestRoundTrip() {
     const std::string input = R"json({
       "version": 1,
+      "revision": 12,
       "buses": [
         {"id": 2, "enabled": true, "port": "/dev/ttyRS485-2", "addresses": [5, 1, 18]},
         {"id": 1, "enabled": true, "port": "/dev/ttyRS485-1", "addresses": [3, 2, 1]}
@@ -59,6 +72,10 @@ void TestRoundTrip() {
     const std::string serialized = mdvwb::SerializeBusesConfig(first);
     const auto second = mdvwb::ParseBusesConfig(serialized);
 
+    Require(first.revision == 12 && second.revision == 12,
+            "round trip changed configuration revision");
+    Require(serialized.find("\"revision\": 12") != std::string::npos,
+            "serializer omitted configuration revision");
     Require(second.buses.size() == 2, "round trip changed bus count");
     Require(second.buses[0].id == 1, "round trip changed canonical bus order");
     Require(second.buses[1].addresses == std::vector<int>({1, 5, 18}),
@@ -96,6 +113,12 @@ void TestValidationErrors() {
       {"id":1,"enabled":true,"port":"/dev/a","addresses":[1],"name":"extra"}
     ]})json", "unknown field");
 
+    ExpectError(R"json({"version":1,"revision":-1,"buses":[]})json",
+                "0..2147483647");
+    ExpectError(R"json({"version":1,"revision":2147483648,"buses":[]})json",
+                "0..2147483647");
+    ExpectError(R"json({"version":1,"revision":"1","buses":[]})json",
+                "must be an integer");
     ExpectError(R"json({"version":2,"buses":[]})json", "must be in range 1..1");
     ExpectError(R"json({"version":1,"buses": [})json", "JSON error");
 }
@@ -105,6 +128,7 @@ void TestValidationErrors() {
 int main() {
     try {
         TestValidConfigurationAndCanonicalOrder();
+        TestLegacyConfigurationDefaultsRevisionToZero();
         TestRoundTrip();
         TestValidationErrors();
         std::cout << "MDVWB buses configuration tests: OK\n";

@@ -37,15 +37,33 @@ assert.throws(
 
 const config = model.normalizeConfiguration({
   version: 1,
+  revision: 17,
   buses: [
     { id: 3, enabled: false, port: "/dev/ttyUSB2", addresses: [] },
     { id: 1, enabled: true, port: "/dev/ttyUSB0", addresses: [3, 1, 2] },
   ],
 });
+assert.equal(config.revision, 17);
 assert.deepEqual(config.buses.map((bus) => bus.id), [1, 3]);
 assert.deepEqual(config.buses[0].addresses, [1, 2, 3]);
 assert.equal(model.nextAvailableBusId(config), 2);
 assert.equal(model.configurationsEqual(config, model.cloneConfiguration(config)), true);
+assert.equal(model.cloneConfiguration(config).revision, 17);
+assert.equal(JSON.parse(model.configurationToJson(config)).revision, 17);
+assert.equal(model.normalizeConfiguration({ version: 1, buses: [] }).revision, 0);
+
+assert.throws(
+  () => model.normalizeConfiguration({ version: 1, revision: -1, buses: [] }),
+  /Ревизия/,
+);
+assert.throws(
+  () => model.normalizeConfiguration({ version: 1, revision: 2147483648, buses: [] }),
+  /Ревизия/,
+);
+assert.throws(
+  () => model.normalizeConfiguration({ version: 1, revision: "1", buses: [] }),
+  /Ревизия/,
+);
 
 assert.throws(
   () => model.normalizeConfiguration({

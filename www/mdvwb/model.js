@@ -75,6 +75,9 @@ export function normalizeConfiguration(value) {
     throw new Error("Некорректная конфигурация шин");
   }
 
+  const revision = value.revision === undefined
+    ? 0
+    : requireInteger(value.revision, 0, 2147483647, "Ревизия");
   const buses = value.buses.map(normalizeBus);
   const ids = new Set();
   const ports = new Set();
@@ -91,7 +94,7 @@ export function normalizeConfiguration(value) {
   });
 
   buses.sort((left, right) => left.id - right.id);
-  return { version: 1, buses };
+  return { version: 1, revision, buses };
 }
 
 export function busFromEditorValues({ id, enabled, port, addresses }) {
@@ -108,6 +111,7 @@ export function cloneConfiguration(value) {
   const normalized = normalizeConfiguration(value);
   return {
     version: 1,
+    revision: normalized.revision,
     buses: normalized.buses.map((bus) => ({ ...bus, addresses: [...bus.addresses] })),
   };
 }
