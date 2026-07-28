@@ -26,6 +26,8 @@ namespace {
 constexpr std::size_t MaximumConfigPayloadBytes = 64U * 1024U;
 constexpr std::size_t MaximumDashboardPayloadBytes = 1024U * 1024U;
 constexpr std::size_t MaximumSchedulesPayloadBytes = 1024U * 1024U;
+constexpr auto DiscoveryInlineCompletionWait =
+    std::chrono::milliseconds(100);
 constexpr std::string_view BusTopicPrefix = "/mdvwb/buses/";
 constexpr std::string_view ScheduleTopicPrefix = "/mdvwb/schedules/";
 constexpr std::string_view BackgroundChunkPrefix =
@@ -270,6 +272,10 @@ ManagerMqttService::ManagerMqttService(
     }
 }
 
+ManagerMqttService::~ManagerMqttService() {
+    JoinDiscoveryWorker();
+}
+
 void ManagerMqttService::Start() {
     if (started_) {
         return;
@@ -457,6 +463,10 @@ void ManagerMqttService::Enqueue(mdv::MqttMessage message) {
 }
 
 std::optional<ManagerMqttResult> ManagerMqttService::ProcessOne() {
+    if (auto completion = ProcessDiscoveryCompletion()) {
+        return completion;
+    }
+
     IncomingCommand command;
     {
         std::lock_guard lock(mutex_);
@@ -1273,13 +1283,23 @@ ManagerMqttResult ManagerMqttService::ProcessDiscovery(
         const std::string detail = "Retained discovery commands are ignored";
         PublishBusResult(busId, command, false, detail);
         PublishDiscoveryStatus(busId, "error", {}, detail);
-        return ManagerMqttResult{false, false, detail, busId, std::string(command)};
+        return ManagerMqttResult{
+            false, false, detail, busId, std::string(command)};
     }
     if (discoveryRunner_ == nullptr) {
         const std::string detail = "Discovery runner is not configured";
         PublishBusResult(busId, command, false, detail);
         PublishDiscoveryStatus(busId, "error", {}, detail);
-        return ManagerMqttResult{false, false, detail, busId, std::string(command)};
+        return ManagerMqttResult{
+            false, false, detail, busId, std::string(command)};
+    }
+    if (DiscoveryBusy()) {
+        const std::string detail =
+            "Another discovery is already running";
+        PublishDiscoveryResult(busId, false, {}, detail);
+        PublishBusResult(busId, command, false, detail);
+        return ManagerMqttResult{
+            false, false, detail, busId, std::string(command)};
     }
 
     try {
@@ -1289,57 +1309,227 @@ ManagerMqttResult ManagerMqttService::ProcessDiscovery(
             const std::string detail = "Bus is not configured";
             PublishBusResult(busId, command, false, detail);
             PublishDiscoveryStatus(busId, "error", {}, detail);
-            return ManagerMqttResult{false, false, detail, busId, std::string(command)};
+            return ManagerMqttResult{
+                false, false, detail, busId, std::string(command)};
         }
 
-        PublishDiscoveryStatus(busId, "running", bus->port, "Discovery is running");
+        PublishDiscoveryStatus(
+            busId,
+            "running",
+            bus->port,
+            "Discovery is running");
         const BusServiceStatus serviceStatus =
-            QueryBusServiceStatus(busId, servicePaths_, commandRunner_);
+            QueryBusServiceStatus(
+                busId,
+                servicePaths_,
+                commandRunner_);
         if (serviceStatus.active) {
             ExecuteBusServiceCommand(
-                busId, BusServiceCommand::Stop, servicePaths_, commandRunner_);
+                busId,
+                BusServiceCommand::Stop,
+                servicePaths_,
+                commandRunner_);
         }
         PublishBusStatus(*bus);
 
-        constexpr int MasterId = 0;
-        constexpr int PeriodMilliseconds = 150;
-        constexpr int ResponseTimeoutMilliseconds = 130;
-        const DiscoveryExecutionResult discovery = discoveryRunner_->Run(
-            bus->port,
-            MasterId,
-            PeriodMilliseconds,
-            ResponseTimeoutMilliseconds);
-
-        if (!discovery.success) {
-            const std::string detail = discovery.message.empty()
-                ? "Discovery failed"
-                : discovery.message;
+        if (!StartDiscoveryWorker(busId, bus->port)) {
+            const std::string detail =
+                "Another discovery is already running";
             PublishDiscoveryResult(busId, false, {}, detail);
-            PublishDiscoveryStatus(busId, "error", bus->port, detail);
             PublishBusResult(busId, command, false, detail);
-            return ManagerMqttResult{false, false, detail, busId, std::string(command)};
+            return ManagerMqttResult{
+                false, false, detail, busId, std::string(command)};
         }
 
-        const std::string detail = discovery.addresses.empty()
-            ? "Discovery completed; no devices found"
-            : "Discovery completed";
-        PublishDiscoveryResult(busId, true, discovery.addresses, detail);
-        PublishDiscoveryStatus(
-            busId, "completed", bus->port, detail, discovery.addresses.size());
+        // Keep existing fast unit-test runners deterministic without allowing a
+        // real 29-second serial scan to block the manager loop.
+        if (WaitForDiscoveryCompletion(DiscoveryInlineCompletionWait)) {
+            if (auto completion = ProcessDiscoveryCompletion()) {
+                return *completion;
+            }
+        }
+
+        const std::string detail =
+            "Discovery started in background";
         PublishBusResult(busId, command, true, detail);
-        return ManagerMqttResult{true, false, detail, busId, std::string(command)};
+        return ManagerMqttResult{
+            true, false, detail, busId, std::string(command)};
     } catch (const std::exception& error) {
-        const std::string detail = std::string("Discovery failed: ") + error.what();
+        const std::string detail =
+            std::string("Discovery failed: ") + error.what();
         PublishDiscoveryResult(busId, false, {}, detail);
         PublishDiscoveryStatus(busId, "error", {}, detail);
         PublishBusResult(busId, command, false, detail);
-        return ManagerMqttResult{false, false, detail, busId, std::string(command)};
+        return ManagerMqttResult{
+            false, false, detail, busId, std::string(command)};
+    }
+}
+
+bool ManagerMqttService::StartDiscoveryWorker(
+    int busId,
+    std::string port) {
+    {
+        std::lock_guard lock(discoveryMutex_);
+        if (discoveryRunning_ ||
+            discoveryCompletion_.has_value() ||
+            discoveryThread_.joinable()) {
+            return false;
+        }
+        discoveryRunning_ = true;
+    }
+
+    try {
+        discoveryThread_ = std::thread(
+            [this, busId, port = std::move(port)]() mutable {
+                DiscoveryExecutionResult result;
+                try {
+                    constexpr int MasterId = 0;
+                    constexpr int PeriodMilliseconds = 150;
+                    constexpr int ResponseTimeoutMilliseconds = 130;
+                    result = discoveryRunner_->Run(
+                        port,
+                        MasterId,
+                        PeriodMilliseconds,
+                        ResponseTimeoutMilliseconds);
+                } catch (const std::exception& error) {
+                    result.success = false;
+                    result.message =
+                        std::string("Discovery failed: ") +
+                        error.what();
+                } catch (...) {
+                    result.success = false;
+                    result.message =
+                        "Discovery failed with an unknown error";
+                }
+
+                {
+                    std::lock_guard lock(discoveryMutex_);
+                    discoveryCompletion_ = DiscoveryCompletion{
+                        busId,
+                        std::move(port),
+                        std::move(result)};
+                    discoveryRunning_ = false;
+                }
+                discoveryCondition_.notify_all();
+            });
+    } catch (...) {
+        std::lock_guard lock(discoveryMutex_);
+        discoveryRunning_ = false;
+        throw;
+    }
+    return true;
+}
+
+bool ManagerMqttService::WaitForDiscoveryCompletion(
+    std::chrono::milliseconds timeout) {
+    std::unique_lock lock(discoveryMutex_);
+    return discoveryCondition_.wait_for(
+        lock,
+        timeout,
+        [this] {
+            return discoveryCompletion_.has_value();
+        });
+}
+
+bool ManagerMqttService::DiscoveryBusy() const {
+    std::lock_guard lock(discoveryMutex_);
+    return discoveryRunning_ ||
+        discoveryCompletion_.has_value() ||
+        discoveryThread_.joinable();
+}
+
+std::optional<ManagerMqttResult>
+ManagerMqttService::ProcessDiscoveryCompletion() {
+    std::optional<DiscoveryCompletion> completion;
+    {
+        std::lock_guard lock(discoveryMutex_);
+        if (!discoveryCompletion_.has_value()) {
+            return std::nullopt;
+        }
+        completion = std::move(discoveryCompletion_);
+        discoveryCompletion_.reset();
+    }
+
+    if (discoveryThread_.joinable()) {
+        discoveryThread_.join();
+    }
+
+    constexpr std::string_view command = "discovery";
+    const DiscoveryExecutionResult& discovery =
+        completion->result;
+    if (!discovery.success) {
+        const std::string detail = discovery.message.empty()
+            ? "Discovery failed"
+            : discovery.message;
+        PublishDiscoveryResult(
+            completion->busId,
+            false,
+            {},
+            detail);
+        PublishDiscoveryStatus(
+            completion->busId,
+            "error",
+            completion->port,
+            detail);
+        PublishBusResult(
+            completion->busId,
+            command,
+            false,
+            detail);
+        return ManagerMqttResult{
+            false,
+            false,
+            detail,
+            completion->busId,
+            std::string(command)};
+    }
+
+    const std::string detail = discovery.addresses.empty()
+        ? "Discovery completed; no devices found"
+        : "Discovery completed";
+    PublishDiscoveryResult(
+        completion->busId,
+        true,
+        discovery.addresses,
+        detail);
+    PublishDiscoveryStatus(
+        completion->busId,
+        "completed",
+        completion->port,
+        detail,
+        discovery.addresses.size());
+    PublishBusResult(
+        completion->busId,
+        command,
+        true,
+        detail);
+    return ManagerMqttResult{
+        true,
+        false,
+        detail,
+        completion->busId,
+        std::string(command)};
+}
+
+void ManagerMqttService::JoinDiscoveryWorker() noexcept {
+    if (discoveryThread_.joinable()) {
+        discoveryThread_.join();
     }
 }
 
 std::size_t ManagerMqttService::PendingCount() const {
-    std::lock_guard lock(mutex_);
-    return inbox_.size();
+    std::size_t count = 0;
+    {
+        std::lock_guard lock(mutex_);
+        count = inbox_.size();
+    }
+    {
+        std::lock_guard lock(discoveryMutex_);
+        if (discoveryCompletion_.has_value()) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 void ManagerMqttService::PublishCurrentConfig() {
@@ -1776,7 +1966,13 @@ int RunManagerMqttDaemon(
         output << "MQTT_MANAGER_SYNC actions=" << startupPlan.actions.size() << '\n';
 
         NativeDiscoveryRunner discoveryRunner(
-            ReadStringEnvironment("MDVWB_BINARY", "/usr/local/bin/MDVWB"));
+            ReadStringEnvironment(
+                "MDVWB_BINARY",
+                "/usr/local/bin/MDVWB"),
+            std::chrono::milliseconds(
+                ReadIntegerEnvironment(
+                    "MDVWB_DISCOVERY_TIMEOUT_MS",
+                    45000)));
         const std::filesystem::path dashboardPath = ReadStringEnvironment(
             "MDVWB_DASHBOARD_CONFIG",
             (configPath.parent_path() / "dashboard.json").string());

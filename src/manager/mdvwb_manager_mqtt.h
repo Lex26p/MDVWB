@@ -7,6 +7,8 @@
 #include "mdvwb_discovery_runner.h"
 #include "mdvwb_service_sync.h"
 
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <deque>
 #include <filesystem>
@@ -15,6 +17,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace mdvwb {
@@ -33,15 +36,24 @@ public:
     static constexpr const char* ConfigSetTopic = "/mdvwb/config/set";
     static constexpr const char* ConfigResultTopic = "/mdvwb/config/result";
     static constexpr const char* StatusTopic = "/mdvwb/status";
-    static constexpr const char* DashboardConfigTopic = "/mdvwb/dashboard/config";
-    static constexpr const char* DashboardConfigSetTopic = "/mdvwb/dashboard/config/set";
-    static constexpr const char* DashboardConfigResultTopic = "/mdvwb/dashboard/config/result";
-    static constexpr const char* DashboardStatusTopic = "/mdvwb/dashboard/status";
-    static constexpr const char* SchedulesConfigTopic = "/mdvwb/schedules/config";
-    static constexpr const char* SchedulesConfigSetTopic = "/mdvwb/schedules/config/set";
-    static constexpr const char* SchedulesConfigResultTopic = "/mdvwb/schedules/config/result";
-    static constexpr const char* SchedulesStatusTopic = "/mdvwb/schedules/status";
-    static constexpr const char* ScheduleRunFilter = "/mdvwb/schedules/+/run";
+    static constexpr const char* DashboardConfigTopic =
+        "/mdvwb/dashboard/config";
+    static constexpr const char* DashboardConfigSetTopic =
+        "/mdvwb/dashboard/config/set";
+    static constexpr const char* DashboardConfigResultTopic =
+        "/mdvwb/dashboard/config/result";
+    static constexpr const char* DashboardStatusTopic =
+        "/mdvwb/dashboard/status";
+    static constexpr const char* SchedulesConfigTopic =
+        "/mdvwb/schedules/config";
+    static constexpr const char* SchedulesConfigSetTopic =
+        "/mdvwb/schedules/config/set";
+    static constexpr const char* SchedulesConfigResultTopic =
+        "/mdvwb/schedules/config/result";
+    static constexpr const char* SchedulesStatusTopic =
+        "/mdvwb/schedules/status";
+    static constexpr const char* ScheduleRunFilter =
+        "/mdvwb/schedules/+/run";
     static constexpr const char* BackgroundUploadStartTopic =
         "/mdvwb/dashboard/background/upload/start";
     static constexpr const char* BackgroundUploadChunkFilter =
@@ -56,9 +68,12 @@ public:
         "/mdvwb/dashboard/background/upload/result";
     static constexpr const char* BusStartFilter = "/mdvwb/buses/+/start";
     static constexpr const char* BusStopFilter = "/mdvwb/buses/+/stop";
-    static constexpr const char* BusRestartFilter = "/mdvwb/buses/+/restart";
-    static constexpr const char* BusStatusGetFilter = "/mdvwb/buses/+/status/get";
-    static constexpr const char* BusDiscoveryStartFilter = "/mdvwb/buses/+/discovery/start";
+    static constexpr const char* BusRestartFilter =
+        "/mdvwb/buses/+/restart";
+    static constexpr const char* BusStatusGetFilter =
+        "/mdvwb/buses/+/status/get";
+    static constexpr const char* BusDiscoveryStartFilter =
+        "/mdvwb/buses/+/discovery/start";
 
     ManagerMqttService(
         mdv::IMqttClient& client,
@@ -69,6 +84,10 @@ public:
         std::filesystem::path dashboardPath = {},
         std::filesystem::path dashboardAssetDirectory = {},
         std::filesystem::path schedulesPath = {});
+    ~ManagerMqttService();
+
+    ManagerMqttService(const ManagerMqttService&) = delete;
+    ManagerMqttService& operator=(const ManagerMqttService&) = delete;
 
     void Start();
     [[nodiscard]] std::optional<ManagerMqttResult> ProcessOne();
@@ -98,6 +117,12 @@ private:
         std::string scheduleId;
         std::optional<std::size_t> chunkIndex;
         mdv::MqttMessage message;
+    };
+
+    struct DiscoveryCompletion {
+        int busId = 0;
+        std::string port;
+        DiscoveryExecutionResult result;
     };
 
     void Enqueue(mdv::MqttMessage message);
@@ -131,13 +156,24 @@ private:
     [[nodiscard]] ManagerMqttResult ProcessDiscovery(
         int busId,
         const mdv::MqttMessage& message);
+    [[nodiscard]] std::optional<ManagerMqttResult>
+        ProcessDiscoveryCompletion();
+    [[nodiscard]] bool StartDiscoveryWorker(
+        int busId,
+        std::string port);
+    [[nodiscard]] bool WaitForDiscoveryCompletion(
+        std::chrono::milliseconds timeout);
+    [[nodiscard]] bool DiscoveryBusy() const;
+    void JoinDiscoveryWorker() noexcept;
 
     void PublishCurrentConfig();
     void PublishCurrentDashboard();
     [[nodiscard]] DashboardCollection LoadOrCreateDashboard();
     void PublishCurrentSchedules();
     [[nodiscard]] SchedulesConfig LoadOrCreateSchedules();
-    void PublishReadyStatus(std::size_t busCount, std::size_t enabledCount);
+    void PublishReadyStatus(
+        std::size_t busCount,
+        std::size_t enabledCount);
     void PublishErrorStatus(std::string_view message);
     void PublishDashboardStatus(
         std::string_view state,
@@ -231,8 +267,16 @@ private:
     ServiceSyncPaths servicePaths_;
     CommandRunner& commandRunner_;
     DiscoveryRunner* discoveryRunner_ = nullptr;
+
     mutable std::mutex mutex_;
     std::deque<IncomingCommand> inbox_;
+
+    mutable std::mutex discoveryMutex_;
+    std::condition_variable discoveryCondition_;
+    std::thread discoveryThread_;
+    bool discoveryRunning_ = false;
+    std::optional<DiscoveryCompletion> discoveryCompletion_;
+
     bool started_ = false;
 };
 

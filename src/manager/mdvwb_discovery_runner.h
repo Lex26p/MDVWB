@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -26,7 +28,11 @@ public:
 
 class NativeDiscoveryRunner final : public DiscoveryRunner {
 public:
-    explicit NativeDiscoveryRunner(std::string executablePath);
+    explicit NativeDiscoveryRunner(
+        std::string executablePath,
+        std::chrono::milliseconds overallTimeout =
+            std::chrono::milliseconds{45000},
+        std::size_t maximumOutputBytes = 256U * 1024U);
 
     [[nodiscard]] DiscoveryExecutionResult Run(
         std::string_view port,
@@ -36,6 +42,8 @@ public:
 
 private:
     std::string executablePath_;
+    std::chrono::milliseconds overallTimeout_;
+    std::size_t maximumOutputBytes_ = 0;
 };
 
 [[nodiscard]] std::vector<int> ParseDiscoveryAddresses(std::string_view output);
