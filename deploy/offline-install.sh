@@ -21,12 +21,7 @@ if ! ldconfig -p 2>/dev/null | grep -q 'libmosquitto\.so\.1'; then
     exit 3
 fi
 
-for required in \
-    MDVWB mdvwb-manager mdvwb-scheduler mdvwb-run 'mdvwb@.service' mdvwb.env \
-    mdvwb-manager.service mdvwb-manager.env mdvwb-scheduler.service \
-    mdvwb-scheduler.env buses.example.json \
-    www/mdvwb/index.html www/mdvwb/app.js www/mdvwb/model.js \
-    www/mdvwb/mqtt-client.js www/mdvwb/styles.css SHA256SUMS; do
+for required in     MDVWB mdvwb-manager mdvwb-scheduler mdvwb-run 'mdvwb@.service' mdvwb.env     mdvwb-manager.service mdvwb-manager.env mdvwb-scheduler.service     mdvwb-scheduler.env buses.example.json dashboard.default.json     schedules.default.json     www/mdvwb/index.html www/mdvwb/app.js www/mdvwb/model.js     www/mdvwb/mqtt-client.js www/mdvwb/styles.css     www/mdvwb/dashboard-editor.js www/mdvwb/dashboard-model.js     www/mdvwb/dashboard-placement-editor.js     www/fancoils/index.html www/fancoils/app.js www/fancoils/model.js     www/fancoils/schedule-model.js www/fancoils/scheduler-status-ui.js     www/fancoils/styles.css SHA256SUMS; do
     if [ ! -e "$SCRIPT_DIR/$required" ]; then
         echo "Offline package is incomplete: missing $required" >&2
         exit 4
@@ -41,9 +36,7 @@ done
 systemctl stop mdvwb-scheduler.service 2>/dev/null || true
 systemctl stop mdvwb-manager.service 2>/dev/null || true
 
-install -d -m 0755 \
-    /usr/local/bin /usr/local/lib/mdvwb /etc/mdvwb /etc/default \
-    /etc/systemd/system /var/lib/mdvwb "$WWW_ROOT/mdvwb"
+install -d -m 0755     /usr/local/bin /usr/local/lib/mdvwb /etc/mdvwb /etc/default     /etc/systemd/system /var/lib/mdvwb     "$WWW_ROOT/mdvwb" "$WWW_ROOT/fancoils" "$WWW_ROOT/fancoils/assets"
 install -m 0755 "$SCRIPT_DIR/MDVWB" /usr/local/bin/MDVWB
 install -m 0755 "$SCRIPT_DIR/mdvwb-manager" /usr/local/bin/mdvwb-manager
 install -m 0755 "$SCRIPT_DIR/mdvwb-scheduler" /usr/local/bin/mdvwb-scheduler
@@ -59,11 +52,12 @@ if [ ! -e /etc/default/mdvwb-scheduler ]; then
     install -m 0640 "$SCRIPT_DIR/mdvwb-scheduler.env" /etc/default/mdvwb-scheduler
 fi
 
-install -m 0644 "$SCRIPT_DIR/www/mdvwb/index.html" "$WWW_ROOT/mdvwb/index.html"
-install -m 0644 "$SCRIPT_DIR/www/mdvwb/app.js" "$WWW_ROOT/mdvwb/app.js"
-install -m 0644 "$SCRIPT_DIR/www/mdvwb/model.js" "$WWW_ROOT/mdvwb/model.js"
-install -m 0644 "$SCRIPT_DIR/www/mdvwb/mqtt-client.js" "$WWW_ROOT/mdvwb/mqtt-client.js"
-install -m 0644 "$SCRIPT_DIR/www/mdvwb/styles.css" "$WWW_ROOT/mdvwb/styles.css"
+# Copy complete static applications. Existing uploaded backgrounds under
+# /var/www/fancoils/assets are not deleted during an update.
+cp -R "$SCRIPT_DIR/www/mdvwb/." "$WWW_ROOT/mdvwb/"
+cp -R "$SCRIPT_DIR/www/fancoils/." "$WWW_ROOT/fancoils/"
+find "$WWW_ROOT/mdvwb" "$WWW_ROOT/fancoils" -type d -exec chmod 0755 {} +
+find "$WWW_ROOT/mdvwb" "$WWW_ROOT/fancoils" -type f -exec chmod 0644 {} +
 
 # Build the first buses.json from the currently working per-bus files. Existing
 # buses.json is never overwritten by an update.
@@ -73,6 +67,16 @@ if [ ! -s /etc/mdvwb/buses.json ]; then
         echo "No legacy configuration was found; installed buses.example.json." >&2
     fi
 fi
+
+# Dashboard and schedule defaults contain no device references, so a new
+# installation starts safely even before buses and panels are configured.
+if [ ! -s /etc/mdvwb/dashboard.json ]; then
+    install -m 0640 "$SCRIPT_DIR/dashboard.default.json" /etc/mdvwb/dashboard.json
+fi
+if [ ! -s /etc/mdvwb/schedules.json ]; then
+    install -m 0640 "$SCRIPT_DIR/schedules.default.json" /etc/mdvwb/schedules.json
+fi
+
 /usr/local/bin/mdvwb-manager validate /etc/mdvwb/buses.json
 
 # Remember configured bus ids, stop them, then clean old retained virtual-device
@@ -131,7 +135,9 @@ fi
 
 printf '%s\n' "Installed MDVWB multi-bus manager and scheduler."
 printf '%s\n' "Configuration: /etc/mdvwb/buses.json"
-printf '%s\n' "Web files: $WWW_ROOT/mdvwb"
-printf '%s\n' "Open: http://<WB-address>/mdvwb/"
+printf '%s\n' "Dashboard: /etc/mdvwb/dashboard.json"
+printf '%s\n' "Schedules: /etc/mdvwb/schedules.json"
+printf '%s\n' "Engineering web: http://<WB-address>/mdvwb/"
+printf '%s\n' "Fan-coil web: http://<WB-address>/fancoils/"
 printf '%s\n' "Manager: systemctl status mdvwb-manager.service --no-pager"
 printf '%s\n' "Scheduler: systemctl status mdvwb-scheduler.service --no-pager"

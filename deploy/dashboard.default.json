@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "revision": 0,
+  "defaultPanel": "main",
+  "panels": [
+    {
+      "id": "main",
+      "title": "Главная панель",
+      "background": {
+        "file": "",
+        "naturalWidth": 0,
+        "naturalHeight": 0,
+        "defaultScale": 1,
+        "fit": "contain"
+      },
+      "fans": []
+    }
+  ]
+}

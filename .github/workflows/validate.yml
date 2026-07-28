@@ -1,0 +1,95 @@
+name: Validate MDVWB
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "*.cpp"
+      - "*.h"
+      - "src/**"
+      - "tests/**"
+      - "config/**"
+      - "deploy/**"
+      - "www/**"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - ".github/workflows/validate.yml"
+  pull_request:
+    paths:
+      - "*.cpp"
+      - "*.h"
+      - "src/**"
+      - "tests/**"
+      - "config/**"
+      - "deploy/**"
+      - "www/**"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - ".github/workflows/validate.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends             build-essential             cmake             libmosquitto-dev             ninja-build             python3
+
+      - name: Validate deployment files
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sh -n deploy/offline-install.sh
+          sh -n deploy/mdvwb-run
+          python3 -m json.tool deploy/dashboard.default.json >/dev/null
+          python3 -m json.tool deploy/schedules.default.json >/dev/null
+
+          test -f www/mdvwb/index.html
+          test -f www/mdvwb/app.js
+          test -f www/mdvwb/dashboard-editor.js
+          test -f www/mdvwb/dashboard-model.js
+          test -f www/mdvwb/dashboard-placement-editor.js
+          test -f www/mdvwb/mqtt-client.js
+
+          test -f www/fancoils/index.html
+          test -f www/fancoils/app.js
+          test -f www/fancoils/model.js
+          test -f www/fancoils/schedule-model.js
+          test -f www/fancoils/scheduler-status-ui.js
+          test -f www/fancoils/styles.css
+
+      - name: Configure Release build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B out/build/ci-release             -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DMDVWB_REQUIRE_MOSQUITTO=ON
+
+      - name: Build
+        shell: bash
+        run: cmake --build out/build/ci-release --parallel 2
+
+      - name: Run full test suite
+        shell: bash
+        run: ctest --test-dir out/build/ci-release --output-on-failure
+
+      - name: Run release smoke checks
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ./out/build/ci-release/MDVWB --version
+          ./out/build/ci-release/MDVWB --self-test
+          ./out/build/ci-release/mdvwb-manager validate config/buses.example.json
+          ./out/build/ci-release/mdvwb-scheduler --help
