@@ -1,21 +1,27 @@
 #include "mdvwb_manager_mqtt.h"
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <mutex>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 namespace {
 
-void Require(bool condition, std::string_view message) {
+void Require(bool condition, std::string_view message)
+{
     if (!condition) {
         throw std::runtime_error(std::string(message));
     }
@@ -23,34 +29,38 @@ void Require(bool condition, std::string_view message) {
 
 void WriteFile(
     const std::filesystem::path& path,
-    std::string_view content) {
+    std::string_view content)
+{
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output << content;
     if (!output) {
-        throw std::runtime_error("cannot write discovery async fixture");
+        throw std::runtime_error("cannot write discovery isolation fixture");
     }
 }
 
 class TemporaryDirectory final {
 public:
-    TemporaryDirectory() {
+    TemporaryDirectory()
+    {
         static unsigned long long counter = 0;
         const auto token = std::chrono::steady_clock::now()
             .time_since_epoch()
             .count();
         path_ = std::filesystem::temp_directory_path() /
-            ("mdvwb-discovery-async-" + std::to_string(token) + "-" +
+            ("mdvwb-discovery-isolation-" + std::to_string(token) + "-" +
              std::to_string(++counter));
         std::filesystem::create_directories(path_);
     }
 
-    ~TemporaryDirectory() {
+    ~TemporaryDirectory()
+    {
         std::error_code error;
         std::filesystem::remove_all(path_, error);
     }
 
-    [[nodiscard]] const std::filesystem::path& Path() const noexcept {
+    [[nodiscard]] const std::filesystem::path& Path() const noexcept
+    {
         return path_;
     }
 
@@ -60,18 +70,21 @@ private:
 
 class FakeMqttClient final : public mdv::IMqttClient {
 public:
-    void SetMessageHandler(MessageHandler handler) override {
+    void SetMessageHandler(MessageHandler handler) override
+    {
         handler_ = std::move(handler);
     }
 
-    void Subscribe(std::string_view topicFilter) override {
+    void Subscribe(std::string_view topicFilter) override
+    {
         subscriptions.emplace_back(topicFilter);
     }
 
     void Publish(
         std::string_view topic,
         std::string_view payload,
-        bool retained) override {
+        bool retained) override
+    {
         publications.push_back(
             {std::string(topic), std::string(payload), retained});
     }
@@ -79,18 +92,17 @@ public:
     void Inject(
         std::string topic,
         std::string payload,
-        bool retained = false) {
+        bool retained = false)
+    {
         Require(
             static_cast<bool>(handler_),
             "MQTT handler is not installed");
-        handler_({
-            std::move(topic),
-            std::move(payload),
-            retained});
+        handler_({std::move(topic), std::move(payload), retained});
     }
 
     [[nodiscard]] const mdv::MqttPublication* Last(
-        std::string_view topic) const {
+        std::string_view topic) const
+    {
         for (auto iterator = publications.rbegin();
              iterator != publications.rend();
              ++iterator) {
@@ -108,14 +120,12 @@ public:
 
 class RecordingCommandRunner final : public mdvwb::CommandRunner {
 public:
-    int Run(const std::vector<std::string>& arguments) override {
+    int Run(const std::vector<std::string>& arguments) override
+    {
         commands.push_back(arguments);
         if (arguments.size() >= 2U &&
-            arguments[1] == "is-active") {
-            return 0;
-        }
-        if (arguments.size() >= 2U &&
-            arguments[1] == "is-enabled") {
+            (arguments[1] == "is-active" ||
+             arguments[1] == "is-enabled")) {
             return 0;
         }
         return 0;
@@ -124,22 +134,25 @@ public:
     std::vector<std::vector<std::string>> commands;
 };
 
-class BlockingDiscoveryRunner final : public mdvwb::DiscoveryRunner {
+class ConcurrentBlockingDiscoveryRunner final : public mdvwb::DiscoveryRunner {
 public:
     mdvwb::DiscoveryExecutionResult Run(
         std::string_view port,
         int masterId,
         int periodMilliseconds,
-        int responseTimeoutMilliseconds) override {
+        int responseTimeoutMilliseconds) override
+    {
+        const std::string key(port);
         {
             std::lock_guard lock(mutex_);
-            ++calls_;
-            port_ = std::string(port);
-            masterId_ = masterId;
-            periodMilliseconds_ = periodMilliseconds;
-            responseTimeoutMilliseconds_ =
-                responseTimeoutMilliseconds;
-            started_ = true;
+            ++calls_[key];
+            arguments_[key] = {
+                masterId,
+                periodMilliseconds,
+                responseTimeoutMilliseconds};
+            started_.insert(key);
+            ++activeCalls_;
+            maxActiveCalls_ = std::max(maxActiveCalls_, activeCalls_);
         }
         condition_.notify_all();
 
@@ -147,9 +160,13 @@ public:
         const bool released = condition_.wait_for(
             lock,
             std::chrono::seconds(3),
-            [this] {
-                return released_;
+            [&] {
+                return released_.contains(key);
             });
+        --activeCalls_;
+        lock.unlock();
+        condition_.notify_all();
+
         if (!released) {
             return {
                 false,
@@ -158,77 +175,111 @@ public:
                 {},
                 "Test discovery runner timed out waiting for release"};
         }
+        if (key == "/dev/ttyRS485-1") {
+            return {
+                true,
+                0,
+                {1, 3, 18},
+                "FOUND_ADDRESSES=1,3,18\n",
+                "Discovery completed"};
+        }
         return {
             true,
             0,
-            {1, 3, 18},
-            "FOUND_ADDRESSES=1,3,18\n",
+            {2, 4},
+            "FOUND_ADDRESSES=2,4\n",
             "Discovery completed"};
     }
 
-    bool WaitUntilStarted(std::chrono::milliseconds timeout) {
+    [[nodiscard]] bool WaitUntilStarted(
+        std::string_view port,
+        std::chrono::milliseconds timeout)
+    {
         std::unique_lock lock(mutex_);
         return condition_.wait_for(
             lock,
             timeout,
-            [this] {
-                return started_;
+            [&] {
+                return started_.contains(std::string(port));
             });
     }
 
-    void Release() {
+    void Release(std::string_view port)
+    {
         {
             std::lock_guard lock(mutex_);
-            released_ = true;
+            released_.insert(std::string(port));
         }
         condition_.notify_all();
     }
 
-    [[nodiscard]] int Calls() const {
-        std::lock_guard lock(mutex_);
-        return calls_;
+    void ReleaseAll() noexcept
+    {
+        {
+            std::lock_guard lock(mutex_);
+            for (const auto& port : started_) {
+                released_.insert(port);
+            }
+        }
+        condition_.notify_all();
     }
 
-    [[nodiscard]] bool HasExpectedArguments() const {
+    [[nodiscard]] int Calls(std::string_view port) const
+    {
         std::lock_guard lock(mutex_);
-        return port_ == "/dev/ttyRS485-1" &&
-            masterId_ == 0 &&
-            periodMilliseconds_ == 150 &&
-            responseTimeoutMilliseconds_ == 130;
+        const auto iterator = calls_.find(std::string(port));
+        return iterator == calls_.end() ? 0 : iterator->second;
+    }
+
+    [[nodiscard]] int MaxActiveCalls() const
+    {
+        std::lock_guard lock(mutex_);
+        return maxActiveCalls_;
+    }
+
+    [[nodiscard]] bool HasExpectedArguments(std::string_view port) const
+    {
+        std::lock_guard lock(mutex_);
+        const auto iterator = arguments_.find(std::string(port));
+        return iterator != arguments_.end() &&
+            iterator->second == std::tuple<int, int, int>{0, 150, 130};
     }
 
 private:
     mutable std::mutex mutex_;
     std::condition_variable condition_;
-    bool started_ = false;
-    bool released_ = false;
-    int calls_ = 0;
-    std::string port_;
-    int masterId_ = -1;
-    int periodMilliseconds_ = -1;
-    int responseTimeoutMilliseconds_ = -1;
+    std::set<std::string> started_;
+    std::set<std::string> released_;
+    std::map<std::string, int> calls_;
+    std::map<std::string, std::tuple<int, int, int>> arguments_;
+    int activeCalls_ = 0;
+    int maxActiveCalls_ = 0;
 };
 
 class DiscoveryReleaseGuard final {
 public:
-    explicit DiscoveryReleaseGuard(BlockingDiscoveryRunner& runner) noexcept
-        : runner_(runner) {
+    explicit DiscoveryReleaseGuard(
+        ConcurrentBlockingDiscoveryRunner& runner) noexcept
+        : runner_(runner)
+    {
     }
 
-    ~DiscoveryReleaseGuard() {
-        runner_.Release();
+    ~DiscoveryReleaseGuard()
+    {
+        runner_.ReleaseAll();
     }
 
     DiscoveryReleaseGuard(const DiscoveryReleaseGuard&) = delete;
     DiscoveryReleaseGuard& operator=(const DiscoveryReleaseGuard&) = delete;
 
 private:
-    BlockingDiscoveryRunner& runner_;
+    ConcurrentBlockingDiscoveryRunner& runner_;
 };
 
 bool HasCommand(
     const RecordingCommandRunner& runner,
-    const std::vector<std::string>& expected) {
+    const std::vector<std::string>& expected)
+{
     for (const auto& command : runner.commands) {
         if (command == expected) {
             return true;
@@ -237,7 +288,25 @@ bool HasCommand(
     return false;
 }
 
-void TestDiscoveryDoesNotBlockManagerAndRejectsSecondRun() {
+std::optional<mdvwb::ManagerMqttResult> WaitForDiscoveryCompletion(
+    mdvwb::ManagerMqttService& service,
+    int busId)
+{
+    for (int attempt = 0; attempt < 200; ++attempt) {
+        auto result = service.ProcessOne();
+        if (result.has_value() &&
+            result->command == "discovery" &&
+            result->busId == busId &&
+            result->message == "Discovery completed") {
+            return result;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return std::nullopt;
+}
+
+void TestDiscoveryIsSerializedPerBusAndParallelAcrossBuses()
+{
     TemporaryDirectory temporary;
     const std::filesystem::path config =
         temporary.Path() / "etc/mdvwb/buses.json";
@@ -269,8 +338,7 @@ void TestDiscoveryDoesNotBlockManagerAndRejectsSecondRun() {
 
     mdvwb::ServiceSyncPaths paths;
     paths.defaultDirectory = temporary.Path() / "defaults";
-    paths.environmentTemplate =
-        temporary.Path() / "mdvwb.env";
+    paths.environmentTemplate = temporary.Path() / "mdvwb.env";
     paths.systemctlProgram = "fake-systemctl";
     WriteFile(
         paths.environmentTemplate,
@@ -282,7 +350,7 @@ void TestDiscoveryDoesNotBlockManagerAndRejectsSecondRun() {
 
     FakeMqttClient mqtt;
     RecordingCommandRunner commands;
-    BlockingDiscoveryRunner discovery;
+    ConcurrentBlockingDiscoveryRunner discovery;
     mdvwb::ManagerMqttService service(
         mqtt,
         config,
@@ -293,119 +361,119 @@ void TestDiscoveryDoesNotBlockManagerAndRejectsSecondRun() {
         temporary.Path() / "assets",
         schedules);
     service.Start();
-
-    // Install the release guard before starting discovery. Even if the first
-    // ProcessOne() throws, the fake worker is released before the manager
-    // destructor joins its thread. The runner also has its own three-second
-    // safety deadline, so this test can fail but can never hang indefinitely.
     DiscoveryReleaseGuard releaseGuard(discovery);
-    mqtt.Inject(
-        "/mdvwb/buses/1/discovery/start",
-        "1");
-    const auto startResult = service.ProcessOne();
 
+    mqtt.Inject("/mdvwb/buses/1/discovery/start", "1");
+    const auto firstStart = service.ProcessOne();
     Require(
-        startResult.has_value() &&
-            startResult->success &&
-            startResult->command == "discovery",
-        "discovery start was not accepted");
-    Require(
-        startResult->message.find("background") !=
-            std::string::npos,
-        "long discovery did not switch to background execution");
-    // The fake runner remains blocked until Release(). Returning from
-    // ProcessOne() before that release proves that discovery does not run
-    // synchronously on the manager thread; a wall-clock threshold would only
-    // make this test sensitive to slow Debug/CI machines.
+        firstStart.has_value() && firstStart->success &&
+            firstStart->busId == 1 &&
+            firstStart->message.find("background") != std::string::npos,
+        "first bus discovery was not accepted");
     Require(
         discovery.WaitUntilStarted(
-            std::chrono::milliseconds(500)),
-        "discovery worker did not start");
+            "/dev/ttyRS485-1", std::chrono::milliseconds(500)),
+        "first bus discovery worker did not start");
+
+    mqtt.Inject("/mdvwb/buses/1/discovery/start", "1");
+    const auto duplicate = service.ProcessOne();
     Require(
-        discovery.HasExpectedArguments(),
-        "discovery worker received wrong protocol arguments");
+        duplicate.has_value() && !duplicate->success &&
+            duplicate->busId == 1 &&
+            duplicate->message.find("this bus") != std::string::npos,
+        "second discovery on the same bus was not rejected");
+    Require(
+        discovery.Calls("/dev/ttyRS485-1") == 1,
+        "duplicate discovery invoked the same bus runner twice");
+
+    mqtt.Inject("/mdvwb/buses/2/discovery/start", "1");
+    const auto secondStart = service.ProcessOne();
+    Require(
+        secondStart.has_value() && secondStart->success &&
+            secondStart->busId == 2 &&
+            secondStart->message.find("background") != std::string::npos,
+        "discovery on a different bus was not accepted");
+    Require(
+        discovery.WaitUntilStarted(
+            "/dev/ttyRS485-2", std::chrono::milliseconds(500)),
+        "second bus discovery worker did not start");
+    Require(
+        discovery.MaxActiveCalls() >= 2,
+        "different bus discoveries did not run independently");
+    Require(
+        discovery.HasExpectedArguments("/dev/ttyRS485-1") &&
+            discovery.HasExpectedArguments("/dev/ttyRS485-2"),
+        "parallel discovery received wrong protocol arguments");
+
     Require(
         HasCommand(
             commands,
-            {"fake-systemctl", "stop", "mdvwb@1.service"}),
-        "discovery did not stop the selected bus service");
+            {"fake-systemctl", "stop", "mdvwb@1.service"}) &&
+            HasCommand(
+                commands,
+                {"fake-systemctl", "stop", "mdvwb@2.service"}),
+        "discovery did not stop each selected bus service");
 
-    mqtt.Inject(
-        "/mdvwb/buses/2/discovery/start",
-        "1");
-    const auto duplicateResult = service.ProcessOne();
+    mqtt.Inject("/mdvwb/buses/1/status/get", "1");
+    const auto status = service.ProcessOne();
     Require(
-        duplicateResult.has_value() &&
-            !duplicateResult->success &&
-            duplicateResult->message.find("already running") !=
+        status.has_value() && status->success && status->command == "status",
+        "manager stopped processing commands during parallel discovery");
+
+    discovery.Release("/dev/ttyRS485-2");
+    const auto secondCompletion = WaitForDiscoveryCompletion(service, 2);
+    Require(
+        secondCompletion.has_value() && secondCompletion->success,
+        "second bus completion was not processed independently");
+    Require(
+        discovery.Calls("/dev/ttyRS485-1") == 1,
+        "processing bus 2 completion restarted bus 1 discovery");
+
+    const auto* secondResult = mqtt.Last(
+        "/mdvwb/buses/2/discovery/result");
+    Require(
+        secondResult != nullptr && secondResult->retained &&
+            secondResult->payload.find("\"addresses\":[2,4]") !=
                 std::string::npos,
-        "second simultaneous discovery was not rejected");
+        "second bus completion published wrong addresses");
+
+    discovery.Release("/dev/ttyRS485-1");
+    const auto firstCompletion = WaitForDiscoveryCompletion(service, 1);
     Require(
-        discovery.Calls() == 1,
-        "second discovery invoked the runner");
+        firstCompletion.has_value() && firstCompletion->success,
+        "first bus completion was not processed");
 
-    mqtt.Inject(
-        "/mdvwb/buses/1/status/get",
-        "1");
-    const auto statusResult = service.ProcessOne();
-    Require(
-        statusResult.has_value() &&
-            statusResult->success &&
-            statusResult->command == "status",
-        "manager stopped processing commands during discovery");
-
-    discovery.Release();
-
-    std::optional<mdvwb::ManagerMqttResult> completion;
-    for (int attempt = 0; attempt < 200; ++attempt) {
-        completion = service.ProcessOne();
-        if (completion.has_value() &&
-            completion->command == "discovery" &&
-            completion->message == "Discovery completed") {
-            break;
-        }
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(5));
-    }
-
-    Require(
-        completion.has_value() &&
-            completion->success &&
-            completion->busId == 1,
-        "completed discovery result was not returned to the main loop");
-
-    const auto* discoveryStatus = mqtt.Last(
-        "/mdvwb/buses/1/discovery/status");
-    Require(
-        discoveryStatus != nullptr &&
-            discoveryStatus->retained &&
-            discoveryStatus->payload.find(
-                "\"state\":\"completed\"") !=
-                std::string::npos &&
-            discoveryStatus->payload.find(
-                "\"found\":3") !=
-                std::string::npos,
-        "completed discovery status is wrong");
-
-    const auto* discoveryResult = mqtt.Last(
+    const auto* firstResult = mqtt.Last(
         "/mdvwb/buses/1/discovery/result");
     Require(
-        discoveryResult != nullptr &&
-            discoveryResult->retained &&
-            discoveryResult->payload.find(
-                "\"addresses\":[1,3,18]") !=
+        firstResult != nullptr && firstResult->retained &&
+            firstResult->payload.find("\"addresses\":[1,3,18]") !=
                 std::string::npos,
-        "completed discovery addresses are wrong");
+        "first bus completion published wrong addresses");
+
+    const auto* firstStatus = mqtt.Last(
+        "/mdvwb/buses/1/discovery/status");
+    const auto* secondStatus = mqtt.Last(
+        "/mdvwb/buses/2/discovery/status");
+    Require(
+        firstStatus != nullptr && secondStatus != nullptr &&
+            firstStatus->payload.find("\"state\":\"completed\"") !=
+                std::string::npos &&
+            secondStatus->payload.find("\"state\":\"completed\"") !=
+                std::string::npos,
+        "parallel discovery did not publish both completed statuses");
 }
 
-}  // namespace
+} // namespace
 
-int main() {
+int main()
+{
     try {
-        TestDiscoveryDoesNotBlockManagerAndRejectsSecondRun();
+        TestDiscoveryIsSerializedPerBusAndParallelAcrossBuses();
         std::cout << "MDVWB discovery async tests: OK\n";
         return 0;
-    } catch (const std::exception& error) {
+    }
+    catch (const std::exception& error) {
         std::cerr << "MDVWB discovery async tests: FAILED: "
                   << error.what() << '\n';
         return 1;

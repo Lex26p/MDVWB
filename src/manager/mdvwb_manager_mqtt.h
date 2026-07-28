@@ -12,6 +12,8 @@
 #include <cstddef>
 #include <filesystem>
 #include <iosfwd>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -165,6 +167,13 @@ private:
         DiscoveryExecutionResult result;
     };
 
+    struct DiscoveryTask {
+        int busId = 0;
+        std::string port;
+        std::thread worker;
+        std::optional<DiscoveryExecutionResult> completion;
+    };
+
     void Enqueue(mdv::MqttMessage message);
     [[nodiscard]] static std::optional<IncomingCommand> ParseIncoming(
         mdv::MqttMessage message);
@@ -197,14 +206,15 @@ private:
         int busId,
         const mdv::MqttMessage& message);
     [[nodiscard]] std::optional<ManagerMqttResult>
-        ProcessDiscoveryCompletion();
+        ProcessDiscoveryCompletion(std::optional<int> busId = std::nullopt);
     [[nodiscard]] bool StartDiscoveryWorker(
         int busId,
         std::string port);
     [[nodiscard]] bool WaitForDiscoveryCompletion(
+        int busId,
         std::chrono::milliseconds timeout);
-    [[nodiscard]] bool DiscoveryBusy() const;
-    void JoinDiscoveryWorker() noexcept;
+    [[nodiscard]] bool DiscoveryBusy(int busId) const;
+    void JoinDiscoveryWorkers() noexcept;
 
     void PublishCurrentConfig();
     void PublishCurrentDashboard();
@@ -314,9 +324,7 @@ private:
 
     mutable std::mutex discoveryMutex_;
     std::condition_variable discoveryCondition_;
-    std::thread discoveryThread_;
-    bool discoveryRunning_ = false;
-    std::optional<DiscoveryCompletion> discoveryCompletion_;
+    std::map<int, std::unique_ptr<DiscoveryTask>> discoveryTasks_;
 
     bool started_ = false;
 };

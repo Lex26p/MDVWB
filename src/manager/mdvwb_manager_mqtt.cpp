@@ -414,7 +414,7 @@ ManagerMqttService::ManagerMqttService(
 }
 
 ManagerMqttService::~ManagerMqttService() {
-    JoinDiscoveryWorker();
+    JoinDiscoveryWorkers();
 }
 
 void ManagerMqttService::Start() {
@@ -1577,9 +1577,9 @@ ManagerMqttResult ManagerMqttService::ProcessDiscovery(
         return ManagerMqttResult{
             false, false, detail, busId, std::string(command)};
     }
-    if (DiscoveryBusy()) {
+    if (DiscoveryBusy(busId)) {
         const std::string detail =
-            "Another discovery is already running";
+            "Discovery is already running for this bus";
         PublishDiscoveryResult(busId, false, {}, detail);
         PublishBusResult(busId, command, false, detail);
         return ManagerMqttResult{
@@ -1618,7 +1618,7 @@ ManagerMqttResult ManagerMqttService::ProcessDiscovery(
 
         if (!StartDiscoveryWorker(busId, bus->port)) {
             const std::string detail =
-                "Another discovery is already running";
+                "Discovery is already running for this bus";
             PublishDiscoveryResult(busId, false, {}, detail);
             PublishBusResult(busId, command, false, detail);
             return ManagerMqttResult{
@@ -1626,9 +1626,12 @@ ManagerMqttResult ManagerMqttService::ProcessDiscovery(
         }
 
         // Keep existing fast unit-test runners deterministic without allowing a
-        // real 29-second serial scan to block the manager loop.
-        if (WaitForDiscoveryCompletion(DiscoveryInlineCompletionWait)) {
-            if (auto completion = ProcessDiscoveryCompletion()) {
+        // real 29-second serial scan to block the manager loop. Completion is
+        // restricted to the bus just started so another bus cannot steal this
+        // command's inline result.
+        if (WaitForDiscoveryCompletion(
+                busId, DiscoveryInlineCompletionWait)) {
+            if (auto completion = ProcessDiscoveryCompletion(busId)) {
                 return *completion;
             }
         }
@@ -1652,26 +1655,29 @@ ManagerMqttResult ManagerMqttService::ProcessDiscovery(
 bool ManagerMqttService::StartDiscoveryWorker(
     int busId,
     std::string port) {
+    auto task = std::make_unique<DiscoveryTask>();
+    task->busId = busId;
+    task->port = std::move(port);
+    DiscoveryTask* taskPointer = task.get();
+
     {
         std::lock_guard lock(discoveryMutex_);
-        if (discoveryRunning_ ||
-            discoveryCompletion_.has_value() ||
-            discoveryThread_.joinable()) {
+        if (discoveryTasks_.contains(busId)) {
             return false;
         }
-        discoveryRunning_ = true;
+        discoveryTasks_.emplace(busId, std::move(task));
     }
 
     try {
-        discoveryThread_ = std::thread(
-            [this, busId, port = std::move(port)]() mutable {
+        taskPointer->worker = std::thread(
+            [this, taskPointer]() {
                 DiscoveryExecutionResult result;
                 try {
                     constexpr int MasterId = 0;
                     constexpr int PeriodMilliseconds = 150;
                     constexpr int ResponseTimeoutMilliseconds = 130;
                     result = discoveryRunner_->Run(
-                        port,
+                        taskPointer->port,
                         MasterId,
                         PeriodMilliseconds,
                         ResponseTimeoutMilliseconds);
@@ -1688,75 +1694,91 @@ bool ManagerMqttService::StartDiscoveryWorker(
 
                 {
                     std::lock_guard lock(discoveryMutex_);
-                    discoveryCompletion_ = DiscoveryCompletion{
-                        busId,
-                        std::move(port),
-                        std::move(result)};
-                    discoveryRunning_ = false;
+                    taskPointer->completion = std::move(result);
                 }
                 discoveryCondition_.notify_all();
             });
     } catch (...) {
         std::lock_guard lock(discoveryMutex_);
-        discoveryRunning_ = false;
+        discoveryTasks_.erase(busId);
         throw;
     }
     return true;
 }
 
 bool ManagerMqttService::WaitForDiscoveryCompletion(
+    int busId,
     std::chrono::milliseconds timeout) {
     std::unique_lock lock(discoveryMutex_);
     return discoveryCondition_.wait_for(
         lock,
         timeout,
-        [this] {
-            return discoveryCompletion_.has_value();
+        [this, busId] {
+            const auto task = discoveryTasks_.find(busId);
+            return task != discoveryTasks_.end() &&
+                task->second->completion.has_value();
         });
 }
 
-bool ManagerMqttService::DiscoveryBusy() const {
+bool ManagerMqttService::DiscoveryBusy(int busId) const {
     std::lock_guard lock(discoveryMutex_);
-    return discoveryRunning_ ||
-        discoveryCompletion_.has_value() ||
-        discoveryThread_.joinable();
+    return discoveryTasks_.contains(busId);
 }
 
 std::optional<ManagerMqttResult>
-ManagerMqttService::ProcessDiscoveryCompletion() {
-    std::optional<DiscoveryCompletion> completion;
+ManagerMqttService::ProcessDiscoveryCompletion(std::optional<int> busId) {
+    std::unique_ptr<DiscoveryTask> task;
     {
         std::lock_guard lock(discoveryMutex_);
-        if (!discoveryCompletion_.has_value()) {
-            return std::nullopt;
+        auto iterator = discoveryTasks_.end();
+        if (busId.has_value()) {
+            iterator = discoveryTasks_.find(*busId);
+            if (iterator == discoveryTasks_.end() ||
+                !iterator->second->completion.has_value()) {
+                return std::nullopt;
+            }
+        } else {
+            iterator = std::find_if(
+                discoveryTasks_.begin(),
+                discoveryTasks_.end(),
+                [](const auto& entry) {
+                    return entry.second->completion.has_value();
+                });
+            if (iterator == discoveryTasks_.end()) {
+                return std::nullopt;
+            }
         }
-        completion = std::move(discoveryCompletion_);
-        discoveryCompletion_.reset();
+        task = std::move(iterator->second);
+        discoveryTasks_.erase(iterator);
     }
 
-    if (discoveryThread_.joinable()) {
-        discoveryThread_.join();
+    if (task->worker.joinable()) {
+        task->worker.join();
     }
+
+    DiscoveryCompletion completion{
+        task->busId,
+        std::move(task->port),
+        std::move(*task->completion)};
 
     constexpr std::string_view command = "discovery";
-    const DiscoveryExecutionResult& discovery =
-        completion->result;
+    const DiscoveryExecutionResult& discovery = completion.result;
     if (!discovery.success) {
         const std::string detail = discovery.message.empty()
             ? "Discovery failed"
             : discovery.message;
         PublishDiscoveryResult(
-            completion->busId,
+            completion.busId,
             false,
             {},
             detail);
         PublishDiscoveryStatus(
-            completion->busId,
+            completion.busId,
             "error",
-            completion->port,
+            completion.port,
             detail);
         PublishBusResult(
-            completion->busId,
+            completion.busId,
             command,
             false,
             detail);
@@ -1764,7 +1786,7 @@ ManagerMqttService::ProcessDiscoveryCompletion() {
             false,
             false,
             detail,
-            completion->busId,
+            completion.busId,
             std::string(command)};
     }
 
@@ -1772,18 +1794,18 @@ ManagerMqttService::ProcessDiscoveryCompletion() {
         ? "Discovery completed; no devices found"
         : "Discovery completed";
     PublishDiscoveryResult(
-        completion->busId,
+        completion.busId,
         true,
         discovery.addresses,
         detail);
     PublishDiscoveryStatus(
-        completion->busId,
+        completion.busId,
         "completed",
-        completion->port,
+        completion.port,
         detail,
         discovery.addresses.size());
     PublishBusResult(
-        completion->busId,
+        completion.busId,
         command,
         true,
         detail);
@@ -1791,13 +1813,26 @@ ManagerMqttService::ProcessDiscoveryCompletion() {
         true,
         false,
         detail,
-        completion->busId,
+        completion.busId,
         std::string(command)};
 }
 
-void ManagerMqttService::JoinDiscoveryWorker() noexcept {
-    if (discoveryThread_.joinable()) {
-        discoveryThread_.join();
+void ManagerMqttService::JoinDiscoveryWorkers() noexcept {
+    std::vector<std::unique_ptr<DiscoveryTask>> tasks;
+    {
+        std::lock_guard lock(discoveryMutex_);
+        tasks.reserve(discoveryTasks_.size());
+        for (auto& [busId, task] : discoveryTasks_) {
+            (void)busId;
+            tasks.push_back(std::move(task));
+        }
+        discoveryTasks_.clear();
+    }
+
+    for (auto& task : tasks) {
+        if (task->worker.joinable()) {
+            task->worker.join();
+        }
     }
 }
 
@@ -1809,9 +1844,12 @@ std::size_t ManagerMqttService::PendingCount() const {
     }
     {
         std::lock_guard lock(discoveryMutex_);
-        if (discoveryCompletion_.has_value()) {
-            ++count;
-        }
+        count += static_cast<std::size_t>(std::count_if(
+            discoveryTasks_.begin(),
+            discoveryTasks_.end(),
+            [](const auto& entry) {
+                return entry.second->completion.has_value();
+            }));
     }
     return count;
 }
