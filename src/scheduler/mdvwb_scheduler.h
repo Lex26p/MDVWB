@@ -5,7 +5,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <filesystem>
 #include <iosfwd>
 #include <map>
@@ -66,6 +65,11 @@ public:
     static constexpr const char* FactsFilter = "/devices/+/controls/+";
     static constexpr const char* StatusTopic = "/mdvwb/scheduler/status";
 
+    static constexpr std::size_t MaximumPendingMessages = 1024U;
+    static constexpr std::size_t MaximumPendingBytes = 2U * 1024U * 1024U;
+    static constexpr std::size_t MaximumQueuedRuns = 128U;
+    static constexpr std::size_t MaximumQueuedRunBytes = 256U * 1024U;
+
     SchedulerService(
         mdv::IMqttClient& client,
         SchedulerPaths paths,
@@ -88,6 +92,21 @@ private:
         std::string scheduleId;
         std::string factKey;
         mdv::MqttMessage message;
+
+        friend bool SameQueueKey(
+            const IncomingMessage& left,
+            const IncomingMessage& right) noexcept
+        {
+            return left.message.topic == right.message.topic;
+        }
+
+        friend std::size_t QueueItemBytes(
+            const IncomingMessage& incoming) noexcept
+        {
+            return sizeof(IncomingMessage) + incoming.scheduleId.size() +
+                incoming.factKey.size() + incoming.message.topic.size() +
+                incoming.message.payload.size();
+        }
     };
 
     struct QueuedRun {
@@ -95,6 +114,19 @@ private:
         int configRevision = 0;
         std::string source;
         std::string minuteKey;
+
+        friend bool SameQueueKey(
+            const QueuedRun& left,
+            const QueuedRun& right) noexcept
+        {
+            return left.scheduleId == right.scheduleId;
+        }
+
+        friend std::size_t QueueItemBytes(const QueuedRun& run) noexcept
+        {
+            return sizeof(QueuedRun) + run.scheduleId.size() +
+                run.source.size() + run.minuteKey.size();
+        }
     };
 
     struct ExpectedFact {
@@ -171,8 +203,10 @@ private:
     SchedulerPaths paths_;
     SchedulerClock& clock_;
     mutable std::mutex mutex_;
-    std::deque<IncomingMessage> inbox_;
-    std::deque<QueuedRun> runQueue_;
+    mdv::BoundedLatestQueue<
+        IncomingMessage, MaximumPendingMessages, MaximumPendingBytes> inbox_;
+    mdv::BoundedLatestQueue<
+        QueuedRun, MaximumQueuedRuns, MaximumQueuedRunBytes> runQueue_;
     std::optional<ActiveRun> active_;
     std::uint64_t factSequence_ = 0;
     std::map<std::string, std::string> lastAutomaticMinute_;

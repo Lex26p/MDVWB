@@ -107,6 +107,16 @@ public:
         return nullptr;
     }
 
+    [[nodiscard]] bool HasPublication(std::string_view topic) const
+    {
+        for (const auto& publication : publications) {
+            if (publication.topic == topic) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     [[nodiscard]] bool HasResultState(
         std::string_view topic,
         std::string_view state) const
@@ -216,6 +226,140 @@ struct Fixture {
     }
 };
 
+void TestBoundedQueueKeepsNewestValues()
+{
+    mdv::BoundedLatestQueue<mdv::MqttMessage, 3U, 1024U> queue;
+    Require(queue.push_back({"same", "old", false}),
+        "bounded queue rejected a normal message");
+    Require(queue.push_back({"same", "new", false}),
+        "bounded queue rejected a replacement message");
+    Require(queue.size() == 1U && queue.front().payload == "new",
+        "bounded queue did not coalesce a repeated logical command");
+
+    queue.clear();
+    Require(queue.push_back({"one", "1", false}), "cannot queue first item");
+    Require(queue.push_back({"two", "2", false}), "cannot queue second item");
+    Require(queue.push_back({"three", "3", false}), "cannot queue third item");
+    Require(queue.push_back({"four", "4", false}), "cannot queue newest item");
+    Require(queue.size() == 3U && queue.front().topic == "two",
+        "bounded queue did not evict the oldest distinct command");
+
+    const std::size_t bytesBeforeMove = queue.bytes();
+    mdv::MqttMessage moved = std::move(queue.front());
+    (void)moved;
+    queue.pop_front();
+    Require(queue.bytes() < bytesBeforeMove,
+        "queue byte accounting broke after moving the front message");
+
+    mdv::BoundedLatestQueue<mdv::MqttMessage, 4U, 256U> byteBounded;
+    Require(!byteBounded.push_back({"oversized", std::string(1024U, 'x'), false}),
+        "oversized MQTT message bypassed the byte limit");
+    Require(byteBounded.empty(),
+        "oversized MQTT message changed the existing queue");
+}
+
+void TestManagerInboxIsBoundedAndKeepsNewestCommand()
+{
+    Fixture fixture;
+    DeliveryMqttClient mqtt;
+    RecordingRunner runner;
+    mdvwb::ManagerMqttService service(
+        mqtt,
+        fixture.buses,
+        fixture.servicePaths,
+        runner,
+        nullptr,
+        fixture.dashboard,
+        fixture.assets,
+        fixture.schedules);
+    service.Start();
+    mqtt.publications.clear();
+
+    for (int count = 0; count < 100; ++count) {
+        mqtt.Inject("/mdvwb/buses/1/status/get", "", false);
+    }
+    Require(service.PendingCount() == 1U,
+        "manager did not coalesce repeated status commands");
+
+    for (std::size_t index = 0;
+         index < mdvwb::ManagerMqttService::MaximumPendingCommands + 20U;
+         ++index) {
+        mqtt.Inject(
+            "/mdvwb/schedules/flood-" + std::to_string(index) + "/run",
+            "run",
+            false);
+    }
+    mqtt.Inject("/mdvwb/schedules/manual-off/run", "run", false);
+
+    Require(
+        service.PendingCount() <=
+            mdvwb::ManagerMqttService::MaximumPendingCommands,
+        "manager MQTT inbox exceeded its item limit");
+
+    while (service.ProcessOne().has_value()) {
+    }
+    Require(mqtt.HasPublication("/mdvwb/schedules/manual-off/execute"),
+        "manager overload policy lost the newest valid command");
+}
+
+void TestSchedulerQueuesAreBoundedAndKeepNewestCommand()
+{
+    Fixture fixture;
+    DeliveryMqttClient mqtt;
+    FakeClock clock;
+    mdvwb::SchedulerPaths paths;
+    paths.buses = fixture.buses;
+    paths.dashboard = fixture.dashboard;
+    paths.schedules = fixture.schedules;
+    paths.state = fixture.state;
+    paths.confirmationTimeoutSeconds = 10;
+
+    mdvwb::SchedulerService service(mqtt, paths, clock);
+    service.Start();
+    mqtt.publications.clear();
+
+    for (int count = 0; count < 100; ++count) {
+        mqtt.Inject("/devices/Fan-1_1/controls/Temp", std::to_string(count));
+    }
+    Require(service.PendingCount() == 1U,
+        "scheduler did not coalesce repeated facts");
+
+    for (std::size_t index = 0;
+         index < mdvwb::SchedulerService::MaximumPendingMessages + 20U;
+         ++index) {
+        mqtt.Inject(
+            "/devices/Fan-1_" + std::to_string(index) + "/controls/Temp",
+            "21");
+    }
+    mqtt.Inject("/mdvwb/schedules/manual-off/execute", "1", false);
+
+    Require(
+        service.PendingCount() <=
+            mdvwb::SchedulerService::MaximumPendingMessages,
+        "scheduler MQTT inbox exceeded its item limit");
+
+    bool executeProcessed = false;
+    while (const auto result = service.ProcessOne()) {
+        if (result->command == "execute") {
+            executeProcessed = result->success;
+            break;
+        }
+    }
+    Require(executeProcessed && service.HasActiveRun(),
+        "scheduler overload policy lost the newest execute command");
+
+    for (std::size_t index = 0;
+         index < mdvwb::SchedulerService::MaximumQueuedRuns + 20U;
+         ++index) {
+        mqtt.Inject("/mdvwb/schedules/manual-off/execute", "1", false);
+        const auto result = service.ProcessOne();
+        Require(result.has_value() && result->command == "execute",
+            "scheduler did not process a repeated execute command");
+    }
+    Require(service.PendingCount() <= 2U,
+        "scheduler run queue grew for repeated execution of one schedule");
+}
+
 void TestManagerRejectsUndeliveredExecuteEvent()
 {
     Fixture fixture;
@@ -296,6 +440,9 @@ void TestSchedulerFailsImmediatelyWhenCommandIsUndelivered()
 int main()
 {
     try {
+        TestBoundedQueueKeepsNewestValues();
+        TestManagerInboxIsBoundedAndKeepsNewestCommand();
+        TestSchedulerQueuesAreBoundedAndKeepNewestCommand();
         TestManagerRejectsUndeliveredExecuteEvent();
         TestSchedulerFailsImmediatelyWhenCommandIsUndelivered();
         std::cout << "MDVWB MQTT command delivery tests: OK\n";

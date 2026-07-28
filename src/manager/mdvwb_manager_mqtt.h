@@ -10,7 +10,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
-#include <deque>
 #include <filesystem>
 #include <iosfwd>
 #include <mutex>
@@ -75,6 +74,9 @@ public:
     static constexpr const char* BusDiscoveryStartFilter =
         "/mdvwb/buses/+/discovery/start";
 
+    static constexpr std::size_t MaximumPendingCommands = 128U;
+    static constexpr std::size_t MaximumPendingBytes = 8U * 1024U * 1024U;
+
     ManagerMqttService(
         mdv::IMqttClient& client,
         std::filesystem::path configPath,
@@ -117,6 +119,38 @@ private:
         std::string scheduleId;
         std::optional<std::size_t> chunkIndex;
         mdv::MqttMessage message;
+
+        friend bool SameQueueKey(
+            const IncomingCommand& left,
+            const IncomingCommand& right) noexcept
+        {
+            const auto isBusLifecycle = [](IncomingType type) {
+                return type == IncomingType::BusStart ||
+                    type == IncomingType::BusStop ||
+                    type == IncomingType::BusRestart;
+            };
+            if (isBusLifecycle(left.type) && isBusLifecycle(right.type)) {
+                return left.busId == right.busId;
+            }
+
+            const auto isUploadTerminal = [](IncomingType type) {
+                return type == IncomingType::BackgroundUploadFinish ||
+                    type == IncomingType::BackgroundUploadCancel;
+            };
+            if (isUploadTerminal(left.type) && isUploadTerminal(right.type)) {
+                return left.uploadId == right.uploadId;
+            }
+
+            return left.message.topic == right.message.topic;
+        }
+
+        friend std::size_t QueueItemBytes(
+            const IncomingCommand& command) noexcept
+        {
+            return sizeof(IncomingCommand) + command.uploadId.size() +
+                command.scheduleId.size() + command.message.topic.size() +
+                command.message.payload.size();
+        }
     };
 
     struct DiscoveryCompletion {
@@ -269,7 +303,8 @@ private:
     DiscoveryRunner* discoveryRunner_ = nullptr;
 
     mutable std::mutex mutex_;
-    std::deque<IncomingCommand> inbox_;
+    mdv::BoundedLatestQueue<
+        IncomingCommand, MaximumPendingCommands, MaximumPendingBytes> inbox_;
 
     mutable std::mutex discoveryMutex_;
     std::condition_variable discoveryCondition_;

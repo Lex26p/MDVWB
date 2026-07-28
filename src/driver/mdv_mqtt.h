@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mdv_driver.h"
+#include "mdv_bounded_queue.h"
 
 #include <array>
 #include <cmath>
@@ -21,6 +22,19 @@ struct MqttMessage {
     std::string payload;
     bool retained = false;
 };
+
+[[nodiscard]] inline bool SameQueueKey(
+    const MqttMessage& left,
+    const MqttMessage& right) noexcept
+{
+    return left.topic == right.topic;
+}
+
+[[nodiscard]] inline std::size_t QueueItemBytes(
+    const MqttMessage& message) noexcept
+{
+    return sizeof(MqttMessage) + message.topic.size() + message.payload.size();
+}
 
 struct MqttPublication {
     std::string topic;
@@ -105,13 +119,17 @@ enum class MqttPublishStatus {
 // the same time.
 class MqttCommandInbox {
 public:
+    static constexpr std::size_t MaximumPendingMessages = 512U;
+    static constexpr std::size_t MaximumPendingBytes = 256U * 1024U;
+
     void Push(MqttMessage message);
     [[nodiscard]] std::optional<MqttMessage> TryPop();
     [[nodiscard]] std::size_t Size() const;
 
 private:
     mutable std::mutex mutex_;
-    std::deque<MqttMessage> messages_;
+    BoundedLatestQueue<
+        MqttMessage, MaximumPendingMessages, MaximumPendingBytes> messages_;
 };
 
 class IMqttClient {
