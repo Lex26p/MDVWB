@@ -226,6 +226,147 @@ std::filesystem::path ResolveSchedulesPath(
         : std::move(schedulesPath);
 }
 
+
+struct TextFileSnapshot {
+    bool existed = false;
+    std::string content;
+};
+
+TextFileSnapshot CaptureTextFile(const std::filesystem::path& path) {
+    std::error_code error;
+    const bool exists = std::filesystem::exists(path, error);
+    if (error) {
+        throw std::runtime_error(
+            "cannot inspect " + path.string() + ": " + error.message());
+    }
+    if (!exists) {
+        return {};
+    }
+
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        throw std::runtime_error("cannot read " + path.string());
+    }
+    TextFileSnapshot snapshot;
+    snapshot.existed = true;
+    snapshot.content.assign(
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>());
+    if (!input.good() && !input.eof()) {
+        throw std::runtime_error("cannot finish reading " + path.string());
+    }
+    return snapshot;
+}
+
+void RemoveFileIfPresent(const std::filesystem::path& path) {
+    std::error_code error;
+    std::filesystem::remove(path, error);
+    if (error) {
+        throw std::runtime_error(
+            "cannot remove " + path.string() + ": " + error.message());
+    }
+}
+
+void RestoreTextFile(
+    const std::filesystem::path& path,
+    const TextFileSnapshot& snapshot) {
+    if (snapshot.existed) {
+        WriteTextFileAtomically(path, snapshot.content);
+        return;
+    }
+    RemoveFileIfPresent(path);
+}
+
+void CommitStagedTextFile(
+    const std::filesystem::path& stagedPath,
+    const std::filesystem::path& targetPath) {
+    const std::filesystem::path backupPath = targetPath.string() + ".previous";
+    std::error_code error;
+    const bool targetExists = std::filesystem::exists(targetPath, error);
+    if (error) {
+        throw std::runtime_error(
+            "cannot inspect existing " + targetPath.string() + ": " +
+            error.message());
+    }
+    error.clear();
+    const bool backupExists = std::filesystem::exists(backupPath, error);
+    if (error) {
+        throw std::runtime_error(
+            "cannot inspect backup " + backupPath.string() + ": " +
+            error.message());
+    }
+    if (backupExists) {
+        if (targetExists) {
+            RemoveFileIfPresent(backupPath);
+        } else {
+            std::filesystem::rename(backupPath, targetPath, error);
+            if (error) {
+                throw std::runtime_error(
+                    "cannot restore interrupted backup " +
+                    backupPath.string() + ": " + error.message());
+            }
+        }
+    }
+
+    error.clear();
+    std::filesystem::rename(stagedPath, targetPath, error);
+    if (!error) {
+        return;
+    }
+
+    // Windows does not replace an existing target with rename(). Preserve the
+    // previous file in a sibling backup so a failed second rename can recover it.
+    std::error_code ignored;
+    bool movedPrevious = false;
+    error.clear();
+    if (std::filesystem::exists(targetPath, error)) {
+        if (error) {
+            throw std::runtime_error(
+                "cannot inspect existing " + targetPath.string() + ": " +
+                error.message());
+        }
+        std::filesystem::rename(targetPath, backupPath, error);
+        if (error) {
+            throw std::runtime_error(
+                "cannot stage previous " + targetPath.string() + ": " +
+                error.message());
+        }
+        movedPrevious = true;
+    } else if (error) {
+        throw std::runtime_error(
+            "cannot inspect existing " + targetPath.string() + ": " +
+            error.message());
+    }
+
+    error.clear();
+    std::filesystem::rename(stagedPath, targetPath, error);
+    if (error) {
+        const std::string detail =
+            "cannot commit staged " + targetPath.string() + ": " +
+            error.message();
+        if (movedPrevious) {
+            std::error_code restoreError;
+            std::filesystem::rename(backupPath, targetPath, restoreError);
+        }
+        throw std::runtime_error(detail);
+    }
+
+    if (movedPrevious) {
+        std::filesystem::remove(backupPath, ignored);
+    }
+}
+
+std::string JoinRollbackErrors(const std::vector<std::string>& errors) {
+    std::ostringstream output;
+    for (std::size_t index = 0; index < errors.size(); ++index) {
+        if (index != 0U) {
+            output << "; ";
+        }
+        output << errors[index];
+    }
+    return output.str();
+}
+
 bool IsSafeUploadTopicId(std::string_view value) {
     return !value.empty() && value.size() <= 64U &&
         std::all_of(value.begin(), value.end(), [](char character) {
@@ -622,8 +763,167 @@ ManagerMqttResult ManagerMqttService::ProcessConfiguration(
         config.revision = currentRevision + 1;
         const std::string canonical = SerializeBusesConfig(config);
         const std::size_t enabledCount = EnabledCount(config);
+        const ServiceSyncPlan plan =
+            BuildServiceSyncPlan(config, servicePaths_);
+        const TextFileSnapshot previousConfigFile =
+            CaptureTextFile(configPath_);
+        const std::filesystem::path stagedConfigPath =
+            configPath_.string() + ".pending";
 
-        WriteTextFileAtomically(configPath_, canonical);
+        // The source configuration is not replaced until every environment file
+        // and systemd operation succeeds. A stale pending file from an interrupted
+        // older attempt is safe to replace.
+        RemoveFileIfPresent(stagedConfigPath);
+        WriteTextFileAtomically(stagedConfigPath, canonical);
+
+        try {
+            ApplyServiceSyncPlan(plan, servicePaths_, commandRunner_);
+            CommitStagedTextFile(stagedConfigPath, configPath_);
+        } catch (const std::exception& applyError) {
+            std::vector<std::string> rollbackErrors;
+            try {
+                const BusesConfig rollbackConfig =
+                    previousConfig.value_or(BusesConfig{});
+                const ServiceSyncPlan rollbackPlan =
+                    BuildServiceSyncPlan(rollbackConfig, servicePaths_);
+                ApplyServiceSyncPlan(
+                    rollbackPlan, servicePaths_, commandRunner_);
+            } catch (const std::exception& rollbackError) {
+                rollbackErrors.push_back(
+                    std::string("services: ") + rollbackError.what());
+            }
+
+            const std::size_t previousBusCount =
+                previousConfig.has_value() ? previousConfig->buses.size() : 0U;
+            const std::size_t previousEnabledCount =
+                previousConfig.has_value() ? EnabledCount(*previousConfig) : 0U;
+
+            if (rollbackErrors.empty()) {
+                try {
+                    const TextFileSnapshot currentConfigFile =
+                        CaptureTextFile(configPath_);
+                    const bool unchanged =
+                        currentConfigFile.existed == previousConfigFile.existed &&
+                        currentConfigFile.content == previousConfigFile.content;
+                    if (!unchanged) {
+                        RestoreTextFile(configPath_, previousConfigFile);
+                    }
+                } catch (const std::exception& rollbackError) {
+                    rollbackErrors.push_back(
+                        std::string("buses.json: ") + rollbackError.what());
+                }
+            }
+
+            if (rollbackErrors.empty()) {
+                std::error_code ignored;
+                std::filesystem::remove(stagedConfigPath, ignored);
+                const std::string detail =
+                    std::string(
+                        "Configuration was not saved because service "
+                        "synchronization failed; previous configuration restored: ") +
+                    applyError.what();
+                PublishResult(
+                    false,
+                    false,
+                    detail,
+                    previousBusCount,
+                    previousEnabledCount,
+                    plan.actions.size());
+                if (previousConfig.has_value()) {
+                    client_.Publish(
+                        ConfigTopic,
+                        SerializeBusesConfig(*previousConfig),
+                        true);
+                    PublishReadyStatus(
+                        previousBusCount, previousEnabledCount);
+                    PublishAllBusStatuses(*previousConfig);
+                    PublishDiscoveryIdleStatuses(*previousConfig);
+                } else {
+                    PublishErrorStatus(detail);
+                }
+                return ManagerMqttResult{
+                    false, false, detail, std::nullopt, {}};
+            }
+
+            // The old service state could not be restored. Keep the validated
+            // submitted configuration as the recovery target, but publish an
+            // explicit retained error so operators know systemd is degraded.
+            bool submittedSaved = false;
+            try {
+                std::error_code existsError;
+                const bool stagedExists =
+                    std::filesystem::exists(stagedConfigPath, existsError);
+                if (existsError) {
+                    throw std::runtime_error(
+                        "cannot inspect staged buses.json: " +
+                        existsError.message());
+                }
+                if (stagedExists) {
+                    CommitStagedTextFile(stagedConfigPath, configPath_);
+                }
+                const TextFileSnapshot currentConfigFile =
+                    CaptureTextFile(configPath_);
+                submittedSaved =
+                    currentConfigFile.existed &&
+                    currentConfigFile.content == canonical;
+                if (!submittedSaved) {
+                    throw std::runtime_error(
+                        "submitted buses.json was not committed");
+                }
+            } catch (const std::exception& persistenceError) {
+                rollbackErrors.push_back(
+                    std::string("submitted buses.json: ") +
+                    persistenceError.what());
+            }
+
+            if (submittedSaved) {
+                const std::string detail =
+                    std::string(
+                        "Configuration saved, but service synchronization "
+                        "failed and rollback is incomplete: apply=") +
+                    applyError.what() + "; rollback=" +
+                    JoinRollbackErrors(rollbackErrors);
+                client_.Publish(ConfigTopic, canonical, true);
+                PublishErrorStatus(detail);
+                PublishResult(
+                    false,
+                    true,
+                    detail,
+                    config.buses.size(),
+                    enabledCount,
+                    plan.actions.size());
+                return ManagerMqttResult{
+                    false, true, detail, std::nullopt, {}};
+            }
+
+            try {
+                RestoreTextFile(configPath_, previousConfigFile);
+            } catch (const std::exception& restoreError) {
+                rollbackErrors.push_back(
+                    std::string("restore buses.json: ") +
+                    restoreError.what());
+            }
+            std::error_code ignored;
+            std::filesystem::remove(stagedConfigPath, ignored);
+
+            const std::string detail =
+                std::string(
+                    "Configuration apply failed and rollback is incomplete: "
+                    "apply=") +
+                applyError.what() + "; rollback=" +
+                JoinRollbackErrors(rollbackErrors);
+            PublishErrorStatus(detail);
+            PublishResult(
+                false,
+                false,
+                detail,
+                previousBusCount,
+                previousEnabledCount,
+                plan.actions.size());
+            return ManagerMqttResult{
+                false, false, detail, std::nullopt, {}};
+        }
+
         client_.Publish(ConfigTopic, canonical, true);
         if (previousConfig.has_value()) {
             RemoveObsoleteDeviceTopics(*previousConfig, config);
@@ -639,34 +939,18 @@ ManagerMqttResult ManagerMqttService::ProcessConfiguration(
             PublishSchedulesStatus("error", 0, 0, 0, 0, error.what());
         }
 
-        try {
-            const ServiceSyncPlan plan = BuildServiceSyncPlan(config, servicePaths_);
-            ApplyServiceSyncPlan(plan, servicePaths_, commandRunner_);
-            PublishReadyStatus(config.buses.size(), enabledCount);
-            PublishAllBusStatuses(config);
-            PublishDiscoveryIdleStatuses(config);
-            PublishResult(
-                true,
-                true,
-                "Configuration saved and applied",
-                config.buses.size(),
-                enabledCount,
-                plan.actions.size());
-            return ManagerMqttResult{
-                true, true, "Configuration saved and applied", std::nullopt, {}};
-        } catch (const std::exception& error) {
-            const std::string detail =
-                std::string("Configuration saved, service synchronization failed: ") +
-                error.what();
-            PublishErrorStatus(detail);
-            PublishResult(
-                false,
-                true,
-                detail,
-                config.buses.size(),
-                enabledCount);
-            return ManagerMqttResult{false, true, detail, std::nullopt, {}};
-        }
+        PublishReadyStatus(config.buses.size(), enabledCount);
+        PublishAllBusStatuses(config);
+        PublishDiscoveryIdleStatuses(config);
+        PublishResult(
+            true,
+            true,
+            "Configuration saved and applied",
+            config.buses.size(),
+            enabledCount,
+            plan.actions.size());
+        return ManagerMqttResult{
+            true, true, "Configuration saved and applied", std::nullopt, {}};
     } catch (const BusesConfigError& error) {
         const std::string detail = std::string("Invalid configuration: ") + error.what();
         PublishResult(false, false, detail);

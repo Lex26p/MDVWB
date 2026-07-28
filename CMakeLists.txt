@@ -213,6 +213,11 @@ add_executable(mdvwb_manager_revision_test
 )
 target_link_libraries(mdvwb_manager_revision_test PRIVATE mdvwb_manager_mqtt)
 
+add_executable(mdvwb_manager_transaction_test
+    ${MDVWB_MANAGER_TEST_DIR}/mdvwb_manager_transaction_test.cpp
+)
+target_link_libraries(mdvwb_manager_transaction_test PRIVATE mdvwb_manager_mqtt)
+
 add_executable(mdvwb_discovery_runner_test
     ${MDVWB_MANAGER_TEST_DIR}/mdvwb_discovery_runner_test.cpp
 )
@@ -263,6 +268,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_service_sync_test
     mdvwb_manager_mqtt_test
     mdvwb_manager_revision_test
+    mdvwb_manager_transaction_test
     mdvwb_discovery_runner_test
     mdvwb_discovery_async_test
     mdvwb_migration_test
@@ -294,6 +300,7 @@ add_test(NAME mdvwb_manager_cli_test COMMAND mdvwb_manager_cli_test)
 add_test(NAME mdvwb_service_sync_test COMMAND mdvwb_service_sync_test)
 add_test(NAME mdvwb_manager_mqtt_test COMMAND mdvwb_manager_mqtt_test)
 add_test(NAME mdvwb_manager_revision_test COMMAND mdvwb_manager_revision_test)
+add_test(NAME mdvwb_manager_transaction_test COMMAND mdvwb_manager_transaction_test)
 add_test(NAME mdvwb_discovery_runner_test COMMAND mdvwb_discovery_runner_test)
 add_test(NAME mdvwb_discovery_async_test COMMAND mdvwb_discovery_async_test)
 set_tests_properties(mdvwb_discovery_async_test PROPERTIES TIMEOUT 10)
