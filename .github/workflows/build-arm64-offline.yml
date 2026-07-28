@@ -28,12 +28,21 @@ jobs:
           uname -m
           test "$(uname -m)" = "aarch64"
 
-          docker run --rm             -v "$PWD:/src"             -w /src             debian:bullseye             bash -lc '
+          docker run --rm \
+            -v "$PWD:/src" \
+            -w /src \
+            debian:bullseye \
+            bash -lc '
               set -eux
               test "$(uname -m)" = "aarch64"
 
               apt-get update
-              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends                 build-essential                 ca-certificates                 cmake                 libmosquitto-dev                 python3
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                build-essential \
+                ca-certificates \
+                cmake \
+                libmosquitto-dev \
+                python3
 
               sh -n deploy/offline-install.sh
               sh -n deploy/mdvwb-run
@@ -41,11 +50,15 @@ jobs:
               python3 -m json.tool deploy/schedules.default.json >/dev/null
 
               rm -rf out/build/arm64-release
-              cmake -S . -B out/build/arm64-release                 -DCMAKE_BUILD_TYPE=Release                 -DMDVWB_REQUIRE_MOSQUITTO=ON                 -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+              cmake -S . -B out/build/arm64-release \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DMDVWB_REQUIRE_MOSQUITTO=ON \
+                -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
               cmake --build out/build/arm64-release --parallel 2
               ctest --test-dir out/build/arm64-release --output-on-failure
               ./out/build/arm64-release/MDVWB --version
               ./out/build/arm64-release/MDVWB --self-test
+              ./out/build/arm64-release/mdvwb-offline --self-test
               ./out/build/arm64-release/mdvwb-manager validate config/buses.example.json
               ./out/build/arm64-release/mdvwb-scheduler --help
             '
@@ -58,6 +71,7 @@ jobs:
           mkdir -p dist/MDVWB-arm64/www dist/MDVWB-arm64/docs
 
           install -m 0755 out/build/arm64-release/MDVWB dist/MDVWB-arm64/MDVWB
+          install -m 0755 out/build/arm64-release/mdvwb-offline dist/MDVWB-arm64/mdvwb-offline
           install -m 0755 out/build/arm64-release/mdvwb-manager dist/MDVWB-arm64/mdvwb-manager
           install -m 0755 out/build/arm64-release/mdvwb-scheduler dist/MDVWB-arm64/mdvwb-scheduler
           install -m 0755 deploy/mdvwb-run dist/MDVWB-arm64/mdvwb-run
@@ -85,11 +99,14 @@ jobs:
           test -f dist/MDVWB-arm64/www/fancoils/scheduler-status-ui.js
 
           file dist/MDVWB-arm64/MDVWB
+          file dist/MDVWB-arm64/mdvwb-offline
           readelf -h dist/MDVWB-arm64/MDVWB | grep -E "Class:|Machine:"
+          readelf -h dist/MDVWB-arm64/mdvwb-offline | grep -E "Class:|Machine:"
 
           (
             cd dist/MDVWB-arm64
-            find . -type f ! -name SHA256SUMS -print0 | sort -z |               xargs -0 sha256sum > SHA256SUMS
+            find . -type f ! -name SHA256SUMS -print0 | sort -z | \
+              xargs -0 sha256sum > SHA256SUMS
             sha256sum -c SHA256SUMS
           )
 

@@ -3,6 +3,17 @@ set -eu
 
 CONFIG_FILE=${MDVWB_CONFIG_FILE:-/etc/default/mdvwb}
 BINARY=${MDVWB_BINARY:-/usr/local/bin/MDVWB}
+OFFLINE_BINARY=${MDVWB_OFFLINE_BINARY:-/usr/local/bin/mdvwb-offline}
+MODE=run
+
+if [ "${1:-}" = "--publish-offline" ]; then
+    MODE=offline
+    shift
+fi
+if [ "$#" -ne 0 ]; then
+    echo "Usage: mdvwb-run [--publish-offline]" >&2
+    exit 2
+fi
 
 if [ ! -r "$CONFIG_FILE" ]; then
     echo "MDVWB configuration is not readable: $CONFIG_FILE" >&2
@@ -15,7 +26,6 @@ fi
 . "$CONFIG_FILE"
 
 : "${MDVWB_ADDRESSES:?Set MDVWB_ADDRESSES in $CONFIG_FILE}"
-: "${MDVWB_PORT:?Set MDVWB_PORT in $CONFIG_FILE}"
 : "${MDVWB_BUS:?Set MDVWB_BUS in $CONFIG_FILE}"
 
 MDVWB_MASTER_ID=${MDVWB_MASTER_ID:-0}
@@ -28,23 +38,38 @@ MDVWB_MQTT_RECONNECT=${MDVWB_MQTT_RECONNECT:-1}
 MDVWB_MQTT_RECONNECT_MAX=${MDVWB_MQTT_RECONNECT_MAX:-10}
 MDVWB_PUBLISH_POLL_ADDRESS=${MDVWB_PUBLISH_POLL_ADDRESS:-0}
 
-if [ ! -x "$BINARY" ]; then
-    echo "MDVWB executable is missing or not executable: $BINARY" >&2
-    exit 3
+if [ "$MODE" = "offline" ]; then
+    if [ ! -x "$OFFLINE_BINARY" ]; then
+        echo "MDVWB offline publisher is missing or not executable: $OFFLINE_BINARY" >&2
+        exit 3
+    fi
+    set -- "$OFFLINE_BINARY" \
+        --addresses "$MDVWB_ADDRESSES" \
+        --bus "$MDVWB_BUS" \
+        --mqtt-host "$MDVWB_MQTT_HOST" \
+        --mqtt-port "$MDVWB_MQTT_PORT" \
+        --mqtt-keepalive "$MDVWB_MQTT_KEEPALIVE" \
+        --mqtt-reconnect "$MDVWB_MQTT_RECONNECT" \
+        --mqtt-reconnect-max "$MDVWB_MQTT_RECONNECT_MAX"
+else
+    : "${MDVWB_PORT:?Set MDVWB_PORT in $CONFIG_FILE}"
+    if [ ! -x "$BINARY" ]; then
+        echo "MDVWB executable is missing or not executable: $BINARY" >&2
+        exit 3
+    fi
+    set -- "$BINARY" \
+        --addresses "$MDVWB_ADDRESSES" \
+        --port "$MDVWB_PORT" \
+        --bus "$MDVWB_BUS" \
+        --master-id "$MDVWB_MASTER_ID" \
+        --period-ms "$MDVWB_PERIOD_MS" \
+        --response-timeout-ms "$MDVWB_RESPONSE_TIMEOUT_MS" \
+        --mqtt-host "$MDVWB_MQTT_HOST" \
+        --mqtt-port "$MDVWB_MQTT_PORT" \
+        --mqtt-keepalive "$MDVWB_MQTT_KEEPALIVE" \
+        --mqtt-reconnect "$MDVWB_MQTT_RECONNECT" \
+        --mqtt-reconnect-max "$MDVWB_MQTT_RECONNECT_MAX"
 fi
-
-set -- "$BINARY" \
-    --addresses "$MDVWB_ADDRESSES" \
-    --port "$MDVWB_PORT" \
-    --bus "$MDVWB_BUS" \
-    --master-id "$MDVWB_MASTER_ID" \
-    --period-ms "$MDVWB_PERIOD_MS" \
-    --response-timeout-ms "$MDVWB_RESPONSE_TIMEOUT_MS" \
-    --mqtt-host "$MDVWB_MQTT_HOST" \
-    --mqtt-port "$MDVWB_MQTT_PORT" \
-    --mqtt-keepalive "$MDVWB_MQTT_KEEPALIVE" \
-    --mqtt-reconnect "$MDVWB_MQTT_RECONNECT" \
-    --mqtt-reconnect-max "$MDVWB_MQTT_RECONNECT_MAX"
 
 if [ -n "${MDVWB_MQTT_USER:-}" ]; then
     set -- "$@" --mqtt-user "$MDVWB_MQTT_USER"
@@ -53,7 +78,7 @@ if [ -n "${MDVWB_MQTT_USER:-}" ]; then
     fi
 fi
 
-if [ "$MDVWB_PUBLISH_POLL_ADDRESS" = "1" ]; then
+if [ "$MODE" = "run" ] && [ "$MDVWB_PUBLISH_POLL_ADDRESS" = "1" ]; then
     set -- "$@" --publish-poll-address
 fi
 

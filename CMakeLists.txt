@@ -72,6 +72,13 @@ if(MOSQUITTO_INCLUDE_DIR AND MOSQUITTO_LIBRARY)
     target_link_libraries(mdvwb_mosquitto_transport PRIVATE ${MOSQUITTO_LIBRARY})
 endif()
 
+add_executable(mdvwb-offline
+    ${MDVWB_DRIVER_DIR}/mdv_offline.cpp
+)
+target_compile_features(mdvwb-offline PRIVATE cxx_std_20)
+target_include_directories(mdvwb-offline PRIVATE ${MDVWB_DRIVER_DIR})
+target_link_libraries(mdvwb-offline PRIVATE mdvwb_mosquitto_transport)
+
 add_library(mdvwb_buses_config STATIC
     ${MDVWB_MANAGER_DIR}/mdv_buses_config.cpp
     ${MDVWB_MANAGER_DIR}/mdv_buses_config.h
@@ -94,7 +101,6 @@ add_library(mdvwb_schedules_config STATIC
 target_compile_features(mdvwb_schedules_config PUBLIC cxx_std_20)
 target_include_directories(mdvwb_schedules_config PUBLIC ${MDVWB_MANAGER_DIR})
 target_link_libraries(mdvwb_schedules_config PUBLIC mdvwb_buses_config mdvwb_dashboard_config)
-
 
 add_library(mdvwb_dashboard_upload STATIC
     ${MDVWB_MANAGER_DIR}/mdvwb_dashboard_upload.cpp
@@ -247,6 +253,7 @@ target_link_libraries(mdvwb_mqtt_command_delivery_test
 set(MDVWB_PROJECT_TARGETS
     MDVWB
     mdvwb_mosquitto_transport
+    mdvwb-offline
     mdvwb_mqtt_delivery_test
     mdvwb_driver_fairness_test
     mdvwb_buses_config
@@ -290,6 +297,7 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${MDVWB_DRIVER_SOURCES})
 
 enable_testing()
 add_test(NAME mdv_protocol_self_test COMMAND MDVWB --self-test)
+add_test(NAME mdvwb_offline_publisher_test COMMAND mdvwb-offline --self-test)
 add_test(NAME mdvwb_mqtt_delivery_test COMMAND mdvwb_mqtt_delivery_test)
 add_test(NAME mdvwb_driver_fairness_test COMMAND mdvwb_driver_fairness_test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
@@ -309,4 +317,5 @@ add_test(NAME mdvwb_scheduler_test COMMAND mdvwb_scheduler_test)
 add_test(NAME mdvwb_mqtt_command_delivery_test COMMAND mdvwb_mqtt_command_delivery_test)
 
 include(GNUInstallDirs)
-install(TARGETS MDVWB mdvwb-manager mdvwb-scheduler RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS MDVWB mdvwb-offline mdvwb-manager mdvwb-scheduler
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

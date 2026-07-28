@@ -25,6 +25,7 @@ install -d -m 0755 \
     /usr/local/bin /usr/local/lib/mdvwb /etc/mdvwb /etc/default \
     /etc/systemd/system /var/lib/mdvwb "$WWW_ROOT/mdvwb"
 install -m 0755 "$BUILD_DIR/MDVWB" /usr/local/bin/MDVWB
+install -m 0755 "$BUILD_DIR/mdvwb-offline" /usr/local/bin/mdvwb-offline
 install -m 0755 "$BUILD_DIR/mdvwb-manager" /usr/local/bin/mdvwb-manager
 install -m 0755 "$BUILD_DIR/mdvwb-scheduler" /usr/local/bin/mdvwb-scheduler
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" /usr/local/lib/mdvwb/mdvwb-run

@@ -21,7 +21,18 @@ if ! ldconfig -p 2>/dev/null | grep -q 'libmosquitto\.so\.1'; then
     exit 3
 fi
 
-for required in     MDVWB mdvwb-manager mdvwb-scheduler mdvwb-run 'mdvwb@.service' mdvwb.env     mdvwb-manager.service mdvwb-manager.env mdvwb-scheduler.service     mdvwb-scheduler.env buses.example.json dashboard.default.json     schedules.default.json     www/mdvwb/index.html www/mdvwb/app.js www/mdvwb/model.js     www/mdvwb/mqtt-client.js www/mdvwb/styles.css     www/mdvwb/dashboard-editor.js www/mdvwb/dashboard-model.js     www/mdvwb/dashboard-placement-editor.js     www/fancoils/index.html www/fancoils/app.js www/fancoils/model.js     www/fancoils/schedule-model.js www/fancoils/scheduler-status-ui.js     www/fancoils/styles.css SHA256SUMS; do
+for required in \
+    MDVWB mdvwb-offline mdvwb-manager mdvwb-scheduler mdvwb-run \
+    'mdvwb@.service' mdvwb.env mdvwb-manager.service mdvwb-manager.env \
+    mdvwb-scheduler.service mdvwb-scheduler.env buses.example.json \
+    dashboard.default.json schedules.default.json \
+    www/mdvwb/index.html www/mdvwb/app.js www/mdvwb/model.js \
+    www/mdvwb/mqtt-client.js www/mdvwb/styles.css \
+    www/mdvwb/dashboard-editor.js www/mdvwb/dashboard-model.js \
+    www/mdvwb/dashboard-placement-editor.js \
+    www/fancoils/index.html www/fancoils/app.js www/fancoils/model.js \
+    www/fancoils/schedule-model.js www/fancoils/scheduler-status-ui.js \
+    www/fancoils/styles.css SHA256SUMS; do
     if [ ! -e "$SCRIPT_DIR/$required" ]; then
         echo "Offline package is incomplete: missing $required" >&2
         exit 4
@@ -36,8 +47,12 @@ done
 systemctl stop mdvwb-scheduler.service 2>/dev/null || true
 systemctl stop mdvwb-manager.service 2>/dev/null || true
 
-install -d -m 0755     /usr/local/bin /usr/local/lib/mdvwb /etc/mdvwb /etc/default     /etc/systemd/system /var/lib/mdvwb     "$WWW_ROOT/mdvwb" "$WWW_ROOT/fancoils" "$WWW_ROOT/fancoils/assets"
+install -d -m 0755 \
+    /usr/local/bin /usr/local/lib/mdvwb /etc/mdvwb /etc/default \
+    /etc/systemd/system /var/lib/mdvwb \
+    "$WWW_ROOT/mdvwb" "$WWW_ROOT/fancoils" "$WWW_ROOT/fancoils/assets"
 install -m 0755 "$SCRIPT_DIR/MDVWB" /usr/local/bin/MDVWB
+install -m 0755 "$SCRIPT_DIR/mdvwb-offline" /usr/local/bin/mdvwb-offline
 install -m 0755 "$SCRIPT_DIR/mdvwb-manager" /usr/local/bin/mdvwb-manager
 install -m 0755 "$SCRIPT_DIR/mdvwb-scheduler" /usr/local/bin/mdvwb-scheduler
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" /usr/local/lib/mdvwb/mdvwb-run
@@ -117,6 +132,7 @@ fi
 systemctl daemon-reload
 /usr/local/bin/MDVWB --version
 /usr/local/bin/MDVWB --self-test
+/usr/local/bin/mdvwb-offline --self-test
 /usr/local/bin/mdvwb-manager apply /etc/mdvwb/buses.json
 systemctl enable --now mdvwb-manager.service
 systemctl enable --now mdvwb-scheduler.service

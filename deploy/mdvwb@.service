@@ -7,6 +7,9 @@ After=network-online.target mosquitto.service
 Type=simple
 Environment=MDVWB_CONFIG_FILE=/etc/default/mdvwb-%i
 ExecStart=/usr/local/lib/mdvwb/mdvwb-run
+# ExecStopPost also runs after an unexpected process exit. A separate MQTT
+# client marks every configured fan coil offline before systemd restarts it.
+ExecStopPost=-/usr/local/lib/mdvwb/mdvwb-run --publish-offline
 Restart=on-failure
 RestartSec=5
 User=root
