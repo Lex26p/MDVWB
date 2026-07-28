@@ -173,40 +173,6 @@ struct ParsedDeviceName {
     throw std::invalid_argument("unknown MDV fan speed");
 }
 
-[[nodiscard]] std::optional<Mode> ModeFromCachedFrame(const RequestFrame& frame) noexcept
-{
-    switch (frame[6] & 0x1FU) {
-    case static_cast<std::uint8_t>(Mode::Cool):
-        return Mode::Cool;
-    case static_cast<std::uint8_t>(Mode::Heat):
-        return Mode::Heat;
-    case static_cast<std::uint8_t>(Mode::Dry):
-        return Mode::Dry;
-    case static_cast<std::uint8_t>(Mode::Fan):
-        return Mode::Fan;
-    case static_cast<std::uint8_t>(Mode::Auto):
-        return Mode::Auto;
-    default:
-        return std::nullopt;
-    }
-}
-
-[[nodiscard]] std::optional<FanSpeed> SpeedFromCachedFrame(const RequestFrame& frame) noexcept
-{
-    switch (frame[7]) {
-    case static_cast<std::uint8_t>(FanSpeed::Low):
-        return FanSpeed::Low;
-    case static_cast<std::uint8_t>(FanSpeed::Medium):
-        return FanSpeed::Medium;
-    case static_cast<std::uint8_t>(FanSpeed::High):
-        return FanSpeed::High;
-    case static_cast<std::uint8_t>(FanSpeed::Auto):
-        return FanSpeed::Auto;
-    default:
-        return std::nullopt;
-    }
-}
-
 [[nodiscard]] int FirstAlarmCode(const DeviceState& state) noexcept
 {
     for (int bit = 0; bit < 8; ++bit) {
@@ -492,35 +458,38 @@ void MqttStatePublisher::PublishDevice(
     }
 
     const auto& state = runtime.device.ActualState();
-    const auto& cached = runtime.device.CachedSetFrame();
+    const auto confirmed = mqtt_detail::ConfirmedStateValuesFromC0(state);
     auto& previous = published_[address];
 
-    const auto mode = state.mode.has_value()
-        ? state.mode
-        : ModeFromCachedFrame(cached);
-    const auto speed = state.fanSpeed.has_value()
-        ? state.fanSpeed
-        : SpeedFromCachedFrame(cached);
-    const auto setTemperature = state.setTemperature >= 16 && state.setTemperature <= 32
-        ? state.setTemperature
-        : cached[8];
     const auto alarmCode = FirstAlarmCode(state);
     const auto alarm = alarmCode == 0 ? 0 : 1;
 
     PublishInteger(address, "Power", state.power ? 1 : 0, previous.power, force);
-    if (mode.has_value()) {
-        PublishInteger(address, "Mode", ModeToMqtt(*mode), previous.mode, force);
+    if (confirmed.mode.has_value()) {
+        PublishInteger(
+            address, "Mode", ModeToMqtt(*confirmed.mode), previous.mode, force);
     }
-    if (speed.has_value()) {
-        PublishInteger(address, "Speed", SpeedToMqtt(*speed), previous.speed, force);
+    if (confirmed.speed.has_value()) {
+        PublishInteger(
+            address, "Speed", SpeedToMqtt(*confirmed.speed), previous.speed, force);
     }
-    PublishInteger(
-        address, "SetTemp", static_cast<int>(setTemperature),
-        previous.setTemperature, force);
-    if (state.roomTemperature.has_value()) {
+    if (confirmed.setTemperature.has_value()) {
+        PublishInteger(
+            address, "SetTemp", static_cast<int>(*confirmed.setTemperature),
+            previous.setTemperature, force);
+    }
+    if (confirmed.roomTemperature.has_value()) {
         PublishNumber(
-            address, "Temp", *state.roomTemperature,
+            address, "Temp", *confirmed.roomTemperature,
             previous.roomTemperature, force);
+    }
+    else if (mqtt_detail::ShouldPublishUnavailableNumber(
+                 previous.roomTemperature, force)) {
+        // An empty retained payload removes the obsolete numeric state from the
+        // broker. Current subscribers also receive the empty payload and render
+        // the room temperature as unavailable instead of keeping an old value.
+        client_.Publish(Topic(address, "Temp"), "", true);
+        previous.roomTemperature = mqtt_detail::UnavailableNumberMarker();
     }
     PublishInteger(address, "Blinds", state.blinds ? 1 : 0, previous.blinds, force);
     PublishInteger(address, "Blok", state.modeLocked ? 1 : 0, previous.blocked, force);

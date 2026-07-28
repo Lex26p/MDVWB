@@ -3,10 +3,12 @@
 #include "mdv_driver.h"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -25,6 +27,56 @@ struct MqttPublication {
     std::string payload;
     bool retained = false;
 };
+
+namespace mqtt_detail {
+
+// Values eligible for factual MQTT publication. The function deliberately
+// accepts only C0 data and never consults the cached C3 command frame.
+struct ConfirmedStateValues {
+    std::optional<Mode> mode;
+    std::optional<FanSpeed> speed;
+    std::optional<std::uint8_t> setTemperature;
+    std::optional<double> roomTemperature;
+};
+
+[[nodiscard]] inline ConfirmedStateValues ConfirmedStateValuesFromC0(
+    const DeviceState& state) noexcept
+{
+    if (state.command != Command::Read) {
+        return {};
+    }
+
+    ConfirmedStateValues values;
+    values.mode = state.mode;
+    values.speed = state.fanSpeed;
+    if (state.setTemperature >= 16 && state.setTemperature <= 32) {
+        values.setTemperature = state.setTemperature;
+    }
+    values.roomTemperature = state.roomTemperature;
+    return values;
+}
+
+// NaN is used only inside PublishedState to distinguish an already-cleared
+// retained numeric topic from a value that has never been processed.
+[[nodiscard]] inline double UnavailableNumberMarker() noexcept
+{
+    return std::numeric_limits<double>::quiet_NaN();
+}
+
+[[nodiscard]] inline bool IsUnavailableNumberMarker(
+    const std::optional<double>& value) noexcept
+{
+    return value.has_value() && std::isnan(*value);
+}
+
+[[nodiscard]] inline bool ShouldPublishUnavailableNumber(
+    const std::optional<double>& previous,
+    bool force) noexcept
+{
+    return force || !IsUnavailableNumberMarker(previous);
+}
+
+} // namespace mqtt_detail
 
 enum class MqttPublishStatus {
     Published,
