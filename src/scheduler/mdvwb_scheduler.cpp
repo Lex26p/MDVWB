@@ -736,17 +736,22 @@ void SchedulerService::PublishCommands(ActiveRun& run)
                              const ScheduleTarget& target,
                              std::string_view control,
                              std::string payload) {
+        const std::string topic = CommandTopic(target, control);
+        const std::uint64_t afterSequence = factSequence_;
+        const mdv::MqttPublishStatus publishStatus =
+            client_.PublishWithResult(topic, payload, false);
+        if (publishStatus != mdv::MqttPublishStatus::Published) {
+            throw std::runtime_error(
+                "cannot publish schedule command '" + topic + "': " +
+                std::string(mdv::MqttPublishStatusMessage(publishStatus)));
+        }
+
         ExpectedFact expected;
         expected.key = FactKey(target, control);
-        expected.expected = payload;
-        expected.afterSequence = factSequence_;
+        expected.expected = std::move(payload);
+        expected.afterSequence = afterSequence;
         expected.confirmed = false;
         run.expected.push_back(std::move(expected));
-
-        client_.Publish(
-            CommandTopic(target, control),
-            payload,
-            false);
         ++run.commandCount;
     };
 

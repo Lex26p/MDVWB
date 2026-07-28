@@ -277,6 +277,14 @@ void MosquittoMqttClient::Publish(
     std::string_view payload,
     bool retained)
 {
+    (void)PublishWithResult(topic, payload, retained);
+}
+
+MqttPublishStatus MosquittoMqttClient::PublishWithResult(
+    std::string_view topic,
+    std::string_view payload,
+    bool retained)
+{
     if (topic.empty()) {
         throw std::invalid_argument("MQTT publication topic cannot be empty");
     }
@@ -299,11 +307,11 @@ void MosquittoMqttClient::Publish(
         if (!canPublish) {
             if (publication.retained) {
                 pendingPublications_[publication.topic] = std::move(publication);
-            } else {
-                lastError_ =
-                    "MQTT non-retained publication was dropped because the client is disconnected";
+                return MqttPublishStatus::QueuedRetained;
             }
-            return;
+            lastError_ =
+                "MQTT non-retained publication was dropped because the client is disconnected";
+            return MqttPublishStatus::Disconnected;
         }
     }
 #if defined(MDVWB_HAS_MOSQUITTO)
@@ -315,18 +323,26 @@ void MosquittoMqttClient::Publish(
         publication.payload.data(),
         0,
         publication.retained);
-    if (result != MOSQ_ERR_SUCCESS) {
-        {
-            std::lock_guard lock(mutex_);
-            if (publication.retained) {
-                pendingPublications_[publication.topic] = publication;
-            }
-            lastError_ = std::string("mosquitto_publish failed: ") +
-                mosquitto_strerror(result);
-        }
+    if (result == MOSQ_ERR_SUCCESS) {
+        return MqttPublishStatus::Published;
     }
+
+    {
+        std::lock_guard lock(mutex_);
+        if (publication.retained) {
+            pendingPublications_[publication.topic] = publication;
+        }
+        lastError_ = std::string("mosquitto_publish failed: ") +
+            mosquitto_strerror(result);
+    }
+    return publication.retained
+        ? MqttPublishStatus::QueuedRetained
+        : MqttPublishStatus::Failed;
 #else
     (void)canPublish;
+    return retained
+        ? MqttPublishStatus::QueuedRetained
+        : MqttPublishStatus::Disconnected;
 #endif
 }
 void MosquittoMqttClient::SetError(std::string error)

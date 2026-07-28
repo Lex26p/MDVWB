@@ -896,7 +896,13 @@ ManagerMqttResult ManagerMqttService::ProcessScheduleRun(
         const std::string payload =
             "{\"version\":1,\"scheduleId\":\"" +
             JsonEscape(scheduleId) + "\",\"source\":\"manual\"}";
-        client_.Publish(ScheduleExecuteTopic(scheduleId), payload, false);
+        const mdv::MqttPublishStatus publishStatus = client_.PublishWithResult(
+            ScheduleExecuteTopic(scheduleId), payload, false);
+        if (publishStatus != mdv::MqttPublishStatus::Published) {
+            throw std::runtime_error(
+                "cannot publish scheduler execute event: " +
+                std::string(mdv::MqttPublishStatusMessage(publishStatus)));
+        }
         PublishScheduleRunResult(
             scheduleId, true, "queued", "Schedule queued for execution");
         return ManagerMqttResult{

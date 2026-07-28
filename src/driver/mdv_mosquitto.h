@@ -47,6 +47,10 @@ public:
         std::string_view topic,
         std::string_view payload,
         bool retained) override;
+    [[nodiscard]] MqttPublishStatus PublishWithResult(
+        std::string_view topic,
+        std::string_view payload,
+        bool retained) override;
 
 private:
     struct Implementation;

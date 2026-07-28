@@ -228,6 +228,12 @@ add_executable(mdvwb_scheduler_test
 )
 target_link_libraries(mdvwb_scheduler_test PRIVATE mdvwb_scheduler)
 
+add_executable(mdvwb_mqtt_command_delivery_test
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/mdvwb_mqtt_command_delivery_test.cpp
+)
+target_link_libraries(mdvwb_mqtt_command_delivery_test
+    PRIVATE mdvwb_manager_mqtt mdvwb_scheduler)
+
 set(MDVWB_PROJECT_TARGETS
     MDVWB
     mdvwb_mosquitto_transport
@@ -255,6 +261,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_discovery_runner_test
     mdvwb_migration_test
     mdvwb_scheduler_test
+    mdvwb_mqtt_command_delivery_test
 )
 
 if(MSVC)
@@ -284,6 +291,7 @@ add_test(NAME mdvwb_manager_revision_test COMMAND mdvwb_manager_revision_test)
 add_test(NAME mdvwb_discovery_runner_test COMMAND mdvwb_discovery_runner_test)
 add_test(NAME mdvwb_migration_test COMMAND mdvwb_migration_test)
 add_test(NAME mdvwb_scheduler_test COMMAND mdvwb_scheduler_test)
+add_test(NAME mdvwb_mqtt_command_delivery_test COMMAND mdvwb_mqtt_command_delivery_test)
 
 include(GNUInstallDirs)
 install(TARGETS MDVWB mdvwb-manager mdvwb-scheduler RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

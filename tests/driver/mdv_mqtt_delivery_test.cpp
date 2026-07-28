@@ -16,21 +16,33 @@ void TestDisconnectedTransportQueuesOnlyRetainedState()
 {
     mdv::MosquittoMqttClient client;
 
-    client.Publish("/test/state", "one", true);
+    Require(
+        client.PublishWithResult("/test/state", "one", true) ==
+            mdv::MqttPublishStatus::QueuedRetained,
+        "disconnected retained publication did not report queued state");
     Require(client.PendingPublicationCount() == 1U,
             "retained state was not queued while disconnected");
 
-    client.Publish("/test/event", "run", false);
+    Require(
+        client.PublishWithResult("/test/event", "run", false) ==
+            mdv::MqttPublishStatus::Disconnected,
+        "disconnected event did not report delivery failure");
     Require(client.PendingPublicationCount() == 1U,
             "non-retained event entered the reconnect queue");
     Require(!client.LastError().empty(),
             "dropped non-retained event did not expose a diagnostic");
 
-    client.Publish("/test/state", "two", true);
+    Require(
+        client.PublishWithResult("/test/state", "two", true) ==
+            mdv::MqttPublishStatus::QueuedRetained,
+        "updated retained publication did not remain queued");
     Require(client.PendingPublicationCount() == 1U,
             "retained state was not coalesced by topic");
 
-    client.Publish("/test/other-state", "value", true);
+    Require(
+        client.PublishWithResult("/test/other-state", "value", true) ==
+            mdv::MqttPublishStatus::QueuedRetained,
+        "second retained publication did not report queued state");
     Require(client.PendingPublicationCount() == 2U,
             "independent retained state was not queued");
 }

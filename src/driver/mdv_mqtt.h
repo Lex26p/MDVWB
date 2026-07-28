@@ -26,6 +26,28 @@ struct MqttPublication {
     bool retained = false;
 };
 
+enum class MqttPublishStatus {
+    Published,
+    QueuedRetained,
+    Disconnected,
+    Failed,
+};
+
+[[nodiscard]] constexpr std::string_view MqttPublishStatusMessage(
+    MqttPublishStatus status) noexcept {
+    switch (status) {
+        case MqttPublishStatus::Published:
+            return "published";
+        case MqttPublishStatus::QueuedRetained:
+            return "retained publication queued for reconnect";
+        case MqttPublishStatus::Disconnected:
+            return "MQTT client is disconnected";
+        case MqttPublishStatus::Failed:
+            return "MQTT publication failed";
+    }
+    return "unknown MQTT publication status";
+}
+
 // The network callback only pushes messages here. RS-485 state is changed later
 // by the driver thread, so MQTT and serial code never access DeviceContext at
 // the same time.
@@ -51,6 +73,18 @@ public:
         std::string_view topic,
         std::string_view payload,
         bool retained) = 0;
+
+    // Existing in-memory clients remain source-compatible: their Publish()
+    // implementation is treated as an immediate successful publication.
+    // Network transports override this method to expose disconnects and
+    // synchronous library failures to command-producing services.
+    [[nodiscard]] virtual MqttPublishStatus PublishWithResult(
+        std::string_view topic,
+        std::string_view payload,
+        bool retained) {
+        Publish(topic, payload, retained);
+        return MqttPublishStatus::Published;
+    }
 };
 
 enum class MqttCommandStatus {
