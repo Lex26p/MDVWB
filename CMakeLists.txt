@@ -244,6 +244,11 @@ add_executable(mdvwb_scheduler_test
 )
 target_link_libraries(mdvwb_scheduler_test PRIVATE mdvwb_scheduler)
 
+add_executable(mdvwb_scheduler_freshness_test
+    ${MDVWB_SCHEDULER_TEST_DIR}/mdvwb_scheduler_freshness_test.cpp
+)
+target_link_libraries(mdvwb_scheduler_freshness_test PRIVATE mdvwb_scheduler)
+
 add_executable(mdvwb_mqtt_command_delivery_test
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/mdvwb_mqtt_command_delivery_test.cpp
 )
@@ -280,6 +285,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_discovery_async_test
     mdvwb_migration_test
     mdvwb_scheduler_test
+    mdvwb_scheduler_freshness_test
     mdvwb_mqtt_command_delivery_test
 )
 
@@ -314,6 +320,7 @@ add_test(NAME mdvwb_discovery_async_test COMMAND mdvwb_discovery_async_test)
 set_tests_properties(mdvwb_discovery_async_test PROPERTIES TIMEOUT 10)
 add_test(NAME mdvwb_migration_test COMMAND mdvwb_migration_test)
 add_test(NAME mdvwb_scheduler_test COMMAND mdvwb_scheduler_test)
+add_test(NAME mdvwb_scheduler_freshness_test COMMAND mdvwb_scheduler_freshness_test)
 add_test(NAME mdvwb_mqtt_command_delivery_test COMMAND mdvwb_mqtt_command_delivery_test)
 
 include(GNUInstallDirs)

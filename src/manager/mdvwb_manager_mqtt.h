@@ -120,28 +120,34 @@ private:
         std::optional<std::size_t> chunkIndex;
         mdv::MqttMessage message;
 
+        [[nodiscard]] bool HasSameQueueKey(
+            const IncomingCommand& other) const noexcept
+        {
+            const auto isBusLifecycle = [](IncomingType value) {
+                return value == IncomingType::BusStart ||
+                    value == IncomingType::BusStop ||
+                    value == IncomingType::BusRestart;
+            };
+            if (isBusLifecycle(type) && isBusLifecycle(other.type)) {
+                return busId == other.busId;
+            }
+
+            const auto isUploadTerminal = [](IncomingType value) {
+                return value == IncomingType::BackgroundUploadFinish ||
+                    value == IncomingType::BackgroundUploadCancel;
+            };
+            if (isUploadTerminal(type) && isUploadTerminal(other.type)) {
+                return uploadId == other.uploadId;
+            }
+
+            return message.topic == other.message.topic;
+        }
+
         friend bool SameQueueKey(
             const IncomingCommand& left,
             const IncomingCommand& right) noexcept
         {
-            const auto isBusLifecycle = [](IncomingType type) {
-                return type == IncomingType::BusStart ||
-                    type == IncomingType::BusStop ||
-                    type == IncomingType::BusRestart;
-            };
-            if (isBusLifecycle(left.type) && isBusLifecycle(right.type)) {
-                return left.busId == right.busId;
-            }
-
-            const auto isUploadTerminal = [](IncomingType type) {
-                return type == IncomingType::BackgroundUploadFinish ||
-                    type == IncomingType::BackgroundUploadCancel;
-            };
-            if (isUploadTerminal(left.type) && isUploadTerminal(right.type)) {
-                return left.uploadId == right.uploadId;
-            }
-
-            return left.message.topic == right.message.topic;
+            return left.HasSameQueueKey(right);
         }
 
         friend std::size_t QueueItemBytes(

@@ -58,6 +58,15 @@ struct SchedulerProcessResult {
     std::string message;
 };
 
+struct SchedulerConfigurationFingerprints {
+    std::uint64_t schedules = 0;
+    std::uint64_t buses = 0;
+    std::uint64_t dashboard = 0;
+
+    [[nodiscard]] bool operator==(
+        const SchedulerConfigurationFingerprints&) const noexcept = default;
+};
+
 class SchedulerService final {
 public:
     static constexpr const char* ConfigTopic = "/mdvwb/schedules/config";
@@ -158,6 +167,11 @@ private:
     [[nodiscard]] bool ReloadFromDisk(
         bool force,
         std::string* errorMessage = nullptr);
+    [[nodiscard]] bool ReadConfigurationFingerprints(
+        SchedulerConfigurationFingerprints& fingerprints,
+        bool& dependencyFailure,
+        std::string* errorMessage) const;
+    void BlockInvalidDependencies(std::string message);
     void ValidateSelected(const ScheduleEntry& schedule) const;
     void QueueAutomaticSchedules(const SchedulerLocalMinute& minute);
     void QueueRun(
@@ -212,8 +226,10 @@ private:
     std::map<std::string, std::string> lastAutomaticMinute_;
     std::map<std::string, std::string> lastAutomaticAttemptMinute_;
     SchedulesConfig schedules_;
-    std::optional<std::filesystem::file_time_type> schedulesWriteTime_;
-    std::optional<std::filesystem::file_time_type> rejectedSchedulesWriteTime_;
+    std::optional<SchedulerConfigurationFingerprints> configurationFingerprints_;
+    std::optional<SchedulerConfigurationFingerprints> rejectedConfigurationFingerprints_;
+    bool configurationBlocked_ = false;
+    std::string configurationBlockReason_;
     std::string statusState_ = "starting";
     std::string statusMessage_;
     std::string publishedControllerMinute_;

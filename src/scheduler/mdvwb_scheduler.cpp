@@ -132,6 +132,31 @@ std::string ResultTopic(std::string_view scheduleId)
     return "/mdvwb/schedules/" + std::string(scheduleId) + "/result";
 }
 
+void ValidateSchedulerReferences(
+    const SchedulesConfig& schedules,
+    const BusesConfig& buses,
+    const DashboardCollection& dashboard)
+{
+    ValidateScheduleReferences(schedules, buses, dashboard);
+
+    for (const ScheduleEntry& schedule : schedules.schedules) {
+        for (const ScheduleTarget& target : schedule.targets) {
+            const auto bus = std::find_if(
+                buses.buses.begin(),
+                buses.buses.end(),
+                [&](const BusConfig& candidate) {
+                    return candidate.id == target.bus;
+                });
+            if (bus != buses.buses.end() && !bus->enabled) {
+                throw SchedulesConfigError(
+                    "Schedule '" + schedule.id +
+                    "' targets disabled bus " +
+                    std::to_string(target.bus));
+            }
+        }
+    }
+}
+
 void WriteStateAtomically(
     const std::filesystem::path& path,
     std::string_view content)
@@ -349,18 +374,18 @@ SchedulerProcessResult SchedulerService::ProcessConfiguration(
     std::string reloadError;
     if (!ReloadFromDisk(true, &reloadError)) {
         const std::string detail =
-            "Cannot reload schedules configuration from disk: " +
+            "Cannot reload scheduler configuration from disk: " +
             reloadError;
         PublishStatus("error", detail);
         return {false, "configuration", {}, detail};
     }
 
-    PublishStatus("ready", "Schedules configuration reloaded from disk");
+    PublishStatus("ready", "Scheduler configuration reloaded from disk");
     return {
         true,
         "configuration",
         {},
-        "Schedules configuration reloaded from disk"};
+        "Scheduler configuration reloaded from disk"};
 }
 
 SchedulerProcessResult SchedulerService::ProcessExecute(
@@ -382,6 +407,20 @@ SchedulerProcessResult SchedulerService::ProcessExecute(
             "execute",
             std::string(scheduleId),
             "Retained execute events are ignored"};
+    }
+
+    std::string reloadError;
+    (void)ReloadFromDisk(false, &reloadError);
+    if (configurationBlocked_) {
+        const std::string detail = configurationBlockReason_.empty()
+            ? "Scheduler configuration is not valid"
+            : configurationBlockReason_;
+        ActiveRun synthetic;
+        synthetic.run.scheduleId = std::string(scheduleId);
+        synthetic.run.source = "manual";
+        synthetic.schedule.id = std::string(scheduleId);
+        PublishRunResult(synthetic, false, "rejected", detail);
+        return {false, "execute", std::string(scheduleId), detail};
     }
 
     const ScheduleEntry* schedule = FindSchedule(schedules_, scheduleId);
@@ -435,6 +474,18 @@ SchedulerProcessResult SchedulerService::ProcessFact(
     std::string_view key,
     const mdv::MqttMessage& message)
 {
+    std::string reloadError;
+    (void)ReloadFromDisk(false, &reloadError);
+    if (configurationBlocked_) {
+        return {
+            false,
+            "fact",
+            {},
+            configurationBlockReason_.empty()
+                ? "Scheduler configuration is not valid"
+                : configurationBlockReason_};
+    }
+
     const std::uint64_t sequence = ++factSequence_;
 
     if (!message.retained &&
@@ -460,11 +511,23 @@ void SchedulerService::Tick()
 {
     const SchedulerLocalMinute minute = clock_.LocalMinute();
     std::string reloadError;
-    if (!ReloadFromDisk(false, &reloadError) && !reloadError.empty()) {
-        PublishStatus(
-            "error",
-            "Cannot reload schedules configuration from disk: " +
-                reloadError);
+    const bool configurationReady = ReloadFromDisk(false, &reloadError);
+    if (!configurationReady && !reloadError.empty()) {
+        const std::string detail =
+            "Cannot reload scheduler configuration from disk: " + reloadError;
+        if (statusState_ != "error" || statusMessage_ != detail) {
+            PublishStatus("error", detail);
+        }
+    }
+    if (configurationBlocked_) {
+        if (publishedControllerMinute_ != minute.Key()) {
+            PublishStatus(
+                "error",
+                configurationBlockReason_.empty()
+                    ? "Scheduler configuration is not valid"
+                    : configurationBlockReason_);
+        }
+        return;
     }
     QueueAutomaticSchedules(minute);
     StartNextRun();
@@ -505,6 +568,74 @@ bool SchedulerService::HasActiveRun() const noexcept
     return active_.has_value();
 }
 
+bool SchedulerService::ReadConfigurationFingerprints(
+    SchedulerConfigurationFingerprints& fingerprints,
+    bool& dependencyFailure,
+    std::string* errorMessage) const
+{
+    dependencyFailure = false;
+    const auto read = [&](const std::filesystem::path& path,
+                          std::string_view name,
+                          bool dependency,
+                          std::uint64_t& destination) {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) {
+            dependencyFailure = dependency;
+            if (errorMessage != nullptr) {
+                *errorMessage =
+                    "cannot read " + std::string(name) + " configuration '" +
+                    path.string() + "'";
+            }
+            return false;
+        }
+
+        constexpr std::uint64_t offsetBasis = 14695981039346656037ULL;
+        constexpr std::uint64_t prime = 1099511628211ULL;
+        std::uint64_t hash = offsetBasis;
+        char buffer[4096];
+        while (input.read(buffer, sizeof(buffer)) || input.gcount() > 0) {
+            const std::streamsize count = input.gcount();
+            for (std::streamsize index = 0; index < count; ++index) {
+                hash ^= static_cast<unsigned char>(buffer[index]);
+                hash *= prime;
+            }
+        }
+        if (!input.eof()) {
+            dependencyFailure = dependency;
+            if (errorMessage != nullptr) {
+                *errorMessage =
+                    "cannot finish reading " + std::string(name) +
+                    " configuration '" + path.string() + "'";
+            }
+            return false;
+        }
+        destination = hash;
+        return true;
+    };
+
+    return read(
+               paths_.schedules,
+               "schedules",
+               false,
+               fingerprints.schedules) &&
+        read(paths_.buses, "buses", true, fingerprints.buses) &&
+        read(
+               paths_.dashboard,
+               "dashboard",
+               true,
+               fingerprints.dashboard);
+}
+
+void SchedulerService::BlockInvalidDependencies(std::string message)
+{
+    configurationBlocked_ = true;
+    configurationBlockReason_ = std::move(message);
+    runQueue_.clear();
+    if (active_) {
+        FailActive("failed", configurationBlockReason_);
+    }
+}
+
 bool SchedulerService::ReloadFromDisk(
     bool force,
     std::string* errorMessage)
@@ -513,42 +644,74 @@ bool SchedulerService::ReloadFromDisk(
         errorMessage->clear();
     }
 
-    std::error_code error;
-    const auto writeTime =
-        std::filesystem::last_write_time(paths_.schedules, error);
-    if (error) {
-        if (force && errorMessage != nullptr) {
-            *errorMessage =
-                "cannot stat schedules configuration '" +
-                paths_.schedules.string() + "'";
+    SchedulerConfigurationFingerprints fingerprints;
+    bool dependencyFailure = false;
+    if (!ReadConfigurationFingerprints(
+            fingerprints, dependencyFailure, errorMessage)) {
+        if (dependencyFailure && configurationFingerprints_) {
+            const std::string detail =
+                "Scheduler dependencies are unavailable: " +
+                (errorMessage == nullptr
+                    ? std::string("configuration file cannot be read")
+                    : *errorMessage);
+            BlockInvalidDependencies(detail);
         }
-        return !force;
+        return dependencyFailure ? false : !force;
     }
 
-    if (!force && schedulesWriteTime_ &&
-        *schedulesWriteTime_ == writeTime) {
+    if (!force && !configurationBlocked_ && configurationFingerprints_ &&
+        *configurationFingerprints_ == fingerprints) {
         return true;
     }
-    if (!force && rejectedSchedulesWriteTime_ &&
-        *rejectedSchedulesWriteTime_ == writeTime) {
-        return true;
+    if (!force && rejectedConfigurationFingerprints_ &&
+        *rejectedConfigurationFingerprints_ == fingerprints) {
+        if (configurationBlocked_ && errorMessage != nullptr) {
+            *errorMessage = configurationBlockReason_;
+        }
+        return !configurationBlocked_;
     }
+
+    const bool hadAcceptedConfiguration =
+        configurationFingerprints_.has_value();
+    const bool schedulesChanged =
+        hadAcceptedConfiguration &&
+        configurationFingerprints_->schedules != fingerprints.schedules;
+    const bool dependenciesChanged =
+        hadAcceptedConfiguration &&
+        (configurationFingerprints_->buses != fingerprints.buses ||
+         configurationFingerprints_->dashboard != fingerprints.dashboard);
 
     try {
         SchedulesConfig loaded = LoadSchedulesConfig(paths_.schedules);
-        ValidateScheduleReferences(
-            loaded,
-            LoadBusesConfig(paths_.buses),
-            LoadDashboardCollection(paths_.dashboard));
+        const BusesConfig buses = LoadBusesConfig(paths_.buses);
+        const DashboardCollection dashboard =
+            LoadDashboardCollection(paths_.dashboard);
+        ValidateSchedulerReferences(loaded, buses, dashboard);
+
+        if (schedulesChanged && active_) {
+            FailActive(
+                "failed",
+                "Schedules configuration changed during execution");
+        }
+
         schedules_ = std::move(loaded);
-        schedulesWriteTime_ = writeTime;
-        rejectedSchedulesWriteTime_.reset();
+        configurationFingerprints_ = fingerprints;
+        rejectedConfigurationFingerprints_.reset();
+        configurationBlocked_ = false;
+        configurationBlockReason_.clear();
         lastAutomaticAttemptMinute_.clear();
         PruneState();
         return true;
     }
     catch (const std::exception& exception) {
-        rejectedSchedulesWriteTime_ = writeTime;
+        rejectedConfigurationFingerprints_ = fingerprints;
+        if (dependenciesChanged || !hadAcceptedConfiguration) {
+            BlockInvalidDependencies(
+                std::string(
+                    "Bus or dashboard configuration changed and schedule "
+                    "references are invalid: ") +
+                exception.what());
+        }
         if (errorMessage != nullptr) {
             *errorMessage = exception.what();
         }
@@ -562,7 +725,7 @@ void SchedulerService::ValidateSelected(
     SchedulesConfig selected;
     selected.revision = schedules_.revision;
     selected.schedules.push_back(schedule);
-    ValidateScheduleReferences(
+    ValidateSchedulerReferences(
         selected,
         LoadBusesConfig(paths_.buses),
         LoadDashboardCollection(paths_.dashboard));
@@ -662,6 +825,9 @@ void SchedulerService::QueueRun(
 
 void SchedulerService::StartNextRun()
 {
+    if (configurationBlocked_) {
+        return;
+    }
     while (!active_ && !runQueue_.empty()) {
         QueuedRun request = std::move(runQueue_.front());
         runQueue_.pop_front();
