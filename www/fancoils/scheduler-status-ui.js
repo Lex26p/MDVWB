@@ -1,10 +1,10 @@
 import { TinyMqttClient } from "../mdvwb/mqtt-client.js";
+import { SchedulerHeartbeatTracker } from "./scheduler-status-health.js";
 
 const SCHEDULER_STATUS_TOPIC = "/mdvwb/scheduler/status";
 const RESULT_TOPIC_PATTERN = /^\/mdvwb\/schedules\/([A-Za-z0-9_-]{1,64})\/result$/;
 const RUN_TOPIC_PATTERN = /^\/mdvwb\/schedules\/([A-Za-z0-9_-]{1,64})\/run$/;
 const TERMINAL_STATES = new Set(["completed", "timeout", "failed", "rejected", "missed"]);
-const SCHEDULER_STALE_AFTER_SECONDS = 125;
 const WEEKDAYS = Object.freeze({
   1: "Пн",
   2: "Вт",
@@ -179,6 +179,7 @@ export function installSchedulerStatusUi() {
   const demo = new URLSearchParams(window.location.search).get("demo") === "1";
   let schedulerStatus = null;
   let mainClient = null;
+  const heartbeat = new SchedulerHeartbeatTracker();
   let heartbeatTimer = 0;
   let feedbackOverride = null;
   let overrideTimer = 0;
@@ -192,17 +193,10 @@ export function installSchedulerStatusUi() {
     schedulerConfirmed: false,
   };
 
-  const schedulerHeartbeatAge = () => {
-    const epoch = Number(schedulerStatus?.controllerEpoch);
-    if (!Number.isInteger(epoch) || epoch <= 0) {
-      return Number.POSITIVE_INFINITY;
-    }
-    return Math.max(0, Math.floor(Date.now() / 1000) - epoch);
-  };
+  const schedulerHeartbeatAge = () => heartbeat.ageSeconds();
 
   const schedulerFresh = () =>
-    Boolean(mainClient?.connected && schedulerStatus &&
-      schedulerHeartbeatAge() <= SCHEDULER_STALE_AFTER_SECONDS);
+    Boolean(schedulerStatus && heartbeat.isFresh());
 
   const renderClock = () => {
     if (demo) {
@@ -231,9 +225,12 @@ export function installSchedulerStatusUi() {
       clockElement.title = "Статус scheduler ещё не получен";
     } else if (!fresh) {
       const age = schedulerHeartbeatAge();
-      clockElement.title = Number.isFinite(age)
-        ? `Scheduler не обновлял heartbeat ${age} с`
-        : "Статус scheduler не содержит heartbeat";
+      if (!heartbeat.hasLiveHeartbeat()) {
+        clockElement.title =
+          "Получен только сохранённый статус scheduler; ожидается новый heartbeat";
+      } else {
+        clockElement.title = `Scheduler не обновлял heartbeat ${age} с`;
+      }
     } else {
       clockElement.title = String(schedulerStatus.message || "Scheduler работает");
     }
@@ -338,10 +335,13 @@ export function installSchedulerStatusUi() {
       return;
     }
     mainClient = client;
-    detachMessage = client.addMessageListener((topic, payload) => {
+    heartbeat.setConnected(Boolean(client.connected));
+    client.subscribe(SCHEDULER_STATUS_TOPIC);
+    detachMessage = client.addMessageListener((topic, payload, metadata) => {
       try {
         if (topic === SCHEDULER_STATUS_TOPIC) {
           schedulerStatus = parseObject(payload, "состояние scheduler");
+          heartbeat.record(metadata);
           renderClock();
           return;
         }
@@ -359,6 +359,7 @@ export function installSchedulerStatusUi() {
       }
     });
     detachConnection = client.addConnectionListener(({ connected }) => {
+      heartbeat.setConnected(connected);
       renderClock();
       if (!connected && manualRun.active) {
         finishManualRun({
