@@ -2,12 +2,19 @@ name: Build ARM64 Offline Package
 
 on:
   workflow_dispatch:
+    inputs:
+      create_artifact:
+        description: Create and upload the ARM64 offline artifact
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   build-arm64:
+    if: ${{ inputs.create_artifact }}
     runs-on: ubuntu-24.04-arm
 
     steps:

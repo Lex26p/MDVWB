@@ -324,8 +324,9 @@ void TestSentCommandsRequireFreshLiveFacts()
     SchedulerService service(mqtt, environment.paths, clock);
     service.Start();
 
-    // These values match the schedule but no online Status is known. They must
-    // not suppress commands or confirm them after the run starts.
+    // Even a retained online Status and matching retained values are historical.
+    // They must not suppress commands or confirm a new physical operation.
+    mqtt.Inject(FactTopic(1, "Status"), "0", true);
     InjectDesiredWorkdayFacts(mqtt, true);
     Drain(service);
 
@@ -360,7 +361,7 @@ void TestSentCommandsRequireFreshLiveFacts()
         "result should report completed state");
 }
 
-void TestOnlineAlreadySatisfiedSkipsDuplicateCommand()
+void TestMatchingRetainedStateStillRequiresCommandAndFreshConfirmation()
 {
     TestEnvironment environment;
     FakeClock clock;
@@ -375,21 +376,39 @@ void TestOnlineAlreadySatisfiedSkipsDuplicateCommand()
     mqtt.Inject("/mdvwb/schedules/manual-off/execute", "1", false);
     Drain(service);
 
-    Require(!service.HasActiveRun(),
-        "already satisfied online target should complete immediately");
-    Require(mqtt.CountTopic(CommandTopic(2, "Power")) == 0U,
-        "duplicate Power command should not be published");
+    Require(service.HasActiveRun(),
+        "matching retained state must not complete a new run");
+    Require(mqtt.CountTopic(CommandTopic(2, "Power")) == 1U,
+        "Power command must be published even when retained state matches");
 
-    const MqttPublication* result = mqtt.LastTopic(
+    const MqttPublication* executing = mqtt.LastTopic(
         "/mdvwb/schedules/manual-off/result");
-    Require(result != nullptr, "manual result should be published");
-    Require(result->payload.find("\"state\":\"completed\"") != std::string::npos,
-        "already satisfied run should complete");
-    Require(result->payload.find("\"commands\":0") != std::string::npos,
-        "already satisfied run should report zero commands");
+    Require(executing != nullptr &&
+            executing->payload.find("\"state\":\"executing\"") != std::string::npos,
+        "run should wait for fresh factual confirmation");
+    Require(executing->payload.find("\"commands\":1") != std::string::npos,
+        "run should report the published Power command");
+
+    mqtt.Inject(FactTopic(2, "Power"), "0", true);
+    Drain(service);
+    Require(service.HasActiveRun(),
+        "retained replay after publication must not confirm the command");
+
+    mqtt.Inject(FactTopic(2, "Power"), "0", false);
+    Drain(service);
+    Require(!service.HasActiveRun(),
+        "fresh non-retained Power fact should complete the run");
+
+    const MqttPublication* completed = mqtt.LastTopic(
+        "/mdvwb/schedules/manual-off/result");
+    Require(completed != nullptr &&
+            completed->payload.find("\"state\":\"completed\"") != std::string::npos,
+        "fresh factual state should complete the manual run");
+    Require(completed->payload.find("\"confirmed\":1") != std::string::npos,
+        "completed run should report one fresh confirmation");
 }
 
-void TestOfflineTargetFailsEvenWhenOldValueMatches()
+void TestRetainedOfflineStateDoesNotRejectRun()
 {
     TestEnvironment environment;
     FakeClock clock;
@@ -404,15 +423,26 @@ void TestOfflineTargetFailsEvenWhenOldValueMatches()
     mqtt.Inject("/mdvwb/schedules/manual-off/execute", "1", false);
     Drain(service);
 
-    Require(!service.HasActiveRun(), "offline target should not remain active");
-    Require(mqtt.CountTopic(CommandTopic(2, "Power")) == 0U,
-        "offline target must not receive a command");
+    Require(service.HasActiveRun(),
+        "historical retained offline state must not reject a new run");
+    Require(mqtt.CountTopic(CommandTopic(2, "Power")) == 1U,
+        "retained offline state must not suppress the Power command");
+
+    mqtt.Inject(FactTopic(2, "Status"), "7", true);
+    Drain(service);
+    Require(service.HasActiveRun(),
+        "retained offline replay must not fail an active run");
+
+    mqtt.Inject(FactTopic(2, "Status"), "7", false);
+    Drain(service);
+    Require(!service.HasActiveRun(),
+        "fresh offline Status must fail the active run");
 
     const MqttPublication* result = mqtt.LastTopic(
         "/mdvwb/schedules/manual-off/result");
     Require(result != nullptr, "offline result should be published");
     Require(result->payload.find("\"state\":\"failed\"") != std::string::npos,
-        "offline run should fail");
+        "fresh offline status should fail the run");
     Require(result->payload.find("offline") != std::string::npos,
         "offline failure should explain the reason");
 }
@@ -663,8 +693,15 @@ void TestCompletedOneTimeScheduleIsNotLaterMarkedMissed()
     mqtt.Inject(FactTopic(1, "Power"), "0", true);
     Drain(service);
     service.Tick();
+    Require(service.HasActiveRun(),
+        "retained matching state must not complete a one-time schedule");
+    Require(mqtt.CountTopic(CommandTopic(1, "Power")) == 1U,
+        "one-time schedule should publish its Power command");
+
+    mqtt.Inject(FactTopic(1, "Power"), "0", false);
+    Drain(service);
     Require(!service.HasActiveRun(),
-        "already satisfied one-time schedule should complete");
+        "fresh factual Power state should complete the one-time schedule");
 
     const std::size_t resultCount =
         mqtt.CountTopic("/mdvwb/schedules/due-once/result");
@@ -682,8 +719,8 @@ int main()
         TestManualRunIsAcknowledgedByScheduler();
         TestStatusPublishesControllerClockEveryMinute();
         TestSentCommandsRequireFreshLiveFacts();
-        TestOnlineAlreadySatisfiedSkipsDuplicateCommand();
-        TestOfflineTargetFailsEvenWhenOldValueMatches();
+        TestMatchingRetainedStateStillRequiresCommandAndFreshConfirmation();
+        TestRetainedOfflineStateDoesNotRejectRun();
         TestTargetGoingOfflineFailsActiveRun();
         TestAutomaticRunIsNotRepeatedAfterRestart();
         TestConfirmationTimeout();

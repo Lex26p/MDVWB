@@ -132,12 +132,6 @@ std::string ResultTopic(std::string_view scheduleId)
     return "/mdvwb/schedules/" + std::string(scheduleId) + "/result";
 }
 
-std::string TargetName(const ScheduleTarget& target)
-{
-    return "Fan-" + std::to_string(target.bus) + "_" +
-        std::to_string(target.address);
-}
-
 void WriteStateAtomically(
     const std::filesystem::path& path,
     std::string_view content)
@@ -442,12 +436,9 @@ SchedulerProcessResult SchedulerService::ProcessFact(
     const mdv::MqttMessage& message)
 {
     const std::uint64_t sequence = ++factSequence_;
-    latestFacts_[std::string(key)] = LatestFact{
-        message.payload,
-        sequence,
-        message.retained};
 
-    if (IsOfflineStatusForActive(key, message.payload)) {
+    if (!message.retained &&
+        IsOfflineStatusForActive(key, message.payload)) {
         const std::string device = std::string(
             key.substr(0U, key.find("/controls/")));
         FailActive(
@@ -727,14 +718,10 @@ void SchedulerService::StartNextRun()
                 *active_,
                 true,
                 "executing",
-                active_->commandCount == 0U
-                    ? "Requested factual state is already satisfied"
-                    : "Commands published; waiting for factual state");
+                "Commands published; waiting for fresh factual state");
             PublishStatus(
                 "executing",
-                active_->commandCount == 0U
-                    ? "Requested factual state is already satisfied"
-                    : "Waiting for factual state confirmation");
+                "Waiting for fresh factual state confirmation");
             CompleteActiveIfReady();
         }
         catch (const std::exception& error) {
@@ -745,37 +732,16 @@ void SchedulerService::StartNextRun()
 
 void SchedulerService::PublishCommands(ActiveRun& run)
 {
-    for (const ScheduleTarget& target : run.schedule.targets) {
-        const auto status = latestFacts_.find(FactKey(target, "Status"));
-        if (status != latestFacts_.end() && status->second.payload == "7") {
-            throw std::runtime_error(
-                "target device is offline: " + TargetName(target));
-        }
-    }
-
     const auto publish = [this, &run](
                              const ScheduleTarget& target,
                              std::string_view control,
                              std::string payload) {
-        const std::string key = FactKey(target, control);
-        const auto current = latestFacts_.find(key);
-        const auto status = latestFacts_.find(FactKey(target, "Status"));
-        const bool knownOnline =
-            status != latestFacts_.end() && status->second.payload != "7";
-        const bool alreadySatisfied =
-            knownOnline && current != latestFacts_.end() &&
-            current->second.payload == payload;
-
         ExpectedFact expected;
-        expected.key = key;
+        expected.key = FactKey(target, control);
         expected.expected = payload;
         expected.afterSequence = factSequence_;
-        expected.confirmed = alreadySatisfied;
+        expected.confirmed = false;
         run.expected.push_back(std::move(expected));
-
-        if (alreadySatisfied) {
-            return;
-        }
 
         client_.Publish(
             CommandTopic(target, control),

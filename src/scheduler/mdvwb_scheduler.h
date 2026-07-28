@@ -97,12 +97,6 @@ private:
         std::string minuteKey;
     };
 
-    struct LatestFact {
-        std::string payload;
-        std::uint64_t sequence = 0;
-        bool retained = false;
-    };
-
     struct ExpectedFact {
         std::string key;
         std::string expected;
@@ -180,7 +174,6 @@ private:
     std::deque<IncomingMessage> inbox_;
     std::deque<QueuedRun> runQueue_;
     std::optional<ActiveRun> active_;
-    std::map<std::string, LatestFact> latestFacts_;
     std::uint64_t factSequence_ = 0;
     std::map<std::string, std::string> lastAutomaticMinute_;
     std::map<std::string, std::string> lastAutomaticAttemptMinute_;
