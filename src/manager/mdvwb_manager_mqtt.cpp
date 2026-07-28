@@ -367,6 +367,46 @@ std::string JoinRollbackErrors(const std::vector<std::string>& errors) {
     return output.str();
 }
 
+
+struct DashboardResultContext {
+    int revision = 0;
+    std::size_t fanCount = 0;
+    std::size_t referenceIssueCount = 0;
+};
+
+std::size_t DashboardFanCount(const DashboardCollection& dashboard) {
+    return std::accumulate(
+        dashboard.panels.begin(),
+        dashboard.panels.end(),
+        std::size_t{0},
+        [](std::size_t total, const DashboardPanel& panel) {
+            return total + panel.fans.size();
+        });
+}
+
+DashboardResultContext ReadDashboardResultContext(
+    const std::filesystem::path& dashboardPath,
+    const std::filesystem::path& busesPath) noexcept {
+    DashboardResultContext context;
+    try {
+        const DashboardCollection dashboard =
+            LoadDashboardCollection(dashboardPath);
+        context.revision = dashboard.revision;
+        context.fanCount = DashboardFanCount(dashboard);
+        try {
+            context.referenceIssueCount = InspectDashboardReferences(
+                dashboard,
+                LoadBusesConfig(busesPath)).size();
+        } catch (...) {
+            // The dashboard revision is still authoritative when buses.json is
+            // temporarily unavailable. Reference details remain zero in that case.
+        }
+    } catch (...) {
+        // A missing or unreadable dashboard has no trustworthy revision.
+    }
+    return context;
+}
+
 bool IsSafeUploadTopicId(std::string_view value) {
     return !value.empty() && value.size() <= 64U &&
         std::all_of(value.begin(), value.end(), [](char character) {
@@ -966,17 +1006,35 @@ ManagerMqttResult ManagerMqttService::ProcessConfiguration(
 ManagerMqttResult ManagerMqttService::ProcessDashboardConfiguration(
     const mdv::MqttMessage& message) {
     constexpr std::string_view command = "dashboard-config";
+    const auto currentContext = [this] {
+        return ReadDashboardResultContext(dashboardPath_, configPath_);
+    };
+
     if (message.retained) {
         constexpr std::string_view error =
             "Retained dashboard configuration commands are ignored";
-        PublishDashboardResult(false, false, error, 0, 0, 0);
+        const DashboardResultContext context = currentContext();
+        PublishDashboardResult(
+            false,
+            false,
+            error,
+            context.revision,
+            context.fanCount,
+            context.referenceIssueCount);
         return ManagerMqttResult{
             false, false, std::string(error), std::nullopt, std::string(command)};
     }
     if (message.payload.size() > MaximumDashboardPayloadBytes) {
         constexpr std::string_view error =
             "Dashboard configuration payload exceeds 1048576 bytes";
-        PublishDashboardResult(false, false, error, 0, 0, 0);
+        const DashboardResultContext context = currentContext();
+        PublishDashboardResult(
+            false,
+            false,
+            error,
+            context.revision,
+            context.fanCount,
+            context.referenceIssueCount);
         return ManagerMqttResult{
             false, false, std::string(error), std::nullopt, std::string(command)};
     }
@@ -992,6 +1050,7 @@ ManagerMqttResult ManagerMqttService::ProcessDashboardConfiguration(
             const BusesConfig buses = LoadBusesConfig(configPath_);
             const std::size_t issues =
                 InspectDashboardReferences(current, buses).size();
+            const std::size_t fanCount = DashboardFanCount(current);
             const std::string currentCanonical =
                 SerializeDashboardCollection(current);
             PublishDashboardResult(
@@ -999,7 +1058,7 @@ ManagerMqttResult ManagerMqttService::ProcessDashboardConfiguration(
                 false,
                 detail,
                 current.revision,
-                std::accumulate(current.panels.begin(), current.panels.end(), std::size_t{0}, [](std::size_t total, const DashboardPanel& panel) { return total + panel.fans.size(); }),
+                fanCount,
                 issues);
             // Publish the rejection first so web editors clear their pending-save
             // state before the retained server configuration arrives. Dirty
@@ -1008,7 +1067,7 @@ ManagerMqttResult ManagerMqttService::ProcessDashboardConfiguration(
             PublishDashboardStatus(
                 "ready",
                 current.revision,
-                std::accumulate(current.panels.begin(), current.panels.end(), std::size_t{0}, [](std::size_t total, const DashboardPanel& panel) { return total + panel.fans.size(); }),
+                fanCount,
                 issues,
                 detail);
             return ManagerMqttResult{
@@ -1023,20 +1082,21 @@ ManagerMqttResult ManagerMqttService::ProcessDashboardConfiguration(
         const BusesConfig buses = LoadBusesConfig(configPath_);
         const std::size_t issues =
             InspectDashboardReferences(submitted, buses).size();
+        const std::size_t fanCount = DashboardFanCount(submitted);
 
         WriteTextFileAtomically(dashboardPath_, canonical);
         client_.Publish(DashboardConfigTopic, canonical, true);
         PublishDashboardStatus(
             "ready",
             submitted.revision,
-            std::accumulate(submitted.panels.begin(), submitted.panels.end(), std::size_t{0}, [](std::size_t total, const DashboardPanel& panel) { return total + panel.fans.size(); }),
+            fanCount,
             issues);
         PublishDashboardResult(
             true,
             true,
             "Dashboard configuration saved",
             submitted.revision,
-            std::accumulate(submitted.panels.begin(), submitted.panels.end(), std::size_t{0}, [](std::size_t total, const DashboardPanel& panel) { return total + panel.fans.size(); }),
+            fanCount,
             issues);
         try {
             PublishCurrentSchedules();
@@ -1052,14 +1112,33 @@ ManagerMqttResult ManagerMqttService::ProcessDashboardConfiguration(
     } catch (const DashboardConfigError& error) {
         const std::string detail =
             std::string("Invalid dashboard configuration: ") + error.what();
-        PublishDashboardResult(false, false, detail, 0, 0, 0);
+        const DashboardResultContext context = currentContext();
+        PublishDashboardResult(
+            false,
+            false,
+            detail,
+            context.revision,
+            context.fanCount,
+            context.referenceIssueCount);
         return ManagerMqttResult{
             false, false, detail, std::nullopt, std::string(command)};
     } catch (const std::exception& error) {
         const std::string detail =
             std::string("Cannot save dashboard configuration: ") + error.what();
-        PublishDashboardStatus("error", 0, 0, 0, detail);
-        PublishDashboardResult(false, false, detail, 0, 0, 0);
+        const DashboardResultContext context = currentContext();
+        PublishDashboardStatus(
+            "error",
+            context.revision,
+            context.fanCount,
+            context.referenceIssueCount,
+            detail);
+        PublishDashboardResult(
+            false,
+            false,
+            detail,
+            context.revision,
+            context.fanCount,
+            context.referenceIssueCount);
         return ManagerMqttResult{
             false, false, detail, std::nullopt, std::string(command)};
     }
@@ -1229,9 +1308,15 @@ ManagerMqttResult ManagerMqttService::ProcessScheduleRun(
 ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadStart(
     const mdv::MqttMessage& message) {
     constexpr std::string_view command = "background-upload-start";
+    const auto currentRevision = [this] {
+        return ReadDashboardResultContext(dashboardPath_, configPath_).revision;
+    };
+
     if (message.retained) {
-        constexpr std::string_view detail = "Retained background upload commands are ignored";
-        PublishBackgroundUploadResult(false, false, detail);
+        constexpr std::string_view detail =
+            "Retained background upload commands are ignored";
+        PublishBackgroundUploadResult(
+            false, false, detail, {}, {}, {}, 0, 0, 0, currentRevision());
         return ManagerMqttResult{
             false, false, std::string(detail), std::nullopt, std::string(command)};
     }
@@ -1241,7 +1326,8 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadStart(
             ParseDashboardUploadStart(message.payload);
         const DashboardCollection dashboard = LoadOrCreateDashboard();
         if (FindDashboardPanel(dashboard, request.panelId) == nullptr) {
-            throw DashboardUploadError("panelId does not reference an existing panel");
+            throw DashboardUploadError(
+                "panelId does not reference an existing panel");
         }
         if (request.revision != dashboard.revision) {
             const std::string detail =
@@ -1263,14 +1349,15 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadStart(
             "Upload started");
         PublishBackgroundUploadResult(
             true, false, "Upload started", request.uploadId, request.fileName,
-            request.sha256, request.size, 0, 0, request.revision);
+            request.sha256, request.size, 0, 0, dashboard.revision);
         return ManagerMqttResult{
             true, false, "Upload started", std::nullopt, std::string(command)};
     } catch (const std::exception& error) {
         const std::string detail =
             std::string("Cannot start background upload: ") + error.what();
         PublishBackgroundUploadStatus("error", {}, {}, 0, 0, detail);
-        PublishBackgroundUploadResult(false, false, detail);
+        PublishBackgroundUploadResult(
+            false, false, detail, {}, {}, {}, 0, 0, 0, currentRevision());
         return ManagerMqttResult{
             false, false, detail, std::nullopt, std::string(command)};
     }
@@ -1281,9 +1368,15 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadChunk(
     std::size_t chunkIndex,
     const mdv::MqttMessage& message) {
     constexpr std::string_view command = "background-upload-chunk";
+    const auto currentRevision = [this] {
+        return ReadDashboardResultContext(dashboardPath_, configPath_).revision;
+    };
+
     if (message.retained) {
-        constexpr std::string_view detail = "Retained background upload chunks are ignored";
-        PublishBackgroundUploadResult(false, false, detail, uploadId);
+        constexpr std::string_view detail =
+            "Retained background upload chunks are ignored";
+        PublishBackgroundUploadResult(
+            false, false, detail, uploadId, {}, {}, 0, 0, 0, currentRevision());
         return ManagerMqttResult{
             false, false, std::string(detail), std::nullopt, std::string(command)};
     }
@@ -1308,7 +1401,8 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadChunk(
             backgroundUpload_.ReceivedBytes(),
             backgroundUpload_.ExpectedBytes(),
             detail);
-        PublishBackgroundUploadResult(false, false, detail, uploadId);
+        PublishBackgroundUploadResult(
+            false, false, detail, uploadId, {}, {}, 0, 0, 0, currentRevision());
         return ManagerMqttResult{
             false, false, detail, std::nullopt, std::string(command)};
     }
@@ -1318,9 +1412,15 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadFinish(
     std::string_view uploadId,
     const mdv::MqttMessage& message) {
     constexpr std::string_view command = "background-upload-finish";
+    const auto currentRevision = [this] {
+        return ReadDashboardResultContext(dashboardPath_, configPath_).revision;
+    };
+
     if (message.retained) {
-        constexpr std::string_view detail = "Retained background upload commands are ignored";
-        PublishBackgroundUploadResult(false, false, detail, uploadId);
+        constexpr std::string_view detail =
+            "Retained background upload commands are ignored";
+        PublishBackgroundUploadResult(
+            false, false, detail, uploadId, {}, {}, 0, 0, 0, currentRevision());
         return ManagerMqttResult{
             false, false, std::string(detail), std::nullopt, std::string(command)};
     }
@@ -1330,7 +1430,8 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadFinish(
     try {
         DashboardCollection dashboard = LoadOrCreateDashboard();
         if (!backgroundUpload_.Active() || uploadId != backgroundUpload_.UploadId()) {
-            throw DashboardUploadError("uploadId does not match the active upload");
+            throw DashboardUploadError(
+                "uploadId does not match the active upload");
         }
         if (dashboard.revision != backgroundUpload_.ExpectedRevision()) {
             const std::string detail =
@@ -1340,12 +1441,26 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadFinish(
             backgroundUpload_.Cancel(uploadId);
             PublishBackgroundUploadStatus("error", uploadId, {}, 0, 0, detail);
             PublishBackgroundUploadResult(
-                false, false, detail, uploadId, {}, {}, 0, 0, 0, dashboard.revision);
+                false, false, detail, uploadId, {}, {}, 0, 0, 0,
+                dashboard.revision);
+            const DashboardResultContext context =
+                ReadDashboardResultContext(dashboardPath_, configPath_);
+            client_.Publish(
+                DashboardConfigTopic,
+                SerializeDashboardCollection(dashboard),
+                true);
+            PublishDashboardStatus(
+                "ready",
+                dashboard.revision,
+                context.fanCount,
+                context.referenceIssueCount,
+                detail);
             return ManagerMqttResult{
                 false, false, detail, std::nullopt, std::string(command)};
         }
         if (dashboard.revision == std::numeric_limits<int>::max()) {
-            throw DashboardUploadError("dashboard revision limit has been reached");
+            throw DashboardUploadError(
+                "dashboard revision limit has been reached");
         }
 
         const DashboardPreparedAsset asset = backgroundUpload_.Prepare(uploadId);
@@ -1353,7 +1468,8 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadFinish(
         if (std::filesystem::exists(asset.finalPath, filesystemError)) {
             if (filesystemError) {
                 throw std::runtime_error(
-                    "cannot inspect dashboard asset: " + filesystemError.message());
+                    "cannot inspect dashboard asset: " +
+                    filesystemError.message());
             }
             if (ComputeFileSha256(asset.finalPath) != asset.sha256) {
                 throw std::runtime_error(
@@ -1362,17 +1478,21 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadFinish(
             std::filesystem::remove(asset.temporaryPath, filesystemError);
             if (filesystemError) {
                 throw std::runtime_error(
-                    "cannot remove duplicate temporary asset: " + filesystemError.message());
+                    "cannot remove duplicate temporary asset: " +
+                    filesystemError.message());
             }
         } else {
             if (filesystemError) {
                 throw std::runtime_error(
-                    "cannot inspect dashboard asset: " + filesystemError.message());
+                    "cannot inspect dashboard asset: " +
+                    filesystemError.message());
             }
-            std::filesystem::rename(asset.temporaryPath, asset.finalPath, filesystemError);
+            std::filesystem::rename(
+                asset.temporaryPath, asset.finalPath, filesystemError);
             if (filesystemError) {
                 throw std::runtime_error(
-                    "cannot commit dashboard asset: " + filesystemError.message());
+                    "cannot commit dashboard asset: " +
+                    filesystemError.message());
             }
             committedPath = asset.finalPath;
             createdAsset = true;
@@ -1380,7 +1500,8 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadFinish(
 
         DashboardPanel* panel = FindDashboardPanel(dashboard, asset.panelId);
         if (panel == nullptr) {
-            throw DashboardUploadError("panelId does not reference an existing panel");
+            throw DashboardUploadError(
+                "panelId does not reference an existing panel");
         }
         const std::string previousFile = panel->background.file;
         panel->background.file = asset.finalFileName;
@@ -1389,7 +1510,9 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadFinish(
         ++dashboard.revision;
         const std::string canonical = SerializeDashboardCollection(dashboard);
         const BusesConfig buses = LoadBusesConfig(configPath_);
-        const std::size_t issues = InspectDashboardReferences(dashboard, buses).size();
+        const std::size_t issues =
+            InspectDashboardReferences(dashboard, buses).size();
+        const std::size_t fanCount = DashboardFanCount(dashboard);
 
         try {
             WriteTextFileAtomically(dashboardPath_, canonical);
@@ -1403,10 +1526,14 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadFinish(
         backgroundUpload_.Release();
         client_.Publish(DashboardConfigTopic, canonical, true);
         PublishDashboardStatus(
-            "ready", dashboard.revision, std::accumulate(dashboard.panels.begin(), dashboard.panels.end(), std::size_t{0}, [](std::size_t total, const DashboardPanel& panel) { return total + panel.fans.size(); }), issues);
+            "ready", dashboard.revision, fanCount, issues);
         PublishDashboardResult(
-            true, true, "Dashboard background updated",
-            dashboard.revision, std::accumulate(dashboard.panels.begin(), dashboard.panels.end(), std::size_t{0}, [](std::size_t total, const DashboardPanel& panel) { return total + panel.fans.size(); }), issues);
+            true,
+            true,
+            "Dashboard background updated",
+            dashboard.revision,
+            fanCount,
+            issues);
         PublishBackgroundUploadStatus(
             "completed", asset.uploadId, asset.finalFileName,
             asset.size, asset.size, "Background image uploaded");
@@ -1416,16 +1543,23 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadFinish(
             asset.size, asset.width, asset.height, dashboard.revision);
 
         const bool previousStillUsed = std::any_of(
-            dashboard.panels.begin(), dashboard.panels.end(),
-            [&](const DashboardPanel& item) { return item.background.file == previousFile; });
+            dashboard.panels.begin(),
+            dashboard.panels.end(),
+            [&](const DashboardPanel& item) {
+                return item.background.file == previousFile;
+            });
         if (!previousFile.empty() && previousFile != asset.finalFileName &&
             !previousStillUsed && IsManagedBackgroundFile(previousFile)) {
             std::filesystem::remove(
-                backgroundUpload_.AssetDirectory() / previousFile, filesystemError);
+                backgroundUpload_.AssetDirectory() / previousFile,
+                filesystemError);
         }
         return ManagerMqttResult{
-            true, true, "Background image uploaded",
-            std::nullopt, std::string(command)};
+            true,
+            true,
+            "Background image uploaded",
+            std::nullopt,
+            std::string(command)};
     } catch (const std::exception& error) {
         if (createdAsset && !committedPath.empty()) {
             std::error_code ignored;
@@ -1437,8 +1571,10 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadFinish(
         }
         const std::string detail =
             std::string("Cannot finish background upload: ") + error.what();
+        const int revision = currentRevision();
         PublishBackgroundUploadStatus("error", uploadId, {}, 0, 0, detail);
-        PublishBackgroundUploadResult(false, false, detail, uploadId);
+        PublishBackgroundUploadResult(
+            false, false, detail, uploadId, {}, {}, 0, 0, 0, revision);
         return ManagerMqttResult{
             false, false, detail, std::nullopt, std::string(command)};
     }
@@ -1448,9 +1584,15 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadCancel(
     std::string_view uploadId,
     const mdv::MqttMessage& message) {
     constexpr std::string_view command = "background-upload-cancel";
+    const auto currentRevision = [this] {
+        return ReadDashboardResultContext(dashboardPath_, configPath_).revision;
+    };
+
     if (message.retained) {
-        constexpr std::string_view detail = "Retained background upload commands are ignored";
-        PublishBackgroundUploadResult(false, false, detail, uploadId);
+        constexpr std::string_view detail =
+            "Retained background upload commands are ignored";
+        PublishBackgroundUploadResult(
+            false, false, detail, uploadId, {}, {}, 0, 0, 0, currentRevision());
         return ManagerMqttResult{
             false, false, std::string(detail), std::nullopt, std::string(command)};
     }
@@ -1459,14 +1601,24 @@ ManagerMqttResult ManagerMqttService::ProcessBackgroundUploadCancel(
         backgroundUpload_.Cancel(uploadId);
         PublishBackgroundUploadStatus("idle");
         PublishBackgroundUploadResult(
-            true, false, "Background upload cancelled", uploadId);
+            true,
+            false,
+            "Background upload cancelled",
+            uploadId,
+            {},
+            {},
+            0,
+            0,
+            0,
+            currentRevision());
         return ManagerMqttResult{
             true, false, "Background upload cancelled",
             std::nullopt, std::string(command)};
     } catch (const std::exception& error) {
         const std::string detail =
             std::string("Cannot cancel background upload: ") + error.what();
-        PublishBackgroundUploadResult(false, false, detail, uploadId);
+        PublishBackgroundUploadResult(
+            false, false, detail, uploadId, {}, {}, 0, 0, 0, currentRevision());
         return ManagerMqttResult{
             false, false, detail, std::nullopt, std::string(command)};
     }
@@ -2098,9 +2250,7 @@ void ManagerMqttService::PublishBackgroundUploadResult(
         payload += ",\"width\":" + std::to_string(width) +
             ",\"height\":" + std::to_string(height);
     }
-    if (revision != 0) {
-        payload += ",\"revision\":" + std::to_string(revision);
-    }
+    payload += ",\"revision\":" + std::to_string(revision);
     payload += '}';
     client_.Publish(BackgroundUploadResultTopic, payload, false);
 }
