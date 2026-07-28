@@ -298,6 +298,125 @@ void TestStaleRevisionIsRejected()
         "rejection result must be published before the current configuration");
 }
 
+
+void TestDashboardConflictRepublishesCurrentAfterResult()
+{
+    Fixture fixture;
+    auto service = fixture.CreateService();
+    service.Start();
+    const std::size_t publicationCountBefore =
+        fixture.client.publications.size();
+    const std::string original = ReadFile(fixture.dashboard);
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::DashboardConfigSetTopic,
+        R"json({
+          "version":2,
+          "revision":0,
+          "defaultPanel":"main",
+          "panels":[{
+            "id":"main",
+            "title":"Stale browser draft",
+            "background":{
+              "file":"",
+              "naturalWidth":0,
+              "naturalHeight":0,
+              "defaultScale":1,
+              "fit":"contain"
+            },
+            "fans":[{
+              "id":"fan-1-1",
+              "number":1,
+              "bus":1,
+              "address":1,
+              "label":"Stale",
+              "x":0.5,
+              "y":0.5,
+              "markerScale":1,
+              "rotation":0,
+              "visible":true
+            }]
+          }]
+        })json");
+
+    const auto result = service.ProcessOne();
+    Require(result.has_value() && !result->success && !result->saved,
+        "stale dashboard revision should be rejected");
+    Require(ReadFile(fixture.dashboard) == original,
+        "dashboard conflict changed the saved configuration");
+
+    const std::size_t resultIndex = FindPublicationIndex(
+        fixture.client,
+        mdvwb::ManagerMqttService::DashboardConfigResultTopic,
+        publicationCountBefore);
+    const std::size_t configIndex = FindPublicationIndex(
+        fixture.client,
+        mdvwb::ManagerMqttService::DashboardConfigTopic,
+        publicationCountBefore);
+    Require(resultIndex < configIndex,
+        "dashboard conflict result must arrive before current configuration");
+
+    const mdv::MqttPublication& current =
+        fixture.client.publications[configIndex];
+    Require(current.retained &&
+            current.payload.find("\"revision\": 1") != std::string::npos &&
+            current.payload.find("\"title\": \"Main\"") != std::string::npos,
+        "dashboard conflict did not republish the current retained configuration");
+}
+
+void TestSchedulesConflictRepublishesCurrentAfterResult()
+{
+    Fixture fixture;
+    auto service = fixture.CreateService();
+    service.Start();
+    const std::size_t publicationCountBefore =
+        fixture.client.publications.size();
+    const std::string original = ReadFile(fixture.schedules);
+
+    fixture.client.Inject(
+        mdvwb::ManagerMqttService::SchedulesConfigSetTopic,
+        R"json({
+          "version":1,
+          "revision":0,
+          "schedules":[{
+            "id":"workday",
+            "name":"Stale browser draft",
+            "enabled":true,
+            "panelId":"main",
+            "kind":"weekly",
+            "days":[1],
+            "date":"",
+            "time":"09:00",
+            "targets":[{"bus":1,"address":1}],
+            "actions":{"power":false}
+          }]
+        })json");
+
+    const auto result = service.ProcessOne();
+    Require(result.has_value() && !result->success && !result->saved,
+        "stale schedules revision should be rejected");
+    Require(ReadFile(fixture.schedules) == original,
+        "schedules conflict changed the saved configuration");
+
+    const std::size_t resultIndex = FindPublicationIndex(
+        fixture.client,
+        mdvwb::ManagerMqttService::SchedulesConfigResultTopic,
+        publicationCountBefore);
+    const std::size_t configIndex = FindPublicationIndex(
+        fixture.client,
+        mdvwb::ManagerMqttService::SchedulesConfigTopic,
+        publicationCountBefore);
+    Require(resultIndex < configIndex,
+        "schedules conflict result must arrive before current configuration");
+
+    const mdv::MqttPublication& current =
+        fixture.client.publications[configIndex];
+    Require(current.retained &&
+            current.payload.find("\"revision\": 1") != std::string::npos &&
+            current.payload.find("\"name\": \"Workday\"") != std::string::npos,
+        "schedules conflict did not republish the current retained configuration");
+}
+
 void TestNewBrokenReferencesAreRejected()
 {
     Fixture fixture;
@@ -381,6 +500,8 @@ int main()
 {
     try {
         TestStaleRevisionIsRejected();
+        TestDashboardConflictRepublishesCurrentAfterResult();
+        TestSchedulesConflictRepublishesCurrentAfterResult();
         TestNewBrokenReferencesAreRejected();
         TestValidSaveIncrementsRevision();
         std::cout << "MDVWB manager revision tests: OK\n";

@@ -698,6 +698,8 @@ ManagerMqttResult ManagerMqttService::ProcessDashboardConfiguration(
             const BusesConfig buses = LoadBusesConfig(configPath_);
             const std::size_t issues =
                 InspectDashboardReferences(current, buses).size();
+            const std::string currentCanonical =
+                SerializeDashboardCollection(current);
             PublishDashboardResult(
                 false,
                 false,
@@ -705,6 +707,10 @@ ManagerMqttResult ManagerMqttService::ProcessDashboardConfiguration(
                 current.revision,
                 std::accumulate(current.panels.begin(), current.panels.end(), std::size_t{0}, [](std::size_t total, const DashboardPanel& panel) { return total + panel.fans.size(); }),
                 issues);
+            // Publish the rejection first so web editors clear their pending-save
+            // state before the retained server configuration arrives. Dirty
+            // local drafts are then preserved while their base revision updates.
+            client_.Publish(DashboardConfigTopic, currentCanonical, true);
             PublishDashboardStatus(
                 "ready",
                 current.revision,
@@ -796,6 +802,8 @@ ManagerMqttResult ManagerMqttService::ProcessSchedulesConfiguration(
                 std::to_string(current.revision);
             const std::size_t issues =
                 InspectScheduleReferences(current, buses, dashboards).size();
+            const std::string currentCanonical =
+                SerializeSchedulesConfig(current);
             PublishSchedulesResult(
                 false,
                 false,
@@ -804,6 +812,10 @@ ManagerMqttResult ManagerMqttService::ProcessSchedulesConfiguration(
                 current.schedules.size(),
                 EnabledScheduleCount(current),
                 issues);
+            // Match the buses conflict contract: result first, current retained
+            // configuration second. The web editor can keep its dirty draft and
+            // retry it against the newly received revision without reloading.
+            client_.Publish(SchedulesConfigTopic, currentCanonical, true);
             PublishSchedulesStatus(
                 issues == 0U ? "ready" : "warning",
                 current.revision,
