@@ -8,18 +8,56 @@ on:
         required: true
         type: boolean
         default: false
+  push:
+    tags:
+      - "v*.*.*"
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: mdvwb-arm64-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MDVWB_RELEASE_ARCHIVE: MDVWB-arm64-offline.tar.gz
+  MDVWB_RELEASE_ARCHIVE_CHECKSUM: MDVWB-arm64-offline.tar.gz.sha256
+  MDVWB_RELEASE_CHECKSUMS: MDVWB-release-assets.sha256
 
 jobs:
   build-arm64:
-    if: ${{ inputs.create_artifact }}
+    if: ${{ github.event_name == 'push' || inputs.create_artifact == true }}
     runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Checkout sources
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release identity
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          PROJECT_VERSION=$(sed -n \
+            's/^project(MDVWB VERSION \([0-9][0-9.]*\) LANGUAGES CXX)$/\1/p' \
+            CMakeLists.txt)
+          test -n "$PROJECT_VERSION"
+          printf '%s\n' "$PROJECT_VERSION" | grep -Eq \
+            '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+
+          grep -Fq "Current project version: **$PROJECT_VERSION**." README.md
+          grep -Fq "MDVWB $PROJECT_VERSION:" docs/INSTALLATION.md
+          grep -Fq "MDVWB $PROJECT_VERSION release checklist" \
+            docs/RELEASE_CHECKLIST.md
+
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            test "$GITHUB_REF_TYPE" = tag
+            test "$GITHUB_REF_NAME" = "v$PROJECT_VERSION"
+          fi
+
+          printf 'PROJECT_VERSION=%s\n' "$PROJECT_VERSION" >>"$GITHUB_ENV"
 
       - name: Build and test on Debian 11 ARM64
         shell: bash
@@ -50,17 +88,22 @@ jobs:
               sh -n deploy/install-from-source.sh
               sh -n deploy/mdvwb-setup
               sh -n deploy/mdvwb-run
+              sh -n tests/deploy/mdvwb_setup_test.sh
               sh -n tests/deploy/mdvwb_install_engine_test.sh
               sh -n tests/deploy/mdvwb_backup_rollback_test.sh
               sh -n tests/deploy/mdvwb_offline_lifecycle_test.sh
               sh -n tests/deploy/mdvwb_online_installer_test.sh
               sh -n tests/deploy/mdvwb_uninstall_test.sh
+              sh -n tests/deploy/mdvwb_release_contract_test.sh
+
               sh tests/deploy/mdvwb_setup_test.sh
               sh tests/deploy/mdvwb_install_engine_test.sh
               sh tests/deploy/mdvwb_backup_rollback_test.sh
               sh tests/deploy/mdvwb_offline_lifecycle_test.sh
               sh tests/deploy/mdvwb_online_installer_test.sh
               sh tests/deploy/mdvwb_uninstall_test.sh
+              sh tests/deploy/mdvwb_release_contract_test.sh
+
               python3 -m json.tool deploy/package-manifest.json.in >/dev/null
               python3 -m json.tool deploy/buses.default.json >/dev/null
               python3 -m json.tool deploy/dashboard.default.json >/dev/null
@@ -73,11 +116,18 @@ jobs:
                 -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
               cmake --build out/build/arm64-release --parallel 2
               ctest --test-dir out/build/arm64-release --output-on-failure
-              ./out/build/arm64-release/MDVWB --version
+
+              PROJECT_VERSION=$(sed -n \
+                "s/^project(MDVWB VERSION \([0-9][0-9.]*\) LANGUAGES CXX)$/\1/p" \
+                CMakeLists.txt)
+              ./out/build/arm64-release/MDVWB --version |
+                grep -F "$PROJECT_VERSION"
               ./out/build/arm64-release/MDVWB --self-test
               ./out/build/arm64-release/mdvwb-offline --self-test
-              ./out/build/arm64-release/mdvwb-manager validate config/buses.example.json
-              ./out/build/arm64-release/mdvwb-manager validate deploy/buses.default.json
+              ./out/build/arm64-release/mdvwb-manager \
+                validate config/buses.example.json
+              ./out/build/arm64-release/mdvwb-manager \
+                validate deploy/buses.default.json
               ./out/build/arm64-release/mdvwb-scheduler --help
             '
 
@@ -88,76 +138,129 @@ jobs:
           rm -rf dist
           mkdir -p dist/MDVWB-arm64/www dist/MDVWB-arm64/docs
 
-          install -m 0755 out/build/arm64-release/MDVWB dist/MDVWB-arm64/MDVWB
-          install -m 0755 out/build/arm64-release/mdvwb-offline dist/MDVWB-arm64/mdvwb-offline
-          install -m 0755 out/build/arm64-release/mdvwb-manager dist/MDVWB-arm64/mdvwb-manager
-          install -m 0755 out/build/arm64-release/mdvwb-scheduler dist/MDVWB-arm64/mdvwb-scheduler
-          install -m 0755 deploy/mdvwb-run dist/MDVWB-arm64/mdvwb-run
-          install -m 0755 deploy/mdvwb-setup dist/MDVWB-arm64/mdvwb-setup
-          install -m 0755 deploy/offline-install.sh dist/MDVWB-arm64/offline-install.sh
-          install -m 0644 deploy/mdvwb@.service dist/MDVWB-arm64/mdvwb@.service
-          install -m 0640 deploy/mdvwb.env dist/MDVWB-arm64/mdvwb.env
-          install -m 0644 deploy/mdvwb-manager.service dist/MDVWB-arm64/mdvwb-manager.service
-          install -m 0640 deploy/mdvwb-manager.env dist/MDVWB-arm64/mdvwb-manager.env
-          install -m 0644 deploy/mdvwb-scheduler.service dist/MDVWB-arm64/mdvwb-scheduler.service
-          install -m 0640 deploy/mdvwb-scheduler.env dist/MDVWB-arm64/mdvwb-scheduler.env
-          install -m 0640 deploy/buses.default.json dist/MDVWB-arm64/buses.default.json
-          install -m 0640 deploy/buses.example.json dist/MDVWB-arm64/buses.example.json
-          install -m 0640 deploy/dashboard.default.json dist/MDVWB-arm64/dashboard.default.json
-          install -m 0640 deploy/schedules.default.json dist/MDVWB-arm64/schedules.default.json
-          install -m 0644 docs/RELEASE_CHECKLIST.md dist/MDVWB-arm64/docs/RELEASE_CHECKLIST.md
+          install -m 0755 out/build/arm64-release/MDVWB \
+            dist/MDVWB-arm64/MDVWB
+          install -m 0755 out/build/arm64-release/mdvwb-offline \
+            dist/MDVWB-arm64/mdvwb-offline
+          install -m 0755 out/build/arm64-release/mdvwb-manager \
+            dist/MDVWB-arm64/mdvwb-manager
+          install -m 0755 out/build/arm64-release/mdvwb-scheduler \
+            dist/MDVWB-arm64/mdvwb-scheduler
 
-          PROJECT_VERSION=$(sed -n             's/^project(MDVWB VERSION \([0-9][0-9.]*\) LANGUAGES CXX)$/\1/p'             CMakeLists.txt)
-          test -n "$PROJECT_VERSION"
+          install -m 0755 deploy/mdvwb-run \
+            dist/MDVWB-arm64/mdvwb-run
+          install -m 0755 deploy/mdvwb-setup \
+            dist/MDVWB-arm64/mdvwb-setup
+          install -m 0755 deploy/offline-install.sh \
+            dist/MDVWB-arm64/offline-install.sh
+
+          install -m 0644 deploy/mdvwb@.service \
+            dist/MDVWB-arm64/mdvwb@.service
+          install -m 0640 deploy/mdvwb.env \
+            dist/MDVWB-arm64/mdvwb.env
+          install -m 0644 deploy/mdvwb-manager.service \
+            dist/MDVWB-arm64/mdvwb-manager.service
+          install -m 0640 deploy/mdvwb-manager.env \
+            dist/MDVWB-arm64/mdvwb-manager.env
+          install -m 0644 deploy/mdvwb-scheduler.service \
+            dist/MDVWB-arm64/mdvwb-scheduler.service
+          install -m 0640 deploy/mdvwb-scheduler.env \
+            dist/MDVWB-arm64/mdvwb-scheduler.env
+
+          install -m 0640 deploy/buses.default.json \
+            dist/MDVWB-arm64/buses.default.json
+          install -m 0640 deploy/buses.example.json \
+            dist/MDVWB-arm64/buses.example.json
+          install -m 0640 deploy/dashboard.default.json \
+            dist/MDVWB-arm64/dashboard.default.json
+          install -m 0640 deploy/schedules.default.json \
+            dist/MDVWB-arm64/schedules.default.json
+
+          install -m 0644 docs/INSTALLATION.md \
+            dist/MDVWB-arm64/docs/INSTALLATION.md
+          install -m 0644 docs/RELEASE_CHECKLIST.md \
+            dist/MDVWB-arm64/docs/RELEASE_CHECKLIST.md
+
           PROJECT_COMMIT=$(git rev-parse HEAD)
           BUILT_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-          sed             -e "s/@MDVWB_VERSION@/$PROJECT_VERSION/g"             -e "s/@MDVWB_COMMIT@/$PROJECT_COMMIT/g"             -e "s/@MDVWB_BUILT_AT@/$BUILT_AT/g"             deploy/package-manifest.json.in >dist/MDVWB-arm64/manifest.json
+          sed \
+            -e "s/@MDVWB_VERSION@/$PROJECT_VERSION/g" \
+            -e "s/@MDVWB_COMMIT@/$PROJECT_COMMIT/g" \
+            -e "s/@MDVWB_BUILT_AT@/$BUILT_AT/g" \
+            deploy/package-manifest.json.in \
+            >dist/MDVWB-arm64/manifest.json
 
           cp -a www/mdvwb dist/MDVWB-arm64/www/mdvwb
           cp -a www/fancoils dist/MDVWB-arm64/www/fancoils
 
-          test -f dist/MDVWB-arm64/buses.default.json
-          test -f dist/MDVWB-arm64/mdvwb-setup
-          test -f dist/MDVWB-arm64/manifest.json
-          sh dist/MDVWB-arm64/mdvwb-setup manifest             --manifest dist/MDVWB-arm64/manifest.json
-          sh dist/MDVWB-arm64/mdvwb-setup check-version             --manifest dist/MDVWB-arm64/manifest.json             --state dist/MDVWB-arm64/not-installed.json
-          test -f dist/MDVWB-arm64/www/mdvwb/dashboard-editor.js
-          test -f dist/MDVWB-arm64/www/mdvwb/dashboard-model.js
-          test -f dist/MDVWB-arm64/www/mdvwb/dashboard-placement-editor.js
-          test -f dist/MDVWB-arm64/www/fancoils/index.html
-          test -f dist/MDVWB-arm64/www/fancoils/app.js
-          test -f dist/MDVWB-arm64/www/fancoils/schedule-model.js
-          test -f dist/MDVWB-arm64/www/fancoils/scheduler-status-ui.js
-          test -f dist/MDVWB-arm64/www/fancoils/scheduler-status-health.js
-
-          file dist/MDVWB-arm64/MDVWB
-          file dist/MDVWB-arm64/mdvwb-offline
-          readelf -h dist/MDVWB-arm64/MDVWB | grep -E "Class:|Machine:"
-          readelf -h dist/MDVWB-arm64/mdvwb-offline | grep -E "Class:|Machine:"
-
           (
             cd dist/MDVWB-arm64
-            find . -type f ! -name SHA256SUMS -print0 | sort -z | \
-              xargs -0 sha256sum > SHA256SUMS
+            find . -type f ! -name SHA256SUMS -print0 |
+              sort -z |
+              xargs -0 sha256sum >SHA256SUMS
             sha256sum -c SHA256SUMS
           )
 
           sh dist/MDVWB-arm64/offline-install.sh verify --package-only
-          sh dist/MDVWB-arm64/offline-install.sh version
+          sh dist/MDVWB-arm64/offline-install.sh version |
+            grep -F "version=$PROJECT_VERSION"
 
-          tar -C dist -czf dist/MDVWB-arm64-offline.tar.gz MDVWB-arm64
-          sha256sum dist/MDVWB-arm64-offline.tar.gz > dist/MDVWB-arm64-offline.tar.gz.sha256
+          tar -C dist -czf "dist/$MDVWB_RELEASE_ARCHIVE" MDVWB-arm64
+
           install -m 0755 deploy/online-install.sh dist/online-install.sh
-          install -m 0755 deploy/install_wirenboard.sh dist/install_wirenboard.sh
+          install -m 0755 deploy/install_wirenboard.sh \
+            dist/install_wirenboard.sh
 
-      - name: Upload offline package
+          (
+            cd dist
+            sha256sum "$MDVWB_RELEASE_ARCHIVE" \
+              >"$MDVWB_RELEASE_ARCHIVE_CHECKSUM"
+            sha256sum \
+              "$MDVWB_RELEASE_ARCHIVE" \
+              "$MDVWB_RELEASE_ARCHIVE_CHECKSUM" \
+              online-install.sh \
+              install_wirenboard.sh \
+              >"$MDVWB_RELEASE_CHECKSUMS"
+            sha256sum -c "$MDVWB_RELEASE_CHECKSUMS"
+          )
+
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: MDVWB-arm64-offline
           path: |
             dist/MDVWB-arm64-offline.tar.gz
             dist/MDVWB-arm64-offline.tar.gz.sha256
+            dist/MDVWB-release-assets.sha256
             dist/online-install.sh
             dist/install_wirenboard.sh
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish GitHub pre-release
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          gh --version
+
+          ASSETS=(
+            "dist/$MDVWB_RELEASE_ARCHIVE"
+            "dist/$MDVWB_RELEASE_ARCHIVE_CHECKSUM"
+            "dist/$MDVWB_RELEASE_CHECKSUMS"
+            "dist/online-install.sh"
+            "dist/install_wirenboard.sh"
+          )
+
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" \
+              --verify-tag \
+              --title "MDVWB $PROJECT_VERSION — hardware validation pending" \
+              --notes "Automated ARM64 lifecycle package. Promote this pre-release to final/latest only after the real Wiren Board checklist passes." \
+              --generate-notes \
+              --prerelease
+          fi
