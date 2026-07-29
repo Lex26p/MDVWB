@@ -198,10 +198,13 @@ www/fancoils/app.js
 www/fancoils/model.js
 www/fancoils/schedule-model.js
 www/fancoils/scheduler-status-ui.js
+www/fancoils/scheduler-status-health.js
 www/fancoils/styles.css
 ```
 
 Both applications are static and have no production build step or external browser dependency.
+
+Current integration caveat: `scheduler-status-ui.js` imports `scheduler-status-health.js`, but `/fancoils/index.html` currently loads only `app.js`, and `app.js` does not import the status UI module. Treat the two scheduler-status files as dormant helpers, not as active production-page behavior. A future integration must update the browser entry point, package required-file checks, both workflows and integration tests together.
 
 ### Workflows
 
@@ -418,6 +421,8 @@ Current installer caveat: when `buses.json` is absent or empty, both installers 
 
 The native ARM64 workflow packages the release inside Debian 11 Bullseye and includes internal checksums.
 
+The offline installer and both workflows currently check `scheduler-status-ui.js` inconsistently and do not explicitly require `scheduler-status-health.js`, although the full `www/fancoils/` directory is copied into the artifact. Do not rely on directory copying as the only completeness gate when these helpers become production dependencies.
+
 ## 18. Forbidden regressions
 
 Do not reintroduce:
@@ -436,6 +441,7 @@ Do not reintroduce:
 - silent/partial legacy migration;
 - dashboard writes that ignore revision;
 - scheduler execution from stale bus/dashboard references;
+- documentation or tests that describe dormant scheduler-status helpers as already wired into `/fancoils/`;
 - removal of user JSON or uploaded assets during an update;
 - the old `ArrID` virtual-device rule;
 - obsolete `/mnt/data/www/mdvwb` web root.

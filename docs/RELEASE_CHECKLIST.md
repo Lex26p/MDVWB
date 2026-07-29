@@ -347,8 +347,10 @@ http://<WB-address>/fancoils/
 - browser MQTT connected;
 - `/mqtt` WebSocket существует;
 - retained config получен;
-- scheduler live heartbeat получен;
-- controller clock отображается.
+- `/mdvwb/scheduler/status` поступает;
+- controller clock корректен в scheduler payload или CLI.
+
+Current `/fancoils/` entry point не загружает scheduler-status helpers, поэтому отдельный clock badge и live-heartbeat freshness gate не являются действующими release criteria.
 
 CLI:
 
@@ -472,13 +474,12 @@ systemctl start mdvwb@1.service
 - once save;
 - target selection only visible;
 - manual disabled schedule;
-- manager queued;
-- scheduler-origin queued;
+- manager queued result;
+- scheduler result с `origin="scheduler"` через MQTT CLI;
 - executing;
 - completed;
 - timeout display;
-- fresh heartbeat;
-- stale heartbeat blocks manual run;
+- current page показывает последнее полученное result;
 - automatic test at controller local time;
 - missed once does not execute late.
 
@@ -572,9 +573,13 @@ known limitations
 
 `deploy/install_wirenboard.sh` в текущем commit не устанавливает operator application `/fancoils/` и explicit dashboard/schedules defaults.
 
+`scheduler-status-ui.js` импортирует `scheduler-status-health.js`, но current `/fancoils/index.html` загружает только `app.js`, а `app.js` status UI helper не импортирует. Live-heartbeat gate, WB clock badge и 90-second direct-result bridge пока не являются production behavior.
+
+Offline installer required-file list и CI workflows также не везде явно проверяют `scheduler-status-health.js`, хотя artifact копирует весь `www/fancoils/`.
+
 Production release проверяется только через offline package.
 
-Не используйте online installer как доказательство полноты release artifact.
+Не используйте online installer или наличие dormant helper files как доказательство полноты browser integration.
 
 ## 32. Release gate
 
@@ -614,7 +619,8 @@ rollback files absent before smoke completion
 [ ] All expected bus services checked
 [ ] Both web apps open
 [ ] /mqtt connected
-[ ] Controller clock correct
+[ ] Controller clock correct in CLI/scheduler payload
+[ ] Current scheduler-status UI limitation recorded
 [ ] C0 factual state OK
 [ ] Individual command OK
 [ ] Group command OK

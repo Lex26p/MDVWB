@@ -3845,8 +3845,8 @@ Scheduler не редактирует конфигурацию. Browser не п�
 | `src/scheduler/mdvwb_scheduler_main.cpp` | Environment paths и executable entrypoint |
 | `www/fancoils/schedule-model.js` | Browser normalization и helpers |
 | `www/fancoils/app.js` | Schedule drawer и draft lifecycle |
-| `www/fancoils/scheduler-status-ui.js` | Fresh heartbeat и authoritative scheduler results |
-| `www/fancoils/scheduler-status-health.js` | Live/stale heartbeat tracking |
+| `www/fancoils/scheduler-status-ui.js` | Dormant helper для fresh heartbeat и authoritative scheduler results; текущая page его не загружает |
+| `www/fancoils/scheduler-status-health.js` | Heartbeat tracker, импортируемый dormant status UI helper; текущая page его не загружает |
 
 ## 108. Canonical `schedules.json`
 
@@ -4720,21 +4720,41 @@ Status публикуется при start, queue/run events, configuration relo
 
 Topic retained для initial display, но retained replay не является доказательством живого процесса.
 
-## 155. Browser heartbeat freshness
+## 155. Текущее browser-поведение scheduler status
 
-Browser считает heartbeat живым только после сообщения с:
+Backend публикует retained `/mdvwb/scheduler/status` при событиях и при изменении controller minute.
 
-```text
-retained = false
-```
-
-Stale threshold:
+В repository существуют helpers:
 
 ```text
-125 seconds
+www/fancoils/scheduler-status-ui.js
+www/fancoils/scheduler-status-health.js
 ```
 
-После reconnect требуется новый live heartbeat. Без него manual run блокируется.
+Они реализуют:
+
+```text
+retained=false для live heartbeat
+stale threshold 125 seconds
+controller clock badge
+блокировку manual run без fresh heartbeat
+```
+
+Но текущая production page их не загружает:
+
+- `/fancoils/index.html` подключает только `app.js`;
+- `app.js` не импортирует `scheduler-status-ui.js`;
+- helper не вызывает `installSchedulerStatusUi()` самостоятельно.
+
+Фактический `/fancoils/` сейчас:
+
+- принимает retained scheduler status как обычное состояние;
+- не различает retained и live delivery;
+- не вычисляет возраст heartbeat;
+- не показывает отдельный controller clock badge;
+- не блокирует manual run по порогу 125 seconds.
+
+Для диагностики живой службы используйте systemd и MQTT CLI, пока helper не подключён явно.
 
 ## 156. Browser schedule editor
 
@@ -4774,30 +4794,31 @@ Delete unsaved draft выполняется локально. Delete persisted e
 
 Manual run доступен только для persisted и clean draft.
 
-## 159. Manual run UI lifecycle
+## 159. Текущий manual run UI lifecycle
 
-Browser публикует `/run`, показывает manager accepted, затем ждёт direct result с:
-
-```json
-"origin": "scheduler"
-```
-
-Состояния UI:
+Current `app.js` публикует:
 
 ```text
-manager accepted
-scheduler queued
-scheduler executing
-terminal scheduler result
+/mdvwb/schedules/<id>/run
 ```
 
-Safety timeout browser:
+и обрабатывает все сообщения общего result topic:
 
 ```text
-90 seconds
+/mdvwb/schedules/<id>/result
 ```
 
-Он отличается от physical confirmation timeout scheduler.
+Manager preliminary result и scheduler result попадают в одну `scheduleResults` map. Текущий handler:
+
+- не требует `origin="scheduler"`;
+- не ведёт отдельное состояние manager accepted → scheduler queued;
+- не устанавливает 90-second safety timeout;
+- показывает последнее полученное state/message;
+- полагается на backend terminal states и пользователя для дальнейшей диагностики.
+
+`origin="scheduler"` остаётся полезным backend-признаком для внешних клиентов и MQTT-диагностики, но текущая production page его специально не использует.
+
+Dormant `scheduler-status-ui.js` содержит более строгий bridge с live heartbeat и 90-second timeout. Он станет production behavior только после явного импорта/установки.
 
 ## 160. Профильные тесты
 
@@ -4827,9 +4848,11 @@ Safety timeout browser:
 - timeout/no rollback;
 - state file;
 - missed once;
-- controller clock;
-- live heartbeat;
-- manager/scheduler result distinction.
+- controller clock в scheduler payload;
+- фактическое current-page status gating;
+- manager/scheduler result distinction во внешних клиентах;
+- явную интеграцию scheduler-status helpers, если она добавляется;
+- required-file checks и browser integration test для подключённых helpers.
 
 ## 162. Schedule invariants
 
@@ -4854,4 +4877,4 @@ Safety timeout browser:
 - Timeout не выполняет rollback.
 - Automatic minute сохраняется между restarts.
 - Просроченный once получает `missed`, а не late execution.
-- Browser manual run требует live scheduler heartbeat.
+- Current production browser не различает live и retained scheduler status; live-heartbeat gating существует только в пока не подключённом helper.

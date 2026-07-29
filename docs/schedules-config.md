@@ -420,11 +420,24 @@ Scheduler result non-retained и содержит source, origin, controller tim
 
 Retained payload содержит runtime state, revision, counts, queue, active schedule и controller clock.
 
-## 36. Heartbeat
+## 36. Scheduler status и current browser integration
 
-Status обновляется при событиях и каждую controller minute.
+Backend status обновляется при событиях и каждую controller minute:
 
-Browser считает live только non-retained delivery и использует stale threshold 125 seconds.
+```text
+/mdvwb/scheduler/status
+```
+
+Repository содержит helpers, которые различают retained/live delivery и используют threshold 125 seconds:
+
+```text
+www/fancoils/scheduler-status-ui.js
+www/fancoils/scheduler-status-health.js
+```
+
+Но текущий `/fancoils/index.html` загружает только `app.js`, а `app.js` эти modules не импортирует.
+
+Следовательно, production page сейчас не выполняет live-heartbeat freshness check и принимает retained scheduler status как обычное состояние.
 
 ## 37. Browser editor
 
@@ -436,11 +449,18 @@ Location:
 
 Поддерживает weekly/once, targets, four actions, duplicate/delete, optimistic save и manual run.
 
-## 38. Manual run UI
+## 38. Current manual run UI
 
-Run button требует persisted clean draft, MQTT и fresh scheduler heartbeat.
+Run button требует:
 
-Browser safety timeout direct scheduler result — 90 seconds.
+- persisted clean draft;
+- MQTT connection;
+- отсутствие pending save;
+- scheduler state `ready`, `executing` или `warning`.
+
+Current `app.js` не требует fresh heartbeat, не фильтрует result по `origin="scheduler"` и не имеет 90-second client safety timeout.
+
+Backend `origin`, controller time и terminal states остаются доступны внешним MQTT clients. Dormant status UI helper реализует более строгий flow, но пока не подключён к page.
 
 ## 39. Диагностика
 
@@ -500,4 +520,4 @@ mdvwb_scheduler_freshness_test
 - Rollback отсутствует.
 - Missed once не выполняется поздно.
 - Controller clock определяет due.
-- Browser требует live heartbeat.
+- Current production browser не выполняет live-heartbeat gating; helper с такой логикой пока не подключён.

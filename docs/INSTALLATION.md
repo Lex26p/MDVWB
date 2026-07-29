@@ -861,6 +861,26 @@ ls -l /var/lib/mdvwb
 ls -l /var/www/fancoils/assets
 ```
 
+### 30.7. Scheduler-status helpers
+
+Files:
+
+```text
+/var/www/fancoils/scheduler-status-ui.js
+/var/www/fancoils/scheduler-status-health.js
+```
+
+поставляются в offline package, но текущий `/fancoils/index.html` загружает только `app.js`, а `app.js` их не импортирует.
+
+Поэтому наличие files не означает, что production page:
+
+- различает retained/live heartbeat;
+- показывает отдельный WB clock badge;
+- блокирует manual run после 125 seconds;
+- использует helper's 90-second result bridge.
+
+Также current offline required-file list и workflows не везде явно проверяют `scheduler-status-health.js`, хотя весь каталог `www/fancoils/` копируется в artifact.
+
 ## 31. Открытие web
 
 ```text
@@ -1922,6 +1942,7 @@ Docs-only changes не входят в его automatic path filter.
 - Не удаляйте assets без dashboard reference check.
 - Не считайте active manager доказательством исправности per-bus services.
 - Не считайте open HTTP page доказательством исправности `/mqtt`.
+- Не считайте наличие scheduler-status helper files доказательством их подключения к current operator page.
 
 ## 77. Минимальный post-install checklist
 
@@ -1965,4 +1986,5 @@ Docs-only changes не входят в его automatic path filter.
 - Per-bus services требуют отдельной проверки.
 - `/mqtt` должен существовать вне MDVWB deployment.
 - Controller local time определяет automatic schedules.
+- Current `/fancoils/` не выполняет live-heartbeat gating, пока scheduler-status helper не подключён.
 - Previous package и config backup необходимы до завершения smoke test.

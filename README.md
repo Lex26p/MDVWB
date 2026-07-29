@@ -277,7 +277,7 @@ MDVWB-arm64-offline.tar.gz
 MDVWB-arm64-offline.tar.gz.sha256
 ```
 
-The package includes all four executables, systemd units, environment templates, safe default JSON files, both web applications, the offline installer, internal checksums, and the release checklist.
+The package includes all four executables, systemd units, environment templates, a concrete bus example, empty dashboard and schedule defaults, both web applications, the offline installer, internal checksums, and the release checklist.
 
 ## Offline installation
 
@@ -301,6 +301,12 @@ The installer requires root, `arm64`, and `libmosquitto.so.1`. It preserves exis
 ```
 
 It validates internal checksums, installs all runtime components, runs self-tests, applies bus configuration, and starts the manager and scheduler services.
+
+Current deployment limitations:
+
+- when `buses.json` is absent or empty, any nonzero `migrate-defaults` result currently falls back to the concrete `buses.example.json`; review ports, addresses and enabled flags before operating real hardware;
+- `deploy/install_wirenboard.sh` is a developer convenience and does not currently install the complete `/fancoils/` application or explicit dashboard/schedule defaults;
+- `scheduler-status-ui.js` and `scheduler-status-health.js` are shipped as helper modules, but the current `/fancoils/` entry point loads only `app.js`; live-versus-retained heartbeat gating and the helper's 90-second direct-result bridge are therefore not active in the production page.
 
 ## Basic verification
 

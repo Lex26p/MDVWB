@@ -1231,47 +1231,67 @@ Unsaved draft удаляется локально. Persisted entry удаляе�
 
 ## 66. Когда доступен «Запустить сейчас»
 
-Требуется:
+Текущий `app.js` разрешает кнопку, когда:
 
 - schedule сохранён;
 - draft clean;
 - MQTT connected;
 - save не выполняется;
-- scheduler доступен;
-- получен fresh live heartbeat.
+- scheduler status имеет `ready`, `executing` или `warning`.
 
 Enabled не обязателен.
+
+Текущая page не проверяет свежесть scheduler heartbeat. Retained status после reconnect может временно оставить кнопку доступной, даже если process уже не работает.
 
 ## 67. Время WB
 
 Automatic due использует controller clock, а не browser clock.
 
-UI показывает:
+Scheduler status содержит:
 
 ```text
-Время WB: DD.MM.YYYY HH:MM · weekday
+controllerDate
+controllerTime
+controllerMinute
+controllerEpoch
+controllerWeekday
 ```
 
-Проверка на controller:
+Текущая `/fancoils/` page не показывает отдельный badge «Время WB», потому что helper `scheduler-status-ui.js` не подключён.
+
+Проверка:
 
 ```bash
 date
 timedatectl status
+mosquitto_sub -C 1 -v -t '/mdvwb/scheduler/status'
 ```
 
-## 68. Fresh heartbeat
+Browser preview нового schedule по-прежнему использует локальное время компьютера.
 
-Retained `/mdvwb/scheduler/status` показывает последнюю структуру, но не доказывает, что process жив.
+## 68. Текущее scheduler-status поведение
 
-Browser ждёт non-retained live status. Stale threshold:
+В repository есть:
 
 ```text
-125 seconds
+scheduler-status-ui.js
+scheduler-status-health.js
 ```
 
-Без fresh heartbeat manual run блокируется.
+Эти helpers умеют различать retained и live heartbeat и используют threshold 125 seconds.
 
-## 69. Manual run lifecycle
+Однако текущий `/fancoils/index.html` загружает только `app.js`, а `app.js` helpers не импортирует.
+
+Поэтому production page сейчас:
+
+- отображает последний scheduler state;
+- не различает retained/live;
+- не вычисляет stale age;
+- не блокирует manual run из-за отсутствия fresh heartbeat.
+
+Проверяйте живое состояние через `systemctl` и новый non-retained MQTT status.
+
+## 69. Текущий manual run lifecycle
 
 Browser публикует:
 
@@ -1281,23 +1301,40 @@ payload = run
 retain = false
 ```
 
-Сначала manager может ответить `queued`, затем authoritative scheduler result содержит:
+Manager и scheduler публикуют общий:
+
+```text
+/mdvwb/schedules/<id>/result
+```
+
+Scheduler result содержит:
 
 ```json
 "origin": "scheduler"
 ```
 
-Manager acceptance ещё не означает отправку commands.
+Но текущий `app.js` не разделяет результаты по `origin`. Он сохраняет и показывает последнее state/message для schedule.
 
-## 70. UI safety timeout
+Manager acceptance ещё не означает отправку commands. Для строгой диагностики подпишитесь на result topic и дождитесь сообщения `origin="scheduler"` вручную.
 
-Browser ждёт direct scheduler result до:
+## 70. Текущее ожидание результата в UI
+
+Current production page не устанавливает отдельный 90-second safety timeout для manual run.
+
+Backend scheduler confirmation timeout по умолчанию:
 
 ```text
-90 seconds
+10 seconds
 ```
 
-Scheduler physical confirmation timeout по умолчанию 10 seconds. Разница позволяет schedule ожидать queue.
+Schedule может дольше ждать своей очереди до начала выполнения. Если UI долго не получает terminal result, проверьте:
+
+```bash
+systemctl status mdvwb-scheduler.service --no-pager
+mosquitto_sub -v -t '/mdvwb/schedules/<id>/result'
+```
+
+Dormant `scheduler-status-ui.js` содержит 90-second client timeout, но он пока не подключён.
 
 ## 71. Automatic run
 
@@ -1437,7 +1474,7 @@ queued
 executing
 ```
 
-Authoritative result имеет `origin=scheduler`.
+Scheduler result имеет `origin=scheduler`; текущий `app.js` этот признак отдельно не фильтрует.
 
 ## 82. Пример рабочего утра
 
@@ -1561,9 +1598,14 @@ mosquitto_pub -t '/mdvwb/schedules/workday-start/run' -m 'run'
 - clean draft;
 - MQTT;
 - pending save;
-- fresh heartbeat моложе 125 seconds.
+- scheduler status имеет `ready`, `executing` или `warning`.
 
-Retained status после reconnect недостаточно.
+Текущая page не блокирует кнопку по возрасту heartbeat. Если retained status выглядит доступным, но process не отвечает, проверьте:
+
+```bash
+systemctl status mdvwb-scheduler.service --no-pager
+mosquitto_sub -v -t '/mdvwb/scheduler/status'
+```
 
 ## 91. Run уходит в timeout
 
@@ -1676,6 +1718,8 @@ docs/RELEASE_CHECKLIST.md
 - Automatic rollback отсутствует.
 - Production installation выполняется offline ARM64 package.
 - Текущий online source installer не устанавливает полный `/fancoils/` application.
+- `scheduler-status-ui.js` и `scheduler-status-health.js` поставляются, но текущий entry point их не загружает; наличие файлов не означает активный heartbeat UI.
+- Offline package required-file list и workflows не везде явно проверяют `scheduler-status-health.js`.
 - Перед update сохраняйте `/etc/mdvwb`, scheduler state и assets.
 - После installation проверяйте manager, scheduler и каждый expected `mdvwb@N`.
 
