@@ -1298,4 +1298,1311 @@ www/fancoils/
 deploy/
 ```
 
-Подробные контракты этих подсистем описываются в следующих разделах документационного аудита и должны проверяться по соответствующим исходникам и тестам, а не выводиться из поведения драйвера.
+Подробные контракты dashboard, scheduler и deployment описываются в следующих шагах документационного аудита. Контракты manager, `buses.json`, systemd synchronization, discovery и legacy migration описаны ниже.
+
+## 35. Назначение `mdvwb-manager`
+
+`mdvwb-manager` — отдельный C++20-процесс, который владеет конфигурационными и lifecycle-операциями проекта.
+
+Менеджер:
+
+- читает и валидирует `/etc/mdvwb/buses.json`;
+- создаёт производные `/etc/default/mdvwb-<bus>`;
+- запускает, останавливает и перезапускает `mdvwb@<bus>.service`;
+- публикует конфигурацию и статусы по MQTT;
+- принимает новую конфигурацию с optimistic concurrency;
+- защищает ссылки dashboard и scheduler при изменении шин;
+- очищает obsolete retained MQTT topics;
+- запускает discovery отдельным процессом `MDVWB --discover`;
+- мигрирует legacy environment-файлы в первый `buses.json`;
+- обслуживает dashboard и schedules MQTT API, которые подробно описаны в следующих разделах документации.
+
+Менеджер не открывает RS-485-порты сам. Физический serial port открывает только соответствующий процесс `MDVWB`.
+
+Production service:
+
+```text
+mdvwb-manager.service
+```
+
+Точка входа:
+
+```text
+mdvwb-manager mqtt /etc/mdvwb/buses.json
+```
+
+## 36. Карта исходников manager
+
+| Файл | Ответственность |
+|---|---|
+| `src/manager/mdv_buses_config.cpp`, `.h` | Строгий parser, validator и canonical serializer `buses.json` |
+| `src/manager/mdvwb_service_sync.cpp`, `.h` | Производные environment-файлы, service plan, atomic write и systemd |
+| `src/manager/mdvwb_manager_cli.cpp`, `.h` | CLI-команды и коды завершения |
+| `src/manager/mdvwb_manager_main.cpp` | Минимальная точка входа executable |
+| `src/manager/mdvwb_manager_mqtt.cpp`, `.h` | Long-lived MQTT endpoint, revision checks, transactional apply и bus lifecycle |
+| `src/manager/mdvwb_discovery_runner.cpp`, `.h` | Безопасный запуск `MDVWB --discover`, timeout и разбор результата |
+| `src/manager/mdvwb_migration.cpp`, `.h` | Строгая миграция legacy `/etc/default/mdvwb*` без выполнения shell-кода |
+| `src/manager/mdv_dashboard_config.cpp`, `.h` | Dashboard schema и reference checks |
+| `src/manager/mdv_schedules_config.cpp`, `.h` | Schedules schema и reference checks |
+| `src/manager/mdvwb_dashboard_upload.cpp`, `.h` | Chunked upload подложки dashboard |
+
+## 37. CLI `mdvwb-manager`
+
+Поддерживаемые команды:
+
+```text
+mdvwb-manager validate [buses.json]
+mdvwb-manager show [buses.json]
+mdvwb-manager summary [buses.json]
+mdvwb-manager plan [buses.json]
+mdvwb-manager apply [buses.json]
+mdvwb-manager mqtt [buses.json]
+mdvwb-manager migrate-defaults [buses.json]
+```
+
+### 37.1. Разрешение пути
+
+Путь выбирается в порядке:
+
+1. явный второй аргумент;
+2. `MDVWB_BUSES_CONFIG`;
+3. `/etc/mdvwb/buses.json`.
+
+### 37.2. `validate`
+
+Только загружает и проверяет JSON.
+
+Успешный результат:
+
+```text
+CONFIG_OK buses=<count> enabled=<count>
+```
+
+Файлы и сервисы не изменяются.
+
+### 37.3. `show`
+
+Печатает canonical JSON:
+
+- buses отсортированы по `id`;
+- addresses отсортированы;
+- присутствует `revision`;
+- форматирование стабильно.
+
+### 37.4. `summary`
+
+Печатает компактные строки:
+
+```text
+version=1
+buses=<count>
+enabled=<count>
+bus=<id> enabled=<true|false> port=<path> addresses=<csv>
+```
+
+Текущая реализация `summary` не печатает `revision`.
+
+### 37.5. `plan`
+
+Строит и печатает service synchronization plan, но не применяет его.
+
+Возможные действия:
+
+```text
+WRITE_CONFIG
+REMOVE_CONFIG
+ENABLE_START
+ENABLE_RESTART
+DISABLE_STOP
+ENSURE_ENABLED_STARTED
+NO_CHANGES
+```
+
+`plan` читает environment template и текущие `/etc/default/mdvwb-*`, поэтому требует доступ к этим файлам, но не требует root только из-за самой команды.
+
+### 37.6. `apply`
+
+Загружает `buses.json`, строит plan и применяет его.
+
+`apply`:
+
+- требует root;
+- не увеличивает `revision`;
+- не перезаписывает сам `buses.json`;
+- синхронизирует только runtime environment-файлы и systemd.
+
+Изменение `revision` и транзакционная запись `buses.json` выполняются через MQTT save endpoint менеджера.
+
+### 37.7. `mqtt`
+
+Запускает long-lived manager daemon и требует root.
+
+### 37.8. `migrate-defaults`
+
+Строго читает legacy `/etc/default/mdvwb*`, создаёт canonical `BusesConfig` и только после полного успеха атомарно записывает целевой `buses.json`.
+
+Команда требует root.
+
+### 37.9. Коды завершения
+
+```text
+0 = успех
+1 = manager/runtime/root error
+2 = usage или configuration error
+```
+
+Диагностические префиксы:
+
+```text
+CONFIG_ERROR:
+MANAGER_ERROR:
+USAGE_ERROR:
+```
+
+## 38. Canonical `buses.json`
+
+Production path:
+
+```text
+/etc/mdvwb/buses.json
+```
+
+Schema version:
+
+```text
+1
+```
+
+Пример:
+
+```json
+{
+  "version": 1,
+  "revision": 4,
+  "buses": [
+    {
+      "id": 1,
+      "enabled": true,
+      "port": "/dev/ttyRS485-1",
+      "addresses": [1, 2, 3]
+    },
+    {
+      "id": 2,
+      "enabled": false,
+      "port": "/dev/ttyUSB0",
+      "addresses": []
+    }
+  ]
+}
+```
+
+Root fields:
+
+```text
+version
+revision
+buses
+```
+
+Bus fields:
+
+```text
+id
+enabled
+port
+addresses
+```
+
+Неизвестные fields отклоняются.
+
+## 39. Проверка `buses.json`
+
+### 39.1. Root
+
+- root должен быть object;
+- `version` обязателен и равен `1`;
+- `revision` необязателен при чтении и по умолчанию равен `0`;
+- `revision` — integer `0..2147483647`;
+- `buses` обязателен и является array;
+- duplicate JSON object keys отклоняются;
+- floating-point и exponent numbers не поддерживаются;
+- trailing content после root отклоняется.
+
+Canonical serializer всегда записывает `revision`.
+
+### 39.2. Bus ID
+
+```text
+1..999
+```
+
+ID уникальны.
+
+### 39.3. Port
+
+Port:
+
+- является string;
+- начинается с `/dev/`;
+- содержит хотя бы один символ после `/dev/`;
+- уникален между всеми buses;
+- допускает только alphanumeric и:
+
+```text
+/ _ - . + :
+```
+
+Примеры допустимых путей:
+
+```text
+/dev/ttyRS485-1
+/dev/ttyUSB0
+/dev/serial/by-id/usb-adapter_1
+```
+
+### 39.4. Addresses
+
+Каждый address:
+
+```text
+0..63
+```
+
+Addresses уникальны внутри bus.
+
+Canonical serializer сортирует их по возрастанию.
+
+### 39.5. Enabled bus
+
+Для:
+
+```json
+"enabled": true
+```
+
+список addresses не может быть пустым.
+
+Disabled bus может иметь:
+
+```json
+"addresses": []
+```
+
+### 39.6. Canonical order
+
+Serializer сортирует buses по `id`.
+
+Порядок bus objects во входном JSON не сохраняется.
+
+## 40. Revision `buses.json`
+
+`revision` реализует optimistic concurrency для браузеров и других MQTT-клиентов.
+
+Клиент должен:
+
+1. получить retained `/mdvwb/config`;
+2. изменить локальную копию;
+3. сохранить исходную полученную `revision`;
+4. опубликовать изменённый JSON в `/mdvwb/config/set`.
+
+Manager сравнивает:
+
+```text
+submitted.revision == current.revision
+```
+
+При совпадении:
+
+```text
+saved.revision = current.revision + 1
+```
+
+При конфликте:
+
+- сохранение отклоняется;
+- systemd не изменяется;
+- текущая конфигурация не перезаписывается;
+- сначала публикуется non-retained result;
+- затем повторно публикуется текущий retained `/mdvwb/config`;
+- публикуется актуальный ready status.
+
+Если существующий `buses.json` отсутствует или повреждён, manager допускает восстановление только submitted revision `0`.
+
+При достижении `2147483647` новое сохранение отклоняется.
+
+## 41. MQTT topics manager
+
+### 41.1. Общая конфигурация
+
+```text
+/mdvwb/config
+/mdvwb/config/set
+/mdvwb/config/result
+/mdvwb/status
+```
+
+| Topic | Retain | Назначение |
+|---|---:|---|
+| `/mdvwb/config` | Да | Текущий canonical `buses.json` |
+| `/mdvwb/config/set` | Нет | Новая конфигурация |
+| `/mdvwb/config/result` | Нет | Результат save/apply |
+| `/mdvwb/status` | Да | Общий status manager |
+
+Успешный manager status:
+
+```json
+{
+  "state": "ready",
+  "buses": 2,
+  "enabled": 1
+}
+```
+
+Ошибка:
+
+```json
+{
+  "state": "error",
+  "message": "..."
+}
+```
+
+Configuration result содержит:
+
+```json
+{
+  "success": true,
+  "saved": true,
+  "message": "Configuration saved and applied",
+  "buses": 2,
+  "enabled": 1,
+  "actions": 4
+}
+```
+
+`success` и `saved` различаются:
+
+- `success=true, saved=true` — файл и runtime применены;
+- `success=false, saved=false` — новая конфигурация не сохранена;
+- `success=false, saved=true` — submitted recovery target сохранён, но systemd degraded и rollback неполон.
+
+### 41.2. Payload limits
+
+```text
+buses.json set payload = максимум 65536 bytes
+dashboard set payload = максимум 1048576 bytes
+schedules set payload = максимум 1048576 bytes
+```
+
+Retained save-команды отклоняются.
+
+## 42. Manager incoming queue
+
+Network callback только разбирает topic и кладёт операцию в bounded queue.
+
+Лимиты:
+
+```text
+MaximumPendingCommands = 128
+MaximumPendingBytes = 8 MiB
+```
+
+Queue key:
+
+- bus `start`, `stop` и `restart` одной шины используют один общий key;
+- `finish` и `cancel` одного upload используют один общий key;
+- остальные операции объединяются по полному MQTT topic.
+
+Следствие:
+
+- последовательные lifecycle-команды одной шины сохраняют только последнюю;
+- status request, discovery и config set имеют отдельные keys;
+- разные bus ID независимы;
+- при превышении budget удаляются самые старые операции;
+- один payload больше 8 MiB не принимается в queue.
+
+Физические и systemd-операции выполняются не из MQTT callback, а из `ProcessOne()` manager loop.
+
+## 43. Защита dashboard и schedules references
+
+Перед сохранением новой bus configuration manager загружает:
+
+```text
+dashboard.json
+schedules.json
+```
+
+и проверяет ссылки на:
+
+```text
+bus
+address
+panel
+```
+
+Manager сравнивает issues текущей и submitted bus configuration.
+
+Отклоняется изменение, которое создаёт новые broken references.
+
+Уже существующие issues не мешают исправлять другие части `buses.json`, если submitted configuration не добавляет новые проблемы.
+
+Таким образом нельзя молча:
+
+- удалить bus, который используется dashboard или schedule;
+- удалить address, на который есть ссылка;
+- изменить конфигурацию так, чтобы существующая корректная ссылка стала недействительной.
+
+После успешного изменения шин manager повторно публикует dashboard и schedules status.
+
+## 44. Производный environment-файл
+
+Для каждой configured bus целевой путь:
+
+```text
+/etc/default/mdvwb-<bus>
+```
+
+Основа:
+
+```text
+/usr/local/lib/mdvwb/mdvwb.env
+```
+
+Manager заменяет или добавляет:
+
+```text
+MDVWB_BUS
+MDVWB_PORT
+MDVWB_ADDRESSES
+```
+
+Другие переменные template сохраняются, например:
+
+```text
+MDVWB_MASTER_ID
+MDVWB_PERIOD_MS
+MDVWB_RESPONSE_TIMEOUT_MS
+MDVWB_MQTT_HOST
+MDVWB_MQTT_PORT
+```
+
+В начало generated file добавляется marker:
+
+```text
+# Managed by mdvwb-manager from buses.json.
+```
+
+Этот marker используется при поиске obsolete runtime-файлов.
+
+Environment values экранируются для двойных кавычек, backslash, `$` и backtick.
+
+Generated file имеет permissions:
+
+```text
+owner read/write
+group read
+others none
+```
+
+то есть эквивалент `0640`.
+
+## 45. Atomic text write
+
+Manager пишет текстовый файл через sibling temporary file:
+
+```text
+<target>.tmp
+```
+
+Последовательность:
+
+1. создать parent directories;
+2. записать полный content;
+3. установить `0640`;
+4. rename temporary в target;
+5. при платформе, не заменяющей existing target через rename, удалить target и повторить rename;
+6. при ошибке удалить temporary и вернуть ошибку.
+
+Для MQTT config transaction дополнительно используется:
+
+```text
+buses.json.pending
+buses.json.previous
+```
+
+`pending` является staged validated configuration. `previous` применяется только как временный backup при платформенном commit fallback.
+
+## 46. Service synchronization plan
+
+Manager сравнивает desired config с существующим `/etc/default/mdvwb-<id>`.
+
+### 46.1. Enabled bus, файл отсутствует
+
+```text
+WRITE_CONFIG
+ENABLE_START
+```
+
+Systemd:
+
+```text
+systemctl enable --now mdvwb@<id>.service
+```
+
+### 46.2. Enabled bus, файл изменился
+
+```text
+WRITE_CONFIG
+ENABLE_RESTART
+```
+
+Systemd:
+
+```text
+systemctl enable mdvwb@<id>.service
+systemctl restart mdvwb@<id>.service
+```
+
+### 46.3. Enabled bus, файл не изменился
+
+```text
+ENSURE_ENABLED_STARTED
+```
+
+Systemd:
+
+```text
+systemctl enable --now mdvwb@<id>.service
+```
+
+Это восстанавливает вручную остановленный или disabled service.
+
+### 46.4. Disabled bus
+
+При необходимости сначала:
+
+```text
+WRITE_CONFIG
+```
+
+затем:
+
+```text
+DISABLE_STOP
+systemctl disable --now mdvwb@<id>.service
+```
+
+Runtime environment сохраняется, чтобы bus можно было снова включить.
+
+### 46.5. Bus удалён из `buses.json`
+
+Только generated file с managed marker считается автоматически удаляемым.
+
+Plan:
+
+```text
+DISABLE_STOP
+REMOVE_CONFIG
+```
+
+Сначала service отключается и останавливается, затем удаляется `/etc/default/mdvwb-<id>`.
+
+Посторонние файлы без managed marker не удаляются как obsolete.
+
+## 47. Transactional save и apply
+
+MQTT save `buses.json` является транзакцией, насколько это возможно для файлов и systemd.
+
+Последовательность успешного save:
+
+1. загрузить previous `buses.json`;
+2. проверить submitted revision;
+3. проверить schema;
+4. проверить dashboard/schedules references;
+5. увеличить revision;
+6. построить service plan;
+7. сохранить snapshot previous file;
+8. записать canonical JSON в `buses.json.pending`;
+9. применить generated files и systemd plan;
+10. commit staged file в `buses.json`;
+11. опубликовать retained config и statuses;
+12. очистить obsolete retained device topics;
+13. опубликовать non-retained successful result.
+
+Source `buses.json` не заменяется до успешного завершения service plan.
+
+## 48. Rollback при ошибке apply
+
+Если environment или systemd action завершилась ошибкой, manager строит rollback plan из previous configuration.
+
+### 48.1. Rollback успешен
+
+- previous generated files и service states восстанавливаются;
+- previous `buses.json` остаётся либо восстанавливается;
+- `.pending` удаляется;
+- retained current config повторно публикуется;
+- result:
+
+```text
+success=false
+saved=false
+```
+
+### 48.2. Rollback systemd неполон, submitted file удалось сохранить
+
+Submitted canonical config сохраняется как recovery target.
+
+Manager публикует retained error status и result:
+
+```text
+success=false
+saved=true
+```
+
+Это означает: файл содержит желаемое состояние, но фактический systemd может ему не соответствовать.
+
+### 48.3. Не удалось сохранить ни previous, ни submitted target
+
+Manager публикует explicit degraded error с деталями apply и rollback.
+
+Оператор должен сверить:
+
+```text
+/etc/mdvwb/buses.json
+/etc/default/mdvwb-*
+systemctl status mdvwb@*.service
+```
+
+## 49. Bus lifecycle MQTT API
+
+Command topics:
+
+```text
+/mdvwb/buses/<id>/start
+/mdvwb/buses/<id>/stop
+/mdvwb/buses/<id>/restart
+/mdvwb/buses/<id>/status/get
+```
+
+Status/result:
+
+```text
+/mdvwb/buses/<id>/status
+/mdvwb/buses/<id>/result
+```
+
+Command payload текущим handler не интерпретируется. Значение может быть пустым; команда определяется topic.
+
+Retained bus commands отклоняются.
+
+### 49.1. Start
+
+Разрешён только для configured bus с:
+
+```json
+"enabled": true
+```
+
+Выполняет:
+
+```text
+systemctl start mdvwb@<id>.service
+```
+
+### 49.2. Stop
+
+Разрешён для configured bus независимо от `enabled`.
+
+Выполняет:
+
+```text
+systemctl stop mdvwb@<id>.service
+```
+
+Stop не изменяет `buses.json` и не отключает autostart.
+
+### 49.3. Restart
+
+Разрешён только для configured enabled bus.
+
+Выполняет:
+
+```text
+systemctl restart mdvwb@<id>.service
+```
+
+### 49.4. Status get
+
+Не выполняет lifecycle command, а повторно публикует retained status.
+
+### 49.5. Bus status payload
+
+```json
+{
+  "id": 1,
+  "configured": true,
+  "enabled": true,
+  "service": "active",
+  "autostart": true,
+  "port": "/dev/ttyRS485-1",
+  "addresses": [1, 2, 3]
+}
+```
+
+Значения `service` и `autostart` читаются через:
+
+```text
+systemctl is-active --quiet
+systemctl is-enabled --quiet
+```
+
+### 49.6. Bus result payload
+
+```json
+{
+  "success": true,
+  "bus": 1,
+  "command": "restart",
+  "message": "Bus service restarted"
+}
+```
+
+Result non-retained.
+
+## 50. Очистка obsolete retained topics
+
+После успешного сохранения bus configuration manager сравнивает previous и current config.
+
+Для каждого удалённого address очищаются retained topics:
+
+```text
+/devices/Fan-<bus>_<address>/meta/...
+/devices/Fan-<bus>_<address>/controls/<Control>
+/devices/Fan-<bus>_<address>/controls/<Control>/on1
+/devices/Fan-<bus>_<address>/controls/<Control>/meta/...
+```
+
+Controls:
+
+```text
+Alarm
+AlarmCode
+Blinds
+Blok
+Mode
+Power
+SetTemp
+Speed
+Status
+Temp
+```
+
+Очистка выполняется retained publication с пустым payload.
+
+Для полностью удалённой bus дополнительно очищаются:
+
+```text
+/devices/sist-<bus>/...
+/mdvwb/buses/<bus>/status
+/mdvwb/buses/<bus>/discovery/status
+/mdvwb/buses/<bus>/discovery/result
+```
+
+Очистка происходит только после successful save/apply, а не при rejected revision или rollback.
+
+## 51. Discovery MQTT API
+
+Запуск:
+
+```text
+/mdvwb/buses/<id>/discovery/start
+```
+
+Публикации:
+
+```text
+/mdvwb/buses/<id>/discovery/status
+/mdvwb/buses/<id>/discovery/result
+/mdvwb/buses/<id>/result
+```
+
+Retained discovery command отклоняется.
+
+Bus должен существовать в current `buses.json`.
+
+## 52. Подготовка discovery
+
+Перед запуском manager:
+
+1. публикует retained discovery status `running`;
+2. проверяет `systemctl is-active`;
+3. если service active — выполняет `systemctl stop`;
+4. повторно публикует bus status;
+5. запускает отдельный worker.
+
+Manager не выполняет automatic restart после discovery.
+
+Bus остаётся остановленной до явного:
+
+```text
+/mdvwb/buses/<id>/start
+```
+
+или повторного `apply`/изменения конфигурации, которое обеспечит enabled/start state.
+
+Найденные addresses не записываются в `buses.json` автоматически.
+
+## 53. Параллельность discovery
+
+Manager хранит tasks в map:
+
+```text
+busId -> DiscoveryTask
+```
+
+Правила:
+
+- для одного bus ID одновременно существует не более одного task;
+- повторный discovery той же bus отклоняется;
+- discovery разных bus ID могут выполняться параллельно;
+- завершение одной bus не забирает result другой;
+- worker completion обрабатывается основным manager loop;
+- destructor manager join-ит все оставшиеся workers.
+
+После старта manager ждёт до `100 ms`, чтобы быстрый test runner мог вернуть результат inline. Реальный serial scan обычно продолжается в background.
+
+## 54. Native discovery runner
+
+Manager запускает:
+
+```text
+/usr/local/bin/MDVWB \
+  --discover \
+  --port <bus.port> \
+  --master-id 0 \
+  --period-ms 150 \
+  --response-timeout-ms 130
+```
+
+Native runner поддерживается только на Linux.
+
+Лимиты по умолчанию:
+
+```text
+overall timeout = 45000 ms
+maximum captured stdout+stderr = 256 KiB
+```
+
+При timeout:
+
+1. отправляется `SIGTERM`;
+2. даётся grace period до 1 секунды;
+3. затем применяется `SIGKILL`;
+4. child обязательно reap-ится.
+
+При превышении output limit процесс также завершается.
+
+## 55. Разбор discovery output
+
+Runner ищет строки:
+
+```text
+FOUND_ADDRESSES=<csv>
+```
+
+Используется последнее найденное значение.
+
+Допустимы:
+
+```text
+FOUND_ADDRESSES=
+FOUND_ADDRESSES=0
+FOUND_ADDRESSES=1,5,63
+```
+
+Отклоняются:
+
+- отсутствие строки;
+- пустой item;
+- нецелое значение;
+- address вне `0..63`;
+- duplicate address.
+
+Результат сортируется по возрастанию.
+
+Exit code процесса должен быть `0`.
+
+## 56. Discovery status и result
+
+Running status:
+
+```json
+{
+  "bus": 1,
+  "state": "running",
+  "port": "/dev/ttyRS485-1",
+  "message": "Discovery is running"
+}
+```
+
+Completed status:
+
+```json
+{
+  "bus": 1,
+  "state": "completed",
+  "port": "/dev/ttyRS485-1",
+  "message": "Discovery completed",
+  "found": 3
+}
+```
+
+Error status:
+
+```json
+{
+  "bus": 1,
+  "state": "error",
+  "port": "/dev/ttyRS485-1",
+  "message": "..."
+}
+```
+
+Discovery status retained.
+
+Result:
+
+```json
+{
+  "success": true,
+  "bus": 1,
+  "addresses": [1, 5, 63],
+  "message": "Discovery completed"
+}
+```
+
+Discovery result также retained, чтобы браузер после reload видел последний итог.
+
+При старте manager для каждой configured bus публикуется status:
+
+```text
+idle
+```
+
+## 57. Strict legacy migration
+
+Migration рассматривает только имена:
+
+```text
+mdvwb
+mdvwb-<decimal bus id>
+```
+
+Примеры игнорируемых файлов:
+
+```text
+mdvwb-backup
+mdvwb.disabled
+other-service
+```
+
+Malformed candidate вроде:
+
+```text
+mdvwb-
+mdvwb-01
+```
+
+не игнорируется молча, а приводит к ошибке.
+
+Candidates:
+
+- должны быть regular files;
+- сортируются по filename для детерминированной диагностики;
+- читаются как текст;
+- никогда не выполняются через shell.
+
+Если candidate отсутствуют, migration завершается ошибкой:
+
+```text
+no legacy MDVWB bus configurations were found
+```
+
+## 58. Legacy assignment parser
+
+Допустимы:
+
+```text
+пустые строки
+# comment
+NAME=VALUE
+NAME="VALUE"
+NAME='VALUE'
+```
+
+Синтаксис assignment name:
+
+```text
+[A-Za-z_][A-Za-z0-9_]*
+```
+
+Parser проверяет синтаксис всех непустых non-comment строк.
+
+Обрабатываются только keys с prefix:
+
+```text
+MDVWB_
+```
+
+Другие корректные assignments игнорируются.
+
+Не выполняются:
+
+- shell expansion;
+- variable substitution;
+- command substitution;
+- sourcing;
+- escape interpretation как в shell.
+
+Quote снимается только при совпадающей первой и последней `'` или `"`. Незакрытая или неожиданная внутренняя quote отклоняется.
+
+Duplicate `MDVWB_*` assignment отклоняется с номером первой строки.
+
+## 59. Обязательные legacy fields
+
+Каждый candidate требует:
+
+```text
+MDVWB_PORT
+MDVWB_ADDRESSES
+```
+
+### 59.1. `mdvwb-<id>`
+
+Bus ID берётся из filename.
+
+`MDVWB_BUS` может отсутствовать.
+
+Если он присутствует, значение обязано совпадать с filename.
+
+### 59.2. Unsuffixed `mdvwb`
+
+Обязательно содержит:
+
+```text
+MDVWB_BUS
+```
+
+### 59.3. ID
+
+Диапазон:
+
+```text
+1..999
+```
+
+Filename использует canonical decimal form без leading zeros.
+
+### 59.4. Addresses
+
+- CSV;
+- допускается полностью пустой список для disabled legacy service;
+- item не может быть пустым;
+- address `0..63`;
+- duplicates запрещены;
+- результат сортируется.
+
+## 60. Ambiguous migration
+
+Migration отклоняет:
+
+- два файла, определяющих один bus ID;
+- несовпадение filename и `MDVWB_BUS`;
+- duplicate ports;
+- invalid `/dev/...` path;
+- invalid bus ID;
+- malformed assignment;
+- missing required assignment;
+- duplicate MDVWB key;
+- invalid/duplicate address;
+- enabled service с пустым address list.
+
+Проверка IDs, ports, collisions и addresses выполняется до systemd queries.
+
+## 61. Определение enabled при migration
+
+После полного разбора sources manager запрашивает:
+
+```text
+systemctl is-active --quiet mdvwb@<id>.service
+systemctl is-enabled --quiet mdvwb@<id>.service
+```
+
+Migrated bus считается enabled, если:
+
+```text
+active OR enabled
+```
+
+После этого выполняется повторная полная validation.
+
+Поэтому empty address list разрешён только когда service одновременно inactive и disabled.
+
+## 62. Запись результата migration
+
+`migrate-defaults` вызывает:
+
+```text
+MigrateLegacyDefaults()
+SerializeBusesConfig()
+WriteTextFileAtomically()
+```
+
+Target file не открывается на запись до завершения parsing, ambiguity checks, schema validation и systemd status queries.
+
+При ошибке migration существующий target не изменяется.
+
+Начальная revision:
+
+```text
+0
+```
+
+Сам CLI strict. Поведение установщиков при ошибке migration рассматривается отдельно в документации deployment, потому что installer может применять собственный fallback.
+
+## 63. Профильные manager CTest
+
+### 63.1. `mdvwb_buses_config_test`
+
+Проверяет strict JSON schema, unknown fields, ranges, duplicates и canonical serializer.
+
+### 63.2. `mdvwb_manager_cli_test`
+
+Проверяет CLI-команды, path resolution, root restrictions и output.
+
+### 63.3. `mdvwb_service_sync_test`
+
+Проверяет generated environment, action plan, atomic writes и systemctl commands.
+
+### 63.4. `mdvwb_manager_mqtt_test`
+
+Проверяет manager topics, save/apply, bus lifecycle, statuses, cleanup и reference behavior.
+
+### 63.5. `mdvwb_manager_revision_test`
+
+Проверяет stale revision rejection и порядок:
+
+```text
+result -> current retained configuration
+```
+
+### 63.6. `mdvwb_manager_transaction_test`
+
+Проверяет successful rollback и explicit degraded state при rollback failure.
+
+### 63.7. `mdvwb_discovery_runner_test`
+
+Проверяет запуск subprocess, parsing, timeout и output limits.
+
+### 63.8. `mdvwb_discovery_async_test`
+
+Проверяет:
+
+- same-bus collision rejection;
+- independent different-bus workers;
+- корректную привязку completion к bus ID.
+
+### 63.9. `mdvwb_migration_test`
+
+Проверяет valid migration и набор malformed/ambiguous legacy sources.
+
+### 63.10. `mdvwb_mqtt_queue_test`
+
+Проверяет bounded manager queue, latest-by-key и eviction.
+
+## 64. Проверки при изменении `buses.json`
+
+Обязательно проверить:
+
+- schema version `1`;
+- revision;
+- unknown fields;
+- duplicate JSON keys;
+- bus ID `1..999`;
+- unique ID;
+- safe `/dev/` path;
+- unique port;
+- address `0..63`;
+- unique address;
+- enabled bus не пуст;
+- canonical sorting;
+- reference protection;
+- stale revision;
+- revision increment;
+- payload limit;
+- retained command rejection.
+
+## 65. Проверки при изменении systemd synchronization
+
+Обязательно проверить:
+
+- generated marker;
+- template preservation;
+- замену BUS/PORT/ADDRESSES;
+- permissions `0640`;
+- new enabled bus;
+- changed enabled bus;
+- unchanged enabled bus;
+- disabled bus;
+- removed managed bus;
+- unmanaged obsolete file не удаляется;
+- apply failure;
+- successful rollback;
+- incomplete rollback;
+- `.pending` cleanup;
+- saved flag соответствует фактическому состоянию файла.
+
+## 66. Проверки при изменении discovery
+
+Обязательно проверить:
+
+- bus существует;
+- retained command rejected;
+- active service остановлен;
+- inactive service не получает лишний stop;
+- service автоматически не запускается;
+- config не изменяется;
+- addresses не применяются;
+- same bus serialized;
+- different buses independent;
+- master ID `0`;
+- period `150 ms`;
+- timeout `130 ms`;
+- process timeout `45 s`;
+- output limit `256 KiB`;
+- `FOUND_ADDRESSES`;
+- status/result retain;
+- completion относится к правильному bus ID.
+
+## 67. Проверки при изменении migration
+
+Обязательно проверить:
+
+- sources не выполняются как shell;
+- deterministic candidate order;
+- regular file;
+- exact candidate names;
+- canonical filename ID;
+- required PORT/ADDRESSES;
+- unsuffixed BUS;
+- filename/BUS match;
+- duplicate assignment;
+- malformed line;
+- quote errors;
+- address range и duplicates;
+- duplicate bus sources;
+- duplicate ports;
+- pre-systemd validation;
+- active/enabled mapping;
+- final enabled-empty rejection;
+- target unchanged on failure.
