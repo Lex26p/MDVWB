@@ -3813,3 +3813,1045 @@ result before current retained dashboard
 - User fileName не становится final production filename.
 - Долгий upload не может затереть более новый dashboard save.
 - Старый asset не удаляется, пока используется хотя бы одной panel.
+
+## 106. Расписания: назначение и границы ответственности
+
+Расписания описывают отложенное индивидуальное управление фанкойлами.
+
+Production-файл:
+
+```text
+/etc/mdvwb/schedules.json
+```
+
+Компоненты разделены намеренно:
+
+| Компонент | Ответственность |
+|---|---|
+| `mdvwb-manager` | Единственный writer `schedules.json`, MQTT API, optimistic concurrency и проверка ссылок |
+| `mdvwb-scheduler` | Чтение файлов, локальное время контроллера, очередь запусков, отправка `/on1` и factual confirmation |
+| `/fancoils/` | Редактор, выбор targets, сохранение и ручной запуск |
+| `MDVWB` | RS-485-команды, ограниченные retries и публикация подтверждённого C0 state |
+
+Scheduler не редактирует конфигурацию. Browser не пишет файл напрямую.
+
+## 107. Карта исходников
+
+| Файл | Ответственность |
+|---|---|
+| `src/manager/mdv_schedules_config.cpp`, `.h` | Strict parser, validator, serializer и reference inspection |
+| `src/manager/mdvwb_manager_mqtt.cpp`, `.h` | Save API и bridge `run → execute` |
+| `src/scheduler/mdvwb_scheduler.cpp`, `.h` | Clock, reload, queue, execution, confirmation и state |
+| `src/scheduler/mdvwb_scheduler_main.cpp` | Environment paths и executable entrypoint |
+| `www/fancoils/schedule-model.js` | Browser normalization и helpers |
+| `www/fancoils/app.js` | Schedule drawer и draft lifecycle |
+| `www/fancoils/scheduler-status-ui.js` | Fresh heartbeat и authoritative scheduler results |
+| `www/fancoils/scheduler-status-health.js` | Live/stale heartbeat tracking |
+
+## 108. Canonical `schedules.json`
+
+Schema version:
+
+```text
+1
+```
+
+Пример:
+
+```json
+{
+  "version": 1,
+  "revision": 7,
+  "schedules": [
+    {
+      "id": "workday-start",
+      "name": "Начало рабочего дня",
+      "enabled": true,
+      "panelId": "main",
+      "kind": "weekly",
+      "days": [1, 2, 3, 4, 5],
+      "date": "",
+      "time": "08:00",
+      "targets": [
+        {"bus": 1, "address": 1},
+        {"bus": 1, "address": 3}
+      ],
+      "actions": {
+        "power": true,
+        "mode": 0,
+        "speed": 2,
+        "setTemp": 23
+      }
+    }
+  ]
+}
+```
+
+Root fields:
+
+```text
+version
+revision
+schedules
+```
+
+Unknown fields и duplicate JSON keys отклоняются.
+
+## 109. Root validation
+
+```text
+version = 1
+revision = 0..2147483647
+schedules = 0..256
+```
+
+Schedule IDs глобально уникальны. Canonical serializer сортирует entries по `id`.
+
+Отсутствующий файл manager создаёт atomically:
+
+```json
+{
+  "version": 1,
+  "revision": 0,
+  "schedules": []
+}
+```
+
+Invalid существующий файл автоматически пустым не заменяется.
+
+## 110. Поля schedule
+
+Обязательные fields:
+
+```text
+id
+name
+enabled
+panelId
+kind
+days
+date
+time
+targets
+actions
+```
+
+Ограничения:
+
+```text
+id = 1..64 ASCII characters
+name = 1..128 bytes
+panelId = 1..64 ASCII characters
+kind = weekly | once
+time = HH:MM
+targets = 1..512
+```
+
+`id` и `panelId` допускают только:
+
+```text
+A-Z a-z 0-9 _ -
+```
+
+## 111. `enabled`
+
+`enabled` управляет только automatic execution.
+
+```json
+"enabled": false
+```
+
+не запрещает ручной запуск. Automatic queued run перед стартом повторно проверяет, что schedule всё ещё enabled.
+
+## 112. Weekly schedule
+
+```json
+{
+  "kind": "weekly",
+  "days": [1, 2, 3, 4, 5],
+  "date": "",
+  "time": "08:00"
+}
+```
+
+Дни недели:
+
+```text
+1 Monday
+2 Tuesday
+3 Wednesday
+4 Thursday
+5 Friday
+6 Saturday
+7 Sunday
+```
+
+Правила:
+
+- `days` не пуст;
+- значения `1..7`;
+- duplicates запрещены;
+- days сортируются;
+- `date` обязана быть пустой;
+- time соответствует `00:00..23:59`.
+
+## 113. One-time schedule
+
+```json
+{
+  "kind": "once",
+  "days": [],
+  "date": "2026-12-31",
+  "time": "18:00"
+}
+```
+
+Правила:
+
+```text
+days = []
+date = valid YYYY-MM-DD
+year = 2000..2099
+time = valid 00:00..23:59
+```
+
+Parser проверяет дни месяца и leap years. Запись после исполнения автоматически не удаляется.
+
+## 114. Targets
+
+Target:
+
+```json
+{"bus": 1, "address": 3}
+```
+
+Ограничения:
+
+```text
+bus = 1..999
+address = 0..63
+targets count = 1..512
+```
+
+Пара `bus/address` уникальна внутри schedule. Canonical serializer сортирует targets по bus и address.
+
+Broadcast не поддерживается.
+
+## 115. Actions
+
+Допустимы:
+
+```text
+power
+mode
+speed
+setTemp
+```
+
+Как минимум один action обязателен.
+
+| Action | Значения |
+|---|---|
+| `power` | boolean |
+| `mode` | `0..4` |
+| `speed` | `1..4` |
+| `setTemp` | `16..32` |
+
+Отсутствующий action не изменяется.
+
+## 116. Reference issue types
+
+`InspectScheduleReferences()` возвращает:
+
+```text
+MissingPanel
+MissingBus
+MissingAddress
+TargetNotInPanel
+```
+
+Issue содержит:
+
+```text
+scheduleId
+panelId
+bus
+address
+```
+
+Ссылка валидна, когда panel существует, bus/address существуют и на указанной panel есть placement той же пары с `visible=true`.
+
+## 117. Hidden placement
+
+Hidden placement:
+
+```json
+"visible": false
+```
+
+не является допустимой schedule target.
+
+Это отличается от dashboard parser: dashboard может хранить stale или hidden placements для ремонта, но новый schedule save требует полностью рабочие ссылки.
+
+## 118. Existing stale references
+
+При публикации уже существующей конфигурации manager использует inspection:
+
+- retained config остаётся доступной;
+- status переходит в `warning`;
+- `referenceIssues` показывает количество;
+- browser может удалить или исправить broken entry.
+
+Новый save использует strict validation и отклоняется при любом issue.
+
+## 119. Disabled bus
+
+Manager reference validation проверяет существование bus/address, но не runtime `enabled`.
+
+Scheduler перед execution дополнительно требует:
+
+```json
+"enabled": true
+```
+
+для каждой target bus.
+
+Schedule может сохраняться с disabled bus, но runtime запуск будет отклонён до включения шины.
+
+## 120. MQTT API конфигурации
+
+```text
+/mdvwb/schedules/config
+/mdvwb/schedules/config/set
+/mdvwb/schedules/config/result
+/mdvwb/schedules/status
+```
+
+| Topic | Retain | Назначение |
+|---|---:|---|
+| config | Да | Current canonical file |
+| config/set | Нет | Save request |
+| config/result | Нет | Save result |
+| status | Да | Manager-side status |
+
+Maximum payload:
+
+```text
+1048576 bytes
+```
+
+Retained save request отклоняется.
+
+## 121. Schedules status
+
+Ready:
+
+```json
+{
+  "state": "ready",
+  "revision": 7,
+  "schedules": 12,
+  "enabled": 10,
+  "referenceIssues": 0
+}
+```
+
+Broken existing references:
+
+```json
+{
+  "state": "warning",
+  "revision": 7,
+  "schedules": 12,
+  "enabled": 10,
+  "referenceIssues": 2,
+  "message": "Schedule references require attention"
+}
+```
+
+Это status сохранённой конфигурации, а не здоровье процесса scheduler.
+
+## 122. Save result
+
+Successful result:
+
+```json
+{
+  "success": true,
+  "saved": true,
+  "message": "Schedules configuration saved",
+  "revision": 8,
+  "schedules": 12,
+  "enabled": 10,
+  "referenceIssues": 0
+}
+```
+
+## 123. Текущее ограничение error result
+
+Revision conflict сообщает current revision и counts.
+
+Другие schedules errors в текущей реализации публикуют нулевые counts:
+
+```text
+revision = 0
+schedules = 0
+enabled = 0
+referenceIssues = 0
+```
+
+К ним относятся retained command, oversized payload, schema/reference error и persistence failure.
+
+Клиент не должен принимать эти нули за server state. Источник истины — retained `/mdvwb/schedules/config`.
+
+## 124. Optimistic concurrency
+
+Условие save:
+
+```text
+submitted.revision == current.revision
+```
+
+Success:
+
+```text
+saved.revision = current.revision + 1
+```
+
+При conflict:
+
+1. файл не изменяется;
+2. error result с current revision публикуется первым;
+3. current retained config публикуется вторым;
+4. current status публикуется третьим.
+
+При `2147483647` новый save запрещён.
+
+## 125. Browser draft после conflict
+
+Browser хранит:
+
+```text
+state.schedules
+state.scheduleDraft
+state.scheduleDraftPersisted
+state.scheduleDirty
+state.scheduleSaving
+```
+
+Error result снимает `scheduleSaving`. При следующем retained config:
+
+- dirty draft не заменяется;
+- clean persisted draft обновляется server entry;
+- unsaved draft остаётся локальным;
+- merge автоматически не выполняется.
+
+## 126. Manual run: manager endpoint
+
+Client публикует:
+
+```text
+/mdvwb/schedules/<id>/run
+```
+
+Допустимый payload:
+
+```text
+empty
+1
+run
+{}
+```
+
+Command должен быть non-retained.
+
+Manager загружает current files, находит schedule, проверяет references и публикует:
+
+```text
+/mdvwb/schedules/<id>/execute
+```
+
+## 127. Normalized execute event
+
+Payload manager:
+
+```json
+{
+  "version": 1,
+  "scheduleId": "workday-start",
+  "source": "manual"
+}
+```
+
+`execute` принадлежит внутреннему bridge manager → scheduler.
+
+External clients обычно должны использовать `/run`, а не обходить manager validation.
+
+## 128. Общий result topic
+
+Manager и scheduler публикуют:
+
+```text
+/mdvwb/schedules/<id>/result
+```
+
+Manager preliminary result:
+
+```json
+{
+  "success": true,
+  "scheduleId": "workday-start",
+  "state": "queued",
+  "message": "Schedule queued for execution"
+}
+```
+
+Authoritative scheduler result содержит:
+
+```json
+"origin": "scheduler"
+```
+
+Browser различает источники именно по `origin`.
+
+## 129. Scheduler executable
+
+```text
+/usr/local/bin/mdvwb-scheduler
+mdvwb-scheduler.service
+```
+
+Help:
+
+```text
+mdvwb-scheduler --help
+```
+
+Unknown argument:
+
+```text
+exit code 2
+SCHEDULER_ERROR: unknown argument
+```
+
+Runtime failure:
+
+```text
+exit code 1
+SCHEDULER_ERROR: ...
+```
+
+SIGINT/SIGTERM приводит к clean stop.
+
+## 130. Paths и environment
+
+```text
+MDVWB_SCHEDULES_CONFIG=/etc/mdvwb/schedules.json
+MDVWB_BUSES_CONFIG=/etc/mdvwb/buses.json
+MDVWB_DASHBOARD_CONFIG=/etc/mdvwb/dashboard.json
+MDVWB_SCHEDULER_STATE=/var/lib/mdvwb/scheduler-state.tsv
+MDVWB_SCHEDULER_CONFIRM_TIMEOUT=10
+```
+
+Confirmation timeout:
+
+```text
+1..300 seconds
+```
+
+MQTT options совпадают с manager/driver environment. Client ID:
+
+```text
+mdvwb-scheduler
+```
+
+## 131. systemd unit
+
+```text
+After=network-online.target mosquitto.service mdvwb-manager.service
+EnvironmentFile=-/etc/default/mdvwb-scheduler
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+```
+
+Manager и scheduler — независимые процессы.
+
+## 132. Scheduler subscriptions
+
+```text
+/mdvwb/schedules/config
+/mdvwb/schedules/+/execute
+/devices/+/controls/+
+```
+
+Config topic является notification. Scheduler не применяет его payload как source of truth, а перечитывает файлы с диска.
+
+## 133. Content fingerprints
+
+Scheduler вычисляет fingerprint полного содержимого:
+
+```text
+schedules.json
+buses.json
+dashboard.json
+```
+
+Изменение обнаруживается даже при одинаковых file size и timestamp.
+
+Reload выполняется на старте, при config notification, перед execute, при factual message и на Tick.
+
+## 134. Last known good schedules
+
+Если изменился только `schedules.json`, новый файл invalid, а valid configuration уже была принята:
+
+- новый файл отклоняется;
+- status сообщает error;
+- last known good schedules остаются в memory;
+- ранее принятые schedules могут продолжить выполняться.
+
+## 135. Invalid dependencies
+
+Если изменились `buses.json` или `dashboard.json` и references стали invalid:
+
+- scheduler становится blocked;
+- run queue очищается;
+- active run завершается `failed`;
+- новые runs не выполняются;
+- status сообщает причину.
+
+Valid repair автоматически снимает block.
+
+## 136. Изменение schedules во время execution
+
+Если accepted schedules изменились во время active run:
+
+```text
+state = failed
+message = Schedules configuration changed during execution
+```
+
+Queued run хранит revision. Перед стартом stale queued revision отклоняется без отправки commands.
+
+## 137. Локальные часы контроллера
+
+Automatic due использует:
+
+```text
+localtime()
+```
+
+Weekday:
+
+```text
+Monday=1 ... Sunday=7
+```
+
+Matching выполняется с точностью до минуты. Корректные timezone и system clock являются обязательным условием.
+
+## 138. Automatic due
+
+Weekly:
+
+```text
+enabled
+time == controller HH:MM
+weekday входит в days
+```
+
+Once:
+
+```text
+enabled
+date == controller YYYY-MM-DD
+time == controller HH:MM
+```
+
+Перед queue scheduler повторно проверяет references и enabled buses.
+
+## 139. Missed one-time schedule
+
+Если enabled once уже в прошлом:
+
+```text
+state = missed
+success = false
+```
+
+Команды не публикуются. Missed marker сохраняется и не повторяется каждый Tick или после restart.
+
+Просроченная команда поздно не выполняется.
+
+## 140. Scheduler state file
+
+```text
+/var/lib/mdvwb/scheduler-state.tsv
+```
+
+Обычная строка:
+
+```text
+<schedule-id>\tYYYY-MM-DDTHH:MM
+```
+
+Missed:
+
+```text
+<schedule-id>\tmissed:YYYY-MM-DDTHH:MM
+```
+
+Write выполняется atomically. Удалённые IDs удаляются при reload.
+
+State защищает automatic run от повторения после restart в той же минуте. Manual run не ограничивается.
+
+## 141. Incoming MQTT queue
+
+```text
+MaximumPendingMessages = 1024
+MaximumPendingBytes = 2 MiB
+key = full MQTT topic
+```
+
+Repeated config, execute или fact одной темы заменяет предыдущий queued item. При overflow удаляются oldest items.
+
+Network callback не выполняет schedule logic.
+
+## 142. Run queue
+
+```text
+MaximumQueuedRuns = 128
+MaximumQueuedRunBytes = 256 KiB
+key = scheduleId
+```
+
+Повторная постановка того же schedule заменяет предыдущую queued request.
+
+Одновременно активен максимум один run. Разные schedules выполняются последовательно.
+
+## 143. Execution validation
+
+Перед start проверяются:
+
+- configuration not blocked;
+- queued revision совпадает;
+- schedule существует;
+- automatic schedule всё ещё enabled;
+- current references;
+- target buses enabled.
+
+## 144. Порядок команд
+
+Для каждой target:
+
+```text
+Mode
+Speed
+SetTemp
+Power
+```
+
+Отправляются только actions, присутствующие в schedule.
+
+Power намеренно публикуется последним.
+
+## 145. Неатомарность выполнения
+
+Schedule не является distributed transaction.
+
+Возможны:
+
+- часть MQTT commands уже published;
+- следующая publish завершается ошибкой;
+- часть targets подтверждена;
+- другая часть ушла в timeout;
+- target стал offline.
+
+Rollback ранее отправленных команд отсутствует.
+
+## 146. Publish и retries
+
+Scheduler использует non-retained `PublishWithResult`.
+
+Если local MQTT transport не принял command, run получает `failed`.
+
+Scheduler не повторяет `/on1` самостоятельно. Serial C3 retries и C0 confirmation принадлежат driver.
+
+## 147. Fresh factual confirmation
+
+Для каждого command создаётся expected fact:
+
+```text
+base factual topic
+expected payload
+fact sequence before command
+confirmed = false
+```
+
+Confirmation принимается только если:
+
+```text
+topic совпадает
+payload совпадает
+sequence после command
+retained = false
+```
+
+Retained state не подавляет command и не подтверждает run.
+
+## 148. Offline active target
+
+Fresh non-retained:
+
+```text
+Status=7
+```
+
+для любой target активного run немедленно завершает весь run:
+
+```text
+state = failed
+```
+
+Retained `Status=7` считается historical replay и сам по себе run не останавливает.
+
+## 149. Confirmation timeout
+
+Default:
+
+```text
+10 seconds
+```
+
+Deadline общий для всего run.
+
+Result:
+
+```text
+state = timeout
+message = Confirmation timeout: X/Y values confirmed
+```
+
+Timeout освобождает active slot, но не откатывает частично выполненные commands.
+
+## 150. Successful completion
+
+Все expected facts должны получить fresh confirmations.
+
+```text
+state = completed
+success = true
+message = All factual values confirmed
+```
+
+После completion active slot освобождается и status возвращается в ready.
+
+## 151. Run states
+
+| State | Terminal | Значение |
+|---|---:|---|
+| `queued` | Нет | Request принят |
+| `executing` | Нет | Commands опубликованы |
+| `completed` | Да | Все facts подтверждены |
+| `timeout` | Да | Deadline истёк |
+| `failed` | Да | Publish/dependency/offline/runtime failure |
+| `rejected` | Да | Request или configuration недопустима |
+| `missed` | Да | Просроченный once не выполнялся |
+
+## 152. Scheduler result
+
+```json
+{
+  "success": true,
+  "scheduleId": "workday-start",
+  "state": "completed",
+  "source": "automatic",
+  "origin": "scheduler",
+  "controllerMinute": "2026-07-20T08:00",
+  "controllerEpoch": 1784534400,
+  "commands": 8,
+  "confirmed": 8,
+  "message": "All factual values confirmed"
+}
+```
+
+Result non-retained. После reconnect он автоматически не воспроизводится.
+
+## 153. Scheduler retained status
+
+Topic:
+
+```text
+/mdvwb/scheduler/status
+```
+
+Payload содержит:
+
+```text
+state
+revision
+schedules
+enabled
+queued
+active
+controllerDate
+controllerTime
+controllerMinute
+controllerEpoch
+controllerWeekday
+activeSchedule optional
+message optional
+```
+
+Runtime states:
+
+```text
+ready
+executing
+warning
+error
+```
+
+## 154. Heartbeat publication
+
+Status публикуется при start, queue/run events, configuration reload и при изменении controller minute.
+
+Topic retained для initial display, но retained replay не является доказательством живого процесса.
+
+## 155. Browser heartbeat freshness
+
+Browser считает heartbeat живым только после сообщения с:
+
+```text
+retained = false
+```
+
+Stale threshold:
+
+```text
+125 seconds
+```
+
+После reconnect требуется новый live heartbeat. Без него manual run блокируется.
+
+## 156. Browser schedule editor
+
+Editor находится:
+
+```text
+/fancoils/?panel=<id>
+```
+
+Список показывает только schedules текущей panel, но save отправляет весь общий file и сохраняет entries других panels.
+
+Targets выбираются только среди visible markers текущей panel.
+
+## 157. Новый browser draft
+
+Default:
+
+```text
+id = следующий schedule-N
+name = Новое расписание
+enabled = true
+panelId = current panel
+kind = weekly
+days = Monday..Friday
+time = browser local time + 5 minutes
+targets = []
+actions.power = true
+```
+
+Browser preview времени использует local browser clock. Runtime использует WB clock.
+
+## 158. Duplicate, delete и save
+
+Duplicate создаёт новый global ID, копирует timing/targets/actions и остаётся unsaved.
+
+Delete unsaved draft выполняется локально. Delete persisted entry отправляет полный optimistic save без этой записи.
+
+Manual run доступен только для persisted и clean draft.
+
+## 159. Manual run UI lifecycle
+
+Browser публикует `/run`, показывает manager accepted, затем ждёт direct result с:
+
+```json
+"origin": "scheduler"
+```
+
+Состояния UI:
+
+```text
+manager accepted
+scheduler queued
+scheduler executing
+terminal scheduler result
+```
+
+Safety timeout browser:
+
+```text
+90 seconds
+```
+
+Он отличается от physical confirmation timeout scheduler.
+
+## 160. Профильные тесты
+
+`mdvwb_schedules_config_test` проверяет schema, canonical sorting, weekly/once, actions, duplicates и references.
+
+`mdvwb_scheduler_test` проверяет controller clock, retained/live facts, timeout, state, missed once, revision и result states.
+
+`mdvwb_scheduler_freshness_test` проверяет disabled bus, removed target, dashboard change, active cancellation и automatic recovery.
+
+## 161. Checklist изменений
+
+При изменении schedule subsystem проверить:
+
+- strict schema и limits;
+- optimistic save ordering;
+- current retained source of truth;
+- all reference types;
+- disabled bus runtime rule;
+- content fingerprints;
+- last known good behavior;
+- dependency block/recovery;
+- queue bounds/coalescing;
+- one active run;
+- command order;
+- fresh non-retained confirmation;
+- offline failure;
+- timeout/no rollback;
+- state file;
+- missed once;
+- controller clock;
+- live heartbeat;
+- manager/scheduler result distinction.
+
+## 162. Schedule invariants
+
+- Manager является единственным writer `schedules.json`.
+- Scheduler читает configuration с диска.
+- MQTT config payload — notification, не source of truth.
+- Save защищён revision.
+- Conflict не меняет file.
+- IDs глобально уникальны.
+- Targets индивидуальны; broadcast отсутствует.
+- Automatic run требует `enabled=true`.
+- Manual run допускает disabled schedule.
+- Target обязан быть visible на указанной panel.
+- Runtime target bus обязана быть enabled.
+- Изменения buses/dashboard обнаруживаются без MQTT notification.
+- Invalid dependency блокирует execution.
+- Одновременно активен один run.
+- Commands идут Mode, Speed, SetTemp, Power.
+- Retained fact не подтверждает новый run.
+- Confirmation требует fresh non-retained base topic.
+- Scheduler не создаёт второй retry loop.
+- Timeout не выполняет rollback.
+- Automatic minute сохраняется между restarts.
+- Просроченный once получает `missed`, а не late execution.
+- Browser manual run требует live scheduler heartbeat.

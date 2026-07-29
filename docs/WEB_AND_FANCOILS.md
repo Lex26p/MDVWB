@@ -1031,17 +1031,619 @@ mosquitto_sub -v -t '/devices/Fan-<bus>_<address>/controls/#'
 - Не включайте offline устройства в критичные групповые операции без контроля результата.
 - Делайте backup `/etc/mdvwb` и `/var/www/fancoils/assets`.
 
-## 52. Что будет дополнено на следующем шаге
+## 52. Где находятся расписания
 
-Следующий документационный шаг полностью восстановит:
+Редактор расположен в drawer страницы:
 
-- schema `schedules.json`;
-- weekly и once;
-- scheduler execution;
-- manual run;
-- target/action confirmation;
-- scheduler freshness;
-- UI редактора расписаний;
-- диагностику расписаний.
+```text
+/fancoils/?panel=<panel-id>
+```
 
-До этого момента разделы dashboard и прямого управления в данном документе соответствуют текущей реализации.
+Список показывает schedules только открытой panel, но файл общий для всего проекта:
+
+```text
+/etc/mdvwb/schedules.json
+```
+
+## 53. Требования для работы
+
+Должны работать:
+
+```text
+mosquitto.service
+mdvwb-manager.service
+mdvwb-scheduler.service
+нужные mdvwb@<bus>.service
+```
+
+Browser получает config/status через MQTT WebSocket.
+
+## 54. Список расписаний
+
+Запись показывает:
+
+- name;
+- timing;
+- targets count;
+- enabled;
+- последний полученный run state.
+
+States:
+
+```text
+queued
+executing
+completed
+timeout
+failed
+rejected
+missed
+```
+
+Run result non-retained и после reload может отсутствовать.
+
+## 55. Новый schedule
+
+Default draft:
+
+```text
+ID = schedule-N
+Name = Новое расписание
+Enabled = true
+Kind = weekly
+Days = Monday..Friday
+Time = browser time + 5 minutes
+Actions = Power On
+Targets = none
+```
+
+До выбора target запись не пройдёт validation.
+
+## 56. ID и name
+
+ID:
+
+```text
+1..64 characters
+A-Z a-z 0-9 _ -
+```
+
+ID глобально уникален между panels.
+
+Name:
+
+```text
+1..128 bytes
+```
+
+## 57. Weekly
+
+Выберите время и минимум один день.
+
+```text
+1 Пн
+2 Вт
+3 Ср
+4 Чт
+5 Пт
+6 Сб
+7 Вс
+```
+
+Дата для weekly не используется.
+
+## 58. Once
+
+Выберите:
+
+```text
+date = YYYY-MM-DD
+time = HH:MM
+```
+
+Backend допускает years `2000..2099` и проверяет реальную календарную дату.
+
+Запись после выполнения остаётся в конфигурации.
+
+## 59. Enabled и manual run
+
+`enabled=true` разрешает automatic execution.
+
+Manual run разрешён и для disabled schedule. Это позволяет хранить шаблоны без автоматического старта.
+
+## 60. Targets
+
+Targets выбираются кликами по markers текущей panel.
+
+Доступны только placements:
+
+```text
+visible = true
+```
+
+Target хранит физическую пару `bus/address`, а user number и label используются для отображения.
+
+Максимум 512 targets.
+
+## 61. Actions
+
+Можно включить любую комбинацию:
+
+```text
+Power
+Mode
+Speed
+SetTemp
+```
+
+Неотмеченный action не изменяется.
+
+Допустимые значения:
+
+```text
+Power = Off | On
+Mode = Cool | Heat | Dry | Fan | Auto
+Speed = Low | Medium | High | Auto
+SetTemp = 16..32
+```
+
+Хотя бы один action обязателен.
+
+## 62. Порядок команд
+
+Для каждой target scheduler отправляет:
+
+```text
+Mode
+Speed
+SetTemp
+Power
+```
+
+Power идёт последним. Broadcast не используется.
+
+## 63. Save
+
+Browser отправляет весь общий file:
+
+```text
+/mdvwb/schedules/config/set
+```
+
+Сохраняются entries других panels. Manager проверяет schema, revision и references, затем atomically записывает file и увеличивает revision.
+
+## 64. Revision conflict
+
+При параллельном save:
+
+1. stale request отклоняется;
+2. file не меняется;
+3. current config публикуется повторно;
+4. dirty draft остаётся открыт.
+
+Automatic merge отсутствует.
+
+## 65. Duplicate и delete
+
+Duplicate создаёт новый ID, копирует timing/targets/actions и остаётся unsaved.
+
+Unsaved draft удаляется локально. Persisted entry удаляется только через save общей configuration.
+
+## 66. Когда доступен «Запустить сейчас»
+
+Требуется:
+
+- schedule сохранён;
+- draft clean;
+- MQTT connected;
+- save не выполняется;
+- scheduler доступен;
+- получен fresh live heartbeat.
+
+Enabled не обязателен.
+
+## 67. Время WB
+
+Automatic due использует controller clock, а не browser clock.
+
+UI показывает:
+
+```text
+Время WB: DD.MM.YYYY HH:MM · weekday
+```
+
+Проверка на controller:
+
+```bash
+date
+timedatectl status
+```
+
+## 68. Fresh heartbeat
+
+Retained `/mdvwb/scheduler/status` показывает последнюю структуру, но не доказывает, что process жив.
+
+Browser ждёт non-retained live status. Stale threshold:
+
+```text
+125 seconds
+```
+
+Без fresh heartbeat manual run блокируется.
+
+## 69. Manual run lifecycle
+
+Browser публикует:
+
+```text
+/mdvwb/schedules/<id>/run
+payload = run
+retain = false
+```
+
+Сначала manager может ответить `queued`, затем authoritative scheduler result содержит:
+
+```json
+"origin": "scheduler"
+```
+
+Manager acceptance ещё не означает отправку commands.
+
+## 70. UI safety timeout
+
+Browser ждёт direct scheduler result до:
+
+```text
+90 seconds
+```
+
+Scheduler physical confirmation timeout по умолчанию 10 seconds. Разница позволяет schedule ожидать queue.
+
+## 71. Automatic run
+
+Weekly due:
+
+```text
+enabled + weekday + HH:MM
+```
+
+Once due:
+
+```text
+enabled + YYYY-MM-DD + HH:MM
+```
+
+Browser может быть закрыт.
+
+## 72. Защита от повторного запуска
+
+Scheduler сохраняет:
+
+```text
+/var/lib/mdvwb/scheduler-state.tsv
+```
+
+Restart в той же due minute не повторяет automatic commands.
+
+Manual run этим state не блокируется.
+
+## 73. Missed once
+
+Если one-time schedule уже в прошлом:
+
+```text
+state = missed
+```
+
+Команды поздно не отправляются. Marker сохраняется и не повторяется каждый Tick.
+
+## 74. Factual confirmation
+
+Scheduler ждёт base topics:
+
+```text
+/devices/Fan-B_A/controls/Power
+/devices/Fan-B_A/controls/Mode
+/devices/Fan-B_A/controls/Speed
+/devices/Fan-B_A/controls/SetTemp
+```
+
+Нужно matching value после command и `retained=false`.
+
+Старое retained значение не подтверждает run.
+
+## 75. Timeout и partial execution
+
+Timeout:
+
+```text
+Confirmation timeout: X/Y values confirmed
+```
+
+Rollback нет. Часть devices/actions могла примениться.
+
+После timeout проверяйте factual state каждого target.
+
+## 76. Offline target
+
+Fresh:
+
+```text
+Status=7
+```
+
+любой active target завершает весь run как `failed`.
+
+Retained historical offline state новый run автоматически не завершает.
+
+## 77. Очередь
+
+Одновременно выполняется одна schedule.
+
+Лимит run queue:
+
+```text
+128
+```
+
+Повторный queued request того же ID заменяет предыдущий.
+
+## 78. Изменение configuration во время run
+
+Stale queued revision отклоняется до commands.
+
+Изменение accepted schedules во время active execution завершает run как `failed`.
+
+## 79. Изменение buses/dashboard
+
+Scheduler постоянно проверяет три JSON files.
+
+Удаление/disable bus, address, panel или visible placement может:
+
+- блокировать scheduler;
+- очистить queue;
+- завершить active run;
+- запретить manual/automatic execution.
+
+После valid repair scheduler восстанавливается автоматически.
+
+## 80. Manager status и runtime status
+
+Не путайте:
+
+```text
+/mdvwb/schedules/status
+/mdvwb/scheduler/status
+```
+
+Первый описывает stored configuration. Второй — runtime process и controller clock.
+
+## 81. Result states
+
+Terminal:
+
+```text
+completed
+timeout
+failed
+rejected
+missed
+```
+
+Non-terminal:
+
+```text
+queued
+executing
+```
+
+Authoritative result имеет `origin=scheduler`.
+
+## 82. Пример рабочего утра
+
+```json
+{
+  "id": "workday-start",
+  "name": "Начало рабочего дня",
+  "enabled": true,
+  "panelId": "main",
+  "kind": "weekly",
+  "days": [1, 2, 3, 4, 5],
+  "date": "",
+  "time": "08:00",
+  "targets": [
+    {"bus": 1, "address": 1},
+    {"bus": 1, "address": 3}
+  ],
+  "actions": {
+    "power": true,
+    "mode": 0,
+    "speed": 2,
+    "setTemp": 23
+  }
+}
+```
+
+## 83. Пример вечернего выключения
+
+```json
+{
+  "id": "workday-stop",
+  "name": "Конец рабочего дня",
+  "enabled": true,
+  "panelId": "main",
+  "kind": "weekly",
+  "days": [1, 2, 3, 4, 5],
+  "date": "",
+  "time": "19:00",
+  "targets": [{"bus": 1, "address": 1}],
+  "actions": {"power": false}
+}
+```
+
+## 84. Диагностика scheduler
+
+```bash
+systemctl status mdvwb-scheduler.service --no-pager
+journalctl -u mdvwb-scheduler.service -n 150 --no-pager
+cat /etc/default/mdvwb-scheduler
+```
+
+## 85. Диагностика времени
+
+```bash
+date
+timedatectl status
+```
+
+Исправьте timezone и sync до эксплуатации automatic schedules.
+
+## 86. Диагностика MQTT
+
+```bash
+mosquitto_sub -v \
+  -t '/mdvwb/schedules/#' \
+  -t '/mdvwb/scheduler/status'
+```
+
+Factual state:
+
+```bash
+mosquitto_sub -v -t '/devices/Fan-1_3/controls/+'
+```
+
+## 87. Ручной тест
+
+Terminal 1:
+
+```bash
+mosquitto_sub -v -t '/mdvwb/schedules/workday-start/result'
+```
+
+Terminal 2:
+
+```bash
+mosquitto_pub -t '/mdvwb/schedules/workday-start/run' -m 'run'
+```
+
+Не добавляйте retained flag.
+
+## 88. Scheduler показывает error
+
+Частые причины:
+
+- invalid JSON;
+- missing panel/bus/address;
+- hidden target;
+- disabled target bus;
+- недоступен configuration file.
+
+После исправления дождитесь нового live status.
+
+## 89. Automatic schedule не запускается
+
+Проверьте:
+
+- enabled;
+- WB clock/timezone;
+- days/date/time;
+- service active;
+- bus enabled;
+- placement visible;
+- state marker текущей minute;
+- scheduler status.
+
+## 90. Manual run заблокирован
+
+Проверьте:
+
+- persisted schedule;
+- clean draft;
+- MQTT;
+- pending save;
+- fresh heartbeat моложе 125 seconds.
+
+Retained status после reconnect недостаточно.
+
+## 91. Run уходит в timeout
+
+Проверьте:
+
+- driver process;
+- C0 responses;
+- factual non-retained publications;
+- SetTemp в текущем mode;
+- target offline state;
+- MQTT transport;
+- число targets.
+
+Timeout environment:
+
+```text
+MDVWB_SCHEDULER_CONFIRM_TIMEOUT=10
+```
+
+Range `1..300`.
+
+## 92. Partial execution
+
+После `failed` или `timeout`:
+
+1. проверьте factual values;
+2. не повторяйте весь schedule вслепую;
+3. повторите только нужные actions;
+4. проверьте RS-485 и MQTT logs.
+
+## 93. Backup
+
+Сохраняйте:
+
+```text
+/etc/mdvwb/schedules.json
+/var/lib/mdvwb/scheduler-state.tsv
+```
+
+При переносе проверьте IDs, targets, timezone и старые state markers.
+
+## 94. Безопасность
+
+- Не публикуйте retained `/run` или `/execute`.
+- Не считайте manager `queued` завершением.
+- Не считайте retained facts подтверждением.
+- Не удаляйте state file в due minute.
+- Не скрывайте target без проверки schedules.
+- Не ожидайте rollback нескольких targets.
+
+## 95. Ограничение manager error counts
+
+При schema/reference error manager сейчас может вернуть нулевые revision/counts.
+
+Не заменяйте local server state этими числами. Дождитесь retained `/mdvwb/schedules/config`.
+
+## 96. Проверка ссылок после dashboard edit
+
+После rename/delete panel или изменения visible markers проверьте:
+
+```text
+/mdvwb/schedules/status
+referenceIssues
+```
+
+Исправьте schedules до использования runtime.
+
+## 97. Проверка после изменения buses
+
+После remove/disable bus или address проверьте оба статуса:
+
+```text
+/mdvwb/schedules/status
+/mdvwb/scheduler/status
+```
+
+Stored configuration может быть warning, а runtime scheduler — blocked/error.
+
+## 98. Что будет дополнено дальше
+
+Следующий шаг документационного аудита посвящён installation, offline update, systemd, Mosquitto WebSocket, backup, recovery и controller diagnostics.
+
+Разделы driver, manager, dashboard, web и scheduler к этому шагу актуализированы по текущему коду.
