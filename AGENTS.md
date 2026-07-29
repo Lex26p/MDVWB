@@ -1,1086 +1,503 @@
-# MDVWB AI Agent Context
+# MDVWB repository guide for coding agents
 
-> AI-only repository context. This file is not end-user documentation.
-> Treat protocol invariants, MQTT contracts, runtime paths, and migration rules below as mandatory unless verified against current source and real hardware.
+This file is a compact map of the current repository and its non-negotiable architectural rules. It is not end-user documentation.
 
-## 1. Project identity
+Current CMake project version: **1.2.0**.
 
-- Project: `MDVWB`.
-- Current integrated version: `1.2.0`.
+## 1. Source-of-truth order
+
+When information conflicts, use this order:
+
+1. current source code;
+2. current automated tests;
+3. `CMakeLists.txt`, CMake presets, systemd units, deployment scripts, and CI workflows;
+4. current JSON examples and environment templates;
+5. Markdown documentation.
+
+Never preserve behavior solely because an old document describes it. Verify it in the current implementation and tests first.
+
+## 2. Project identity
+
 - Language: C++20.
-- Target: Wiren Board ARM64, Debian 11 Bullseye, glibc 2.31.
-- Development host: Windows, Visual Studio CMake, PowerShell.
-- Repository: `https://github.com/Lex26p/MDVWB`.
+- Primary target: Wiren Board ARM64.
+- Release build environment: Debian 11 Bullseye on native ARM64.
+- Runtime dependencies: systemd, Mosquitto, and `libmosquitto.so.1`.
+- Development host used by the maintainer: Windows with Visual Studio CMake and PowerShell.
+- Repository: `Lex26p/MDVWB`.
 - Typical local path: `C:\Projects\MDVWB`.
-- Purpose: standalone multi-bus MDV XYE fan-coil driver using RS-485 and MQTT.
-- This is not a `wb-mqtt-serial` module.
-- The old C# repository was used only as behavioral/protocol reference. Do not port its architecture back into this project.
+- The project is standalone and is not part of `wb-mqtt-serial`.
 
-## 2. Current completion state
+The old C# implementation may be used only as historical protocol evidence. Do not port its architecture back into this project.
 
-Implemented and tested:
+## 3. Executables and process boundaries
 
-- fixed-size MDV request/response framing;
-- request construction and response validation;
-- cross-platform serial transport;
-- one common transaction pacer for all command types;
-- round-robin polling;
-- cached complete C3 command frame per device;
-- MQTT command routing;
-- retained factual state publishing only on change;
-- lock/unlock support;
-- discovery over addresses `0..63` for three passes;
-- arbitrary number of independent buses;
-- one systemd process per bus;
-- shared JSON bus configuration;
-- independent revisioned dashboard configuration;
-- service synchronization through `mdvwb-manager`;
-- MQTT manager API;
-- static web configuration UI;
-- automatic Wiren Board MQTT metadata publication;
-- migration from legacy `/etc/default/mdvwb-N` files;
-- cleanup of obsolete retained device topics;
-- offline ARM64 package workflow.
+CMake builds four executables:
 
-Do not reintroduce:
+| Target | Responsibility |
+|---|---|
+| `MDVWB` | One RS-485 bus driver process |
+| `mdvwb-offline` | Retained offline-state publisher used by `ExecStopPost` |
+| `mdvwb-manager` | Configuration, systemd, discovery, dashboard upload, and management MQTT API |
+| `mdvwb-scheduler` | Automatic and manual schedule execution with factual confirmation |
 
-- hardcoded support for only one or two buses;
-- a shared multithreaded process owning multiple serial ports;
-- the old `ArrID` wb-rules virtual-device script;
-- broadcast control with address `0xFF`;
-- command topics ending in `/on` instead of `/on1`;
-- state publishing on command topics;
-- non-retained factual state;
-- automatic application of discovery results;
-- automatic restart of a bus after discovery;
-- `/mnt/data/www/mdvwb` as the default web root.
-
-## 3. Runtime architecture
+Runtime services:
 
 ```text
-Browser: /var/www/mdvwb
-        |
-        | MQTT over WebSocket: /mqtt
-        v
-Mosquitto broker
-        |
-        +--> mdvwb-manager.service
-        |      |- reads/writes /etc/mdvwb/buses.json
-/etc/mdvwb/dashboard.json
-        |      |- validates configuration
-        |      |- synchronizes /etc/default/mdvwb-N
-        |      |- controls mdvwb@N.service
-        |      `- runs discovery for one selected bus
-        |
-        +--> mdvwb@1.service --> one MDVWB process --> one RS-485 port
-        +--> mdvwb@2.service --> one MDVWB process --> one RS-485 port
-        `--> mdvwb@N.service --> one MDVWB process --> one RS-485 port
-```
-
-Process model is intentional:
-
-- exactly one driver process owns one serial port;
-- buses poll simultaneously because processes run independently;
-- a crash or discovery on one bus must not stop other buses;
-- systemd owns restart and logs;
-- separate processes are preferred over threads for fault isolation and simple port ownership.
-
-## 4. Important runtime paths
-
-```text
-/usr/local/bin/MDVWB
-/usr/local/bin/mdvwb-manager
-/usr/local/lib/mdvwb/mdvwb-run
-/usr/local/lib/mdvwb/mdvwb.env
-/etc/mdvwb/buses.json
-/etc/default/mdvwb-manager
-/etc/default/mdvwb-<bus>
-/etc/systemd/system/mdvwb@.service
-/etc/systemd/system/mdvwb-manager.service
-/var/www/mdvwb/
-```
-
-The correct default web directory for the tested Wiren Board installation is:
-
-```text
-/var/www/mdvwb
-```
-
-The page URL is:
-
-```text
-http://<WB-address>/mdvwb/
-```
-
-Do not change the standard Wiren Board web routing. The trailing slash should be used.
-
-## 5. Repository layout
-
-Driver sources are under `src/driver/`:
-
-- `src/driver/MDVWB.cpp`, `src/driver/MDVWB.h`: executable entry point, run modes, self-test orchestration.
-- `src/driver/mdv_protocol.*`: frame construction, validation, response parsing, frame collector.
-- `src/driver/mdv_serial.*`: serial port, 4800 8N1 transport, pacing, transaction execution.
-- `src/driver/mdv_device.*`: per-device confirmed state, cached complete C3 frame, pending fields.
-- `src/driver/mdv_driver.*`: queues, polling order, C3/CC/CD execution, confirmation reads.
-- `src/driver/mdv_discovery.*`: three-pass sequential scan.
-- `src/driver/mdv_mqtt.*`: fan-coil command router, state publishing, system-device state.
-- `src/driver/mdv_metadata.*`: retained Wiren Board device/control metadata.
-- `src/driver/mdv_mosquitto.*`: libmosquitto implementation of `IMqttClient`; shared with the manager target.
-- `src/driver/mdv_config.*`: driver CLI parsing and validation.
-
-Manager sources are under `src/manager/`:
-
-- `src/manager/mdv_buses_config.*`: strict bus JSON parser, validator, canonical serializer.
-- `src/manager/mdv_dashboard_config.*`: strict dashboard JSON parser, validator, serializer, and bus/address reference checks.
-- `src/manager/mdvwb_dashboard_upload.*`: chunked binary image upload, SHA-256, image header validation, and temporary asset handling.
-- `src/manager/mdvwb_service_sync.*`: plan/apply logic for `/etc/default/mdvwb-N` and systemd.
-- `src/manager/mdvwb_manager_cli.*`: manager commands.
-- `src/manager/mdvwb_manager_main.cpp`: manager executable entry point.
-- `src/manager/mdvwb_manager_mqtt.*`: MQTT configuration/control daemon.
-- `src/manager/mdvwb_discovery_runner.*`: starts driver discovery and parses its result.
-- `src/manager/mdvwb_migration.*`: converts legacy per-bus environment files to `buses.json`.
-
-Deployment:
-
-- `deploy/mdvwb@.service`;
-- `deploy/mdvwb-manager.service`;
-- `deploy/mdvwb-run`;
-- `deploy/mdvwb.env`;
-- `deploy/mdvwb-manager.env`;
-- `deploy/install_wirenboard.sh`;
-- `deploy/offline-install.sh`;
-- `deploy/buses.example.json`.
-
-Web UI:
-
-- `www/mdvwb/index.html`;
-- `www/mdvwb/app.js`;
-- `www/mdvwb/model.js`;
-- `www/mdvwb/dashboard-editor.js`;
-- `www/mdvwb/dashboard-model.js`;
-- `www/mdvwb/dashboard-placement-editor.js`;
-- `www/mdvwb/mqtt-client.js`;
-- `www/mdvwb/styles.css`.
-
-Tests:
-
-- manager/configuration C++ tests are under `tests/manager/`;
-- `tests/web/mdvwb_web_model_test.mjs` is the Node.js web-model test;
-- protocol/driver self-tests remain inside the `MDVWB --self-test` executable.
-
-Obsolete stage documents such as `STEP02.md` are not project documentation and should not be restored.
-
-## 6. Shared bus configuration
-
-Canonical path:
-
-```text
-/etc/mdvwb/buses.json
-```
-
-Schema version is exactly `1`:
-
-```json
-{
-  "version": 1,
-  "buses": [
-    {
-      "id": 1,
-      "enabled": true,
-      "port": "/dev/ttyRS485-1",
-      "addresses": [1, 2, 3]
-    },
-    {
-      "id": 2,
-      "enabled": false,
-      "port": "/dev/ttyUSB0",
-      "addresses": []
-    }
-  ]
-}
-```
-
-Validation rules:
-
-- root fields: only `version`, `buses`;
-- bus fields: only `id`, `enabled`, `port`, `addresses`;
-- bus ID range: `1..999`;
-- bus IDs must be unique;
-- each port must be unique;
-- port must be a safe absolute path beginning with `/dev/`;
-- allowed path characters are alphanumeric, `/`, `_`, `-`, `.`, `+`, `:`;
-- device address range: `0..63`;
-- addresses must be unique within a bus;
-- an enabled bus must have at least one address;
-- a disabled bus may have an empty address list;
-- unknown JSON fields are rejected;
-- buses and addresses are serialized in ascending order.
-
-`buses.json` is the single source of truth for configured buses. Generated `/etc/default/mdvwb-N` files are runtime derivatives.
-
-## 7. Driver CLI contract
-
-Primary commands:
-
-```text
-MDVWB --help
-MDVWB --version
-MDVWB --self-test
-```
-
-Normal run:
-
-```text
-MDVWB --addresses 1,2,3 --port /dev/ttyRS485-1 --bus 1 [options]
-```
-
-Legacy positional run remains supported:
-
-```text
-MDVWB 1,2,3 /dev/ttyRS485-1 1
-```
-
-Required normal-run options:
-
-- `--addresses LIST`;
-- `--port NAME`;
-- `--bus NUMBER`.
-
-MDV options:
-
-- `--master-id NUMBER`, default `0`, range `0..63`;
-- `--period-ms NUMBER`, default `150`;
-- `--response-timeout-ms NUMBER`, default `130`.
-
-MQTT options:
-
-- `--mqtt-host HOST`, default `127.0.0.1`;
-- `--mqtt-port PORT`, default `1883`;
-- `--mqtt-user USER`;
-- `--mqtt-password PASSWORD`;
-- `--mqtt-client-id ID`, default `mdvwb-<bus>`;
-- `--mqtt-keepalive SEC`, default `60`;
-- `--mqtt-reconnect SEC`, default `1`;
-- `--mqtt-reconnect-max SEC`, default `10`.
-
-Hardware modes:
-
-- `--read-only`: C0 polling only; no MQTT and no write commands;
-- `--discover`: scan `0..63`, three complete passes;
-- `--test-command NAME=VALUE`: read state, send one command, confirm with C0;
-- supported test-command controls: `Power`, `Mode`, `Speed`, `SetTemp`, `Blinds`, `Blok`;
-- `--publish-poll-address`: publish `sist-<bus>/GanGetID` each transaction.
-
-`--discover` must not be combined with `--read-only` or `--test-command`.
-
-## 8. Manager CLI contract
-
-```text
-mdvwb-manager validate [buses.json]
-mdvwb-manager show [buses.json]
-mdvwb-manager summary [buses.json]
-mdvwb-manager plan [buses.json]
-mdvwb-manager apply [buses.json]
-mdvwb-manager mqtt [buses.json]
-mdvwb-manager migrate-defaults [buses.json]
-```
-
-Path resolution:
-
-1. explicit path argument;
-2. `MDVWB_BUSES_CONFIG`;
-3. `/etc/mdvwb/buses.json`.
-
-Semantics:
-
-- `validate`: parse and validate only;
-- `show`: print canonical normalized JSON;
-- `summary`: print compact machine-readable bus lines;
-- `plan`: print service/config changes without applying them;
-- `apply`: atomically write managed `/etc/default/mdvwb-N` files and synchronize services;
-- `mqtt`: run the long-lived manager endpoint;
-- `migrate-defaults`: build initial JSON from legacy `/etc/default/mdvwb-N` files.
-
-`apply`, `mqtt`, and `migrate-defaults` require root, except tests may set `MDVWB_ALLOW_UNPRIVILEGED_APPLY=1`.
-
-Exit codes:
-
-- `0`: success;
-- `1`: manager/runtime error;
-- `2`: usage or configuration error.
-
-## 9. Service synchronization rules
-
-Systemd instance name:
-
-```text
+mdvwb-manager.service
+mdvwb-scheduler.service
 mdvwb@<bus>.service
 ```
 
-Generated environment file:
+The architecture requires:
+
+- exactly one `MDVWB` process per physical serial port;
+- arbitrary bus count;
+- independent polling and failure isolation between buses;
+- manager and scheduler as separate long-lived processes;
+- systemd, not application threads, as the owner of bus-process restart policy.
+
+Do not introduce a shared process that opens several serial ports.
+
+## 4. Runtime topology
 
 ```text
+www/mdvwb/  ─┐
+              ├─ MQTT WebSocket /mqtt ─ Mosquitto
+www/fancoils/ ┘                         ├─ mdvwb-manager.service
+                                       ├─ mdvwb-scheduler.service
+                                       ├─ mdvwb@1.service ─ MDVWB ─ bus 1 port
+                                       ├─ mdvwb@2.service ─ MDVWB ─ bus 2 port
+                                       └─ mdvwb@N.service ─ MDVWB ─ bus N port
+```
+
+The manager owns configuration and lifecycle operations. The scheduler reads the same configuration files but does not own them. A bus process owns only its generated `/etc/default/mdvwb-<bus>` runtime configuration and serial port.
+
+## 5. Runtime paths
+
+### Binaries and helper
+
+```text
+/usr/local/bin/MDVWB
+/usr/local/bin/mdvwb-offline
+/usr/local/bin/mdvwb-manager
+/usr/local/bin/mdvwb-scheduler
+/usr/local/lib/mdvwb/mdvwb-run
+/usr/local/lib/mdvwb/mdvwb.env
+```
+
+### Persistent configuration and state
+
+```text
+/etc/mdvwb/buses.json
+/etc/mdvwb/dashboard.json
+/etc/mdvwb/schedules.json
+/etc/default/mdvwb-manager
+/etc/default/mdvwb-scheduler
 /etc/default/mdvwb-<bus>
+/var/lib/mdvwb/scheduler-state.tsv
 ```
 
-Planner actions:
-
-- `WriteConfig`;
-- `RemoveConfig`;
-- `EnableAndStart`;
-- `EnableAndRestart`;
-- `DisableAndStop`;
-- `EnsureEnabledAndStarted`.
-
-Behavior:
-
-- new enabled bus: write config, enable and start;
-- changed enabled bus: write config, enable and restart only that bus;
-- unchanged enabled bus: ensure enabled and running;
-- disabled bus: disable and stop;
-- removed managed bus: disable, stop, remove generated config;
-- do not remove unrelated `/etc/default/mdvwb-*` files not recognized as manager-owned;
-- writes must remain atomic;
-- user-controlled strings must not be passed through an unrestricted shell command.
-
-## 10. Manager MQTT API
-
-Configuration:
+### systemd
 
 ```text
-/mdvwb/config                 retained current canonical JSON
-/mdvwb/config/set             non-retained requested JSON
-/mdvwb/config/result          non-retained operation result
-/mdvwb/status                 retained manager state
+/etc/systemd/system/mdvwb@.service
+/etc/systemd/system/mdvwb-manager.service
+/etc/systemd/system/mdvwb-scheduler.service
 ```
 
-Dashboard configuration:
+### Static web and assets
 
 ```text
-/mdvwb/dashboard/config          retained canonical JSON
-/mdvwb/dashboard/config/set      non-retained requested JSON
-/mdvwb/dashboard/config/result   non-retained operation result
-/mdvwb/dashboard/status          retained backend state
+/var/www/mdvwb/
+/var/www/fancoils/
+/var/www/fancoils/assets/
 ```
 
-Dashboard saves use optimistic concurrency: the submitted revision must equal
-the current revision; the manager increments it on success. The file is written
-atomically and no bus service is restarted. Missing bus/address references are
-reported as warnings through `referenceIssues`, not rejected.
+The default web root is `/var/www`. Do not restore obsolete `/mnt/data/www/...` paths.
 
-Background upload:
+## 6. Repository layout
+
+### `src/driver/`
+
+| Files | Responsibility |
+|---|---|
+| `MDVWB.cpp`, `MDVWB.h` | Entry point, run modes, self-test orchestration |
+| `mdv_config.*` | Driver CLI and option validation |
+| `mdv_protocol.*` | Request construction, checksum, response validation and decoding |
+| `mdv_serial.*` | Platform serial transport, wire request, pacing and transaction timeout |
+| `mdv_device.*` | Per-device confirmed state, cached complete C3 frame, desired revisions and pending fields |
+| `mdv_driver.*` | Polling, command scheduling, confirmation reads and communication state |
+| `mdv_discovery.*` | Three-pass scan of addresses `0..63` |
+| `mdv_mqtt.*` | Fan-coil MQTT parsing, bounded command intake, factual state and system-device publications |
+| `mdv_metadata.*` | Wiren Board retained metadata |
+| `mdv_mosquitto.*` | Shared asynchronous libmosquitto transport |
+| `mdv_offline.cpp` | Offline publisher executable |
+| `mdv_bounded_queue.h` | Shared bounded latest-value queue used by MQTT-facing components |
+
+### `src/manager/`
+
+| Files | Responsibility |
+|---|---|
+| `mdv_buses_config.*` | Strict buses JSON parsing, validation and canonical serialization |
+| `mdv_dashboard_config.*` | Dashboard schema, canonicalization and bus/address reference inspection |
+| `mdv_schedules_config.*` | Schedule schema, validation and reference inspection |
+| `mdvwb_dashboard_upload.*` | Sequential image chunks, SHA-256, format detection and temporary assets |
+| `mdvwb_service_sync.*` | Generated environment files and systemd synchronization plan/apply |
+| `mdvwb_discovery_runner.*` | Runs `MDVWB --discover` and parses its output |
+| `mdvwb_manager_mqtt.*` | Long-lived management MQTT service, bounded intake, revisions and transactions |
+| `mdvwb_migration.*` | Strict legacy environment-file migration |
+| `mdvwb_manager_cli.*` | Manager CLI dispatch and privilege checks |
+| `mdvwb_manager_main.cpp` | `mdvwb-manager` entry point |
+
+### `src/scheduler/`
+
+| Files | Responsibility |
+|---|---|
+| `mdvwb_scheduler.*` | Schedule selection, execution, confirmation, queues and configuration freshness |
+| `mdvwb_scheduler_main.cpp` | Scheduler environment parsing and daemon entry point |
+
+### `deploy/`
+
+Important files:
 
 ```text
-/mdvwb/dashboard/background/upload/start
-/mdvwb/dashboard/background/upload/chunk/<uploadId>/<index>
-/mdvwb/dashboard/background/upload/finish/<uploadId>
-/mdvwb/dashboard/background/upload/cancel/<uploadId>
-/mdvwb/dashboard/background/upload/status    retained
-/mdvwb/dashboard/background/upload/result    non-retained
+mdvwb@.service
+mdvwb-manager.service
+mdvwb-scheduler.service
+mdvwb-run
+mdvwb.env
+mdvwb-manager.env
+mdvwb-scheduler.env
+buses.example.json
+dashboard.default.json
+schedules.default.json
+install_wirenboard.sh
+offline-install.sh
 ```
 
-Uploads are raw binary chunks, maximum 48 KiB each and 10 MiB total. The manager
-verifies sequential indexes, SHA-256, real PNG/JPEG/WebP format and dimensions,
-then commits a content-addressed `background-*` file. SVG and retained upload
-commands are rejected. The dashboard revision is checked again at finish.
+### `www/`
 
-Per-bus service control:
+Engineering application:
 
 ```text
-/mdvwb/buses/<id>/start
-/mdvwb/buses/<id>/stop
-/mdvwb/buses/<id>/restart
-/mdvwb/buses/<id>/status/get
-/mdvwb/buses/<id>/status      retained
-/mdvwb/buses/<id>/result      non-retained
+www/mdvwb/index.html
+www/mdvwb/app.js
+www/mdvwb/model.js
+www/mdvwb/mqtt-client.js
+www/mdvwb/dashboard-editor.js
+www/mdvwb/dashboard-model.js
+www/mdvwb/dashboard-placement-editor.js
+www/mdvwb/styles.css
 ```
 
-Discovery:
+Operator application:
 
 ```text
-/mdvwb/buses/<id>/discovery/start
-/mdvwb/buses/<id>/discovery/status    retained
-/mdvwb/buses/<id>/discovery/result    retained
+www/fancoils/index.html
+www/fancoils/app.js
+www/fancoils/model.js
+www/fancoils/schedule-model.js
+www/fancoils/scheduler-status-ui.js
+www/fancoils/styles.css
 ```
 
-Safety rules:
+Both applications are static and have no production build step or external browser dependency.
 
-- all command messages must be non-retained;
-- retained commands are ignored;
-- configuration payload limit is 64 KiB;
-- invalid JSON must not modify the existing file;
-- valid JSON is written atomically before service synchronization;
-- a synchronization failure may produce `saved=true`, `success=false`;
-- start/restart are rejected for `enabled=false` buses;
-- stop/status/discovery remain available for configured disabled buses;
-- manual start/stop/restart does not edit `buses.json`;
-- obsolete bus status/discovery retained topics are cleared;
-- device retained topics for addresses removed from configuration are cleared.
-
-## 11. Discovery invariants
-
-- Discovery scans addresses `0..63` sequentially.
-- It performs three complete passes by default.
-- An address is included after at least one strictly valid C0 response.
-- It uses the same serial timing as normal operation.
-- The manager stops only the selected `mdvwb@N.service`.
-- Other bus processes continue polling.
-- The selected service remains stopped after discovery.
-- Found addresses are published but never automatically written to `buses.json`.
-- The web UI must require the user to edit and save configuration explicitly.
-
-## 12. RS-485 transport invariants
-
-- Serial mode: 4800 baud, 8 data bits, no parity, 1 stop bit.
-- All C0/C3/CC/CD transactions share one start-to-start pacer.
-- Default start-to-start period: `150 ms`.
-- Default response timeout: `130 ms`.
-- Each wire request is `0xFE` padding followed by the 16-byte MDV frame.
-- Bytes outside a response frame are ignored until `0xAA`.
-- After `0xAA`, collect exactly 32 bytes.
-- A `0x55` byte inside payload does not terminate collection.
-- Do not create separate timing paths for reads, writes, lock, or unlock.
-
-## 13. MDV XYE request protocol
-
-Request length: exactly 16 bytes, indexed `0..15`.
-
-| Byte | Meaning |
-|---:|---|
-| 0 | `0xAA` frame start |
-| 1 | command: C0 read, C3 set, CC lock, CD unlock |
-| 2 | device address `0x00..0x3F` |
-| 3 | master ID `0x00..0x3F` |
-| 4 | always `0x80` |
-| 5 | master ID |
-| 6 | power + mode |
-| 7 | fan speed |
-| 8 | setpoint `16..32` |
-| 9 | additional functions |
-| 10 | timer on, currently `0` |
-| 11 | timer off, currently `0` |
-| 12 | unknown/reserved, currently `0` |
-| 13 | bitwise complement of command byte |
-| 14 | checksum |
-| 15 | `0x55` frame end |
-
-Checksum invariant:
+### Workflows
 
 ```text
-sum(request bytes 1..14) mod 256 == 0
+.github/workflows/validate.yml
+.github/workflows/build-arm64-offline.yml
 ```
 
-C0, CC, and CD frames use zero payload fields `6..12` unless protocol code explicitly defines otherwise.
+`validate.yml` performs a Release build with required Mosquitto support and runs the complete CTest suite. The ARM64 workflow runs manually on a native ARM64 runner, builds inside Debian 11 Bullseye, and creates the offline artifact.
 
-### Byte 6: power and mode
+## 7. CMake target map
 
-- bit 0: Fan;
-- bit 1: Dry;
-- bit 2: Heat;
-- bit 3: Cool;
-- bit 4: Auto;
-- bit 5: mode lock in responses;
-- bit 6: reserved;
-- bit 7: Power.
-
-Command invariant:
-
-- exactly one of Fan/Dry/Heat/Cool/Auto must be set in a C3 command;
-- Power is independent and may be combined with the selected mode;
-- changing mode must preserve Power.
-
-### Byte 7: fan speed
-
-- bit 0: High;
-- bit 1: Medium;
-- bit 2: Low;
-- bit 7: Auto.
-
-Command invariant: exactly one speed value must be set.
-
-### Byte 9: known additional functions
-
-- bit 0: Eco;
-- bit 1: electric heater;
-- bit 2: blinds/louvers;
-- bit 3: fan function;
-- reserved bits must not be emitted by the current implementation.
-
-## 14. MDV XYE response protocol
-
-Response length: exactly 32 bytes, indexed `0..31`.
-
-| Byte | Meaning |
-|---:|---|
-| 0 | `0xAA` |
-| 1 | response command C0/C3/CC/CD |
-| 2 | always `0x80` |
-| 3 | master ID |
-| 4 | device address |
-| 5 | master ID |
-| 6 | unknown |
-| 7 | capabilities |
-| 8 | power + mode |
-| 9 | fan speed |
-| 10 | setpoint |
-| 11 | room temperature T1 |
-| 12 | T2A |
-| 13 | T2B |
-| 14 | T3 |
-| 15 | current/power-consumption field |
-| 16 | unknown |
-| 17 | timer start |
-| 18 | timer stop |
-| 19 | unknown |
-| 20 | additional functions |
-| 21 | status bits |
-| 22 | E0..E7 errors |
-| 23 | E8..EF errors |
-| 24 | P0..P7 protections |
-| 25 | P8/PF protections |
-| 26 | communication errors 0#..7# |
-| 27..29 | unknown |
-| 30 | checksum |
-| 31 | `0x55` |
-
-Checksum invariant:
+Production executables:
 
 ```text
-sum(response bytes 1..30) mod 256 == 0
+MDVWB
+mdvwb-offline
+mdvwb-manager
+mdvwb-scheduler
 ```
 
-Temperature conversion:
+Libraries:
 
 ```text
-T = raw / 2.0 - 20.0
+mdvwb_mosquitto_transport
+mdvwb_buses_config
+mdvwb_dashboard_config
+mdvwb_schedules_config
+mdvwb_dashboard_upload
+mdvwb_service_sync
+mdvwb_discovery_runner
+mdvwb_manager_mqtt
+mdvwb_manager_cli
+mdvwb_scheduler
 ```
 
-`0xFF` means room temperature unavailable.
+All targets compile as C++20. MSVC uses `/W4 /permissive- /utf-8`; other compilers use `-Wall -Wextra -Wpedantic`.
 
-Response decoding rules differ from command encoding:
+`MDVWB_REQUIRE_MOSQUITTO=ON` is mandatory for production and release-package builds. Keeping Mosquitto optional is only for local protocol/configuration development.
 
-- Auto plus one active physical mode is valid;
-- Auto speed plus one active physical speed is valid;
-- several simultaneous non-Auto physical modes are invalid;
-- several simultaneous physical speed bits are invalid.
+## 8. CTest ownership
 
-## 15. Device state and command queue rules
+CMake currently registers 20 tests:
 
-- A device must receive a valid C0 before write controls can be safely applied.
-- Only verified C0 data synchronizes the cached complete C3 frame.
-- C3 responses may contain old values and must not overwrite confirmed state.
-- A command modifies only its field in the cached complete C3 frame.
-- Power changes preserve mode.
-- Mode changes preserve Power.
-- Other unchanged fields remain copied from the last verified state.
-- After C3/CC/CD, queue a C0 confirmation.
-- Immediate responses can still expose the old setpoint; confirmation logic must tolerate this.
-- Queue priority is: confirmation read, lock/unlock, set command, ordinary round-robin read.
-- One transaction is executed per driver iteration.
-- MQTT callbacks only enqueue messages; the RS-485 worker applies them later.
-- Do not allow MQTT and serial callbacks to mutate `DeviceContext` concurrently.
+| Test | Primary ownership |
+|---|---|
+| `mdv_protocol_self_test` | Frames, parser, serial pacing, driver core and built-in invariants |
+| `mdvwb_offline_publisher_test` | Offline-publisher argument and payload behavior |
+| `mdvwb_mqtt_delivery_test` | Driver MQTT transport/delivery behavior |
+| `mdvwb_driver_fairness_test` | Command retry, polling fairness and confirmation behavior |
+| `mdv_buses_config_test` | Bus schema and canonicalization |
+| `mdvwb_dashboard_config_test` | Dashboard schemas and references |
+| `mdvwb_schedules_config_test` | Schedule schemas and references |
+| `mdvwb_dashboard_upload_test` | SHA-256, image formats and sequential chunks |
+| `mdvwb_manager_cli_test` | CLI, paths, privilege checks and output |
+| `mdvwb_service_sync_test` | Environment rendering and systemd plans |
+| `mdvwb_manager_mqtt_test` | Management MQTT API and runtime operations |
+| `mdvwb_manager_revision_test` | Configuration revision conflict behavior |
+| `mdvwb_dashboard_concurrency_test` | Dashboard save/upload revision concurrency |
+| `mdvwb_manager_transaction_test` | Save/apply transactional behavior and rollback |
+| `mdvwb_discovery_runner_test` | Discovery process invocation and output parsing |
+| `mdvwb_discovery_async_test` | Same-bus exclusion and different-bus parallel discovery |
+| `mdvwb_migration_test` | Strict legacy migration and ambiguous-input rejection |
+| `mdvwb_scheduler_test` | Schedule execution and factual confirmation |
+| `mdvwb_scheduler_freshness_test` | Runtime dependency changes and stale-reference blocking |
+| `mdvwb_mqtt_command_delivery_test` | Shared manager/scheduler queue delivery behavior |
 
-`Blok` is exposed separately and must not alter overall `Status` calculation.
+JavaScript model tests under `tests/web/` are additional checks and are not registered in CTest.
 
-## 16. Fan-coil MQTT contract
-
-Device name:
-
-```text
-Fan-<bus>_<address>
-```
-
-Factual retained states:
-
-```text
-/devices/Fan-<bus>_<address>/controls/Power
-/devices/Fan-<bus>_<address>/controls/Mode
-/devices/Fan-<bus>_<address>/controls/Speed
-/devices/Fan-<bus>_<address>/controls/SetTemp
-/devices/Fan-<bus>_<address>/controls/Temp
-/devices/Fan-<bus>_<address>/controls/Blinds
-/devices/Fan-<bus>_<address>/controls/Blok
-/devices/Fan-<bus>_<address>/controls/Alarm
-/devices/Fan-<bus>_<address>/controls/AlarmCode
-/devices/Fan-<bus>_<address>/controls/Status
-```
-
-Commands:
-
-```text
-/devices/Fan-<bus>_<address>/controls/<Control>/on1
-```
-
-Supported command controls and payloads:
-
-- `Power`: `0` off, `1` on;
-- `Mode`: `0` Cool, `1` Heat, `2` Dry, `3` Fan, `4` Auto;
-- `Speed`: `1` Low, `2` Medium, `3` High, `4` Auto;
-- `SetTemp`: integer `16..32`;
-- `Blinds`: `0` or `1`;
-- `Blok`: `0` unlock or `1` lock.
-
-Command safety:
-
-- payload must be one integer;
-- retained commands are rejected;
-- a driver ignores commands for a different bus;
-- unknown devices, uninitialized devices, bad values, and unsupported controls are errors;
-- command topics are `/on1`; do not change to `/on`.
-
-State publishing:
-
-- publish only verified C0 factual state;
-- publish only when changed, except forced initial snapshot;
-- publish with MQTT retain enabled;
-- never publish C3/CC/CD response payload as factual state;
-- offline publishes `Alarm=2`, `Status=7`.
-
-State value mapping:
-
-- `Power`: `0/1`;
-- `Mode`: same mapping as commands;
-- `Speed`: same mapping as commands;
-- `Alarm`: `0` none, `1` device alarm, `2` communication/offline;
-- `AlarmCode`: first E0..EF error mapped to `1..16`, `0` none;
-- `Status`: `0` off, `1` cooling, `2` heating, `3` dry, `4` fan, `5` auto, `6` alarm, `7` offline;
-- `Temp`: numeric room temperature;
-- `Blok` does not change `Status`.
-
-## 17. System-device MQTT contract
-
-Device name:
-
-```text
-sist-<bus>
-```
-
-Topics:
-
-```text
-/devices/sist-<bus>/controls/Serial
-/devices/sist-<bus>/controls/Error
-/devices/sist-<bus>/controls/GanGetID
-```
-
-- `Serial` and `Error` are retained and published only on change.
-- `GanGetID` is disabled by default to avoid traffic every 150 ms.
-- `--publish-poll-address` enables it for diagnostics.
-- an ordinary device timeout is represented by device `Alarm=2`, `Status=7`; it should not overwrite system `Error` every poll.
-
-## 18. Wiren Board MQTT metadata
-
-The C++ driver publishes retained metadata for:
-
-```text
-/devices/Fan-<bus>_<address>/meta/...
-/devices/Fan-<bus>_<address>/controls/<Control>/meta/...
-/devices/sist-<bus>/meta/...
-```
-
-This replaces the old wb-rules `ArrID` script.
-
-Current fan control order:
-
-1. Alarm
-2. AlarmCode
-3. Blinds
-4. Blok
-5. Mode
-6. Power
-7. SetTemp
-8. Speed
-9. Status
-10. Temp
-
-Current code publishes metadata controls as readonly. Do not silently change metadata semantics without testing the standard Wiren Board Devices UI and `/on1` command workflow.
-
-When a bus/address is removed, stale retained metadata and state must be cleared so obsolete devices disappear.
-
-## 19. Web UI invariants
-
-- Static files only; no build step.
-- No internet dependency.
-- MQTT WebSocket endpoint is derived from current host and `/mqtt`.
-- Page subscribes to manager config/status/service/discovery topics.
-- Cards are generated dynamically from current configuration.
-- Bus editor uses a local draft.
-- Config is published only after explicit save.
-- Service/discovery buttons are disabled while draft changes are unsaved.
-- Adding, editing, disabling, and deleting arbitrary buses is supported.
-- Discovery results are display-only.
-- Demo mode remains available through `?demo=1` for local testing.
-
-## 20. Installation and migration invariants
-
-Installers support:
-
-- online build/install through `deploy/install_wirenboard.sh`;
-- offline ARM64 install through `deploy/offline-install.sh`.
-
-Default web root is `/var/www` and may be overridden with `MDVWB_WWW_ROOT`.
-
-Upgrade rules:
-
-- preserve existing non-empty `/etc/mdvwb/buses.json`;
-- if missing, migrate legacy `/etc/default/mdvwb-N` files;
-- if no legacy configuration exists, install example configuration;
-- disable/remove obsolete fixed services such as `mdvwb.service` and `mdvwb-2.service`;
-- disable the legacy wb-rules file only when it contains both hardcoded `ArrID` and `defineVirtualDevice("Fan-")`;
-- keep a `.disabled-mdvwb` backup;
-- remove obsolete service-control wb-rules integration;
-- clear old retained `Fan-*` and `sist-*` topics where the platform helper is available;
-- run version/self-test/validation before final service startup;
-- start `mdvwb-manager.service` and apply active bus configuration.
-
-Do not overwrite a working user configuration during an update.
-
-## 21. Build and test commands
-
-Windows/Visual Studio preset workflow:
+Run the complete local Windows suite with:
 
 ```powershell
 cmake --preset x64-debug
 cmake --build out/build/x64-debug
 ctest --test-dir out/build/x64-debug -C Debug --output-on-failure
-node tests/web/mdvwb_web_model_test.mjs
 ```
 
-Portable CMake workflow:
+## 9. Configuration ownership
 
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
+### `buses.json`
 
-Release builds for real MQTT operation must find libmosquitto. Use:
+- schema version `1`;
+- manager is the writer and source-of-truth owner;
+- canonical manager output includes `revision`;
+- generated `/etc/default/mdvwb-<bus>` files are derivatives;
+- changes may start, restart, stop, or remove only affected service instances;
+- removed bus/device retained topics must be cleared.
+
+### `dashboard.json`
+
+- current collection schema version `2`;
+- manager creates a default when missing;
+- supports multiple independent panels and `defaultPanel`;
+- browser saves use optimistic revision checks;
+- background upload finish checks the revision again;
+- successful or failed operation results report the current authoritative revision;
+- dashboard changes do not restart RS-485 services.
+
+### `schedules.json`
+
+- scheduler reads but does not own the file;
+- manager owns validation and MQTT saves;
+- execution validates schedule, bus, dashboard and device references;
+- scheduler detects content changes using fingerprints, not only timestamp/size;
+- invalid current dependencies block stale execution until repaired.
+
+### `scheduler-state.tsv`
+
+This file prevents an automatic schedule from executing twice after a scheduler restart in the same local minute. It is state, not user configuration.
+
+## 10. Non-negotiable driver invariants
+
+- request frame: exactly 16 bytes from `0xAA` to `0x55`;
+- response frame: exactly 32 bytes from `0xAA` to `0x55`;
+- wire request has an additional leading `0xFE` byte;
+- bytes outside a response are ignored until `0xAA`;
+- a payload `0x55` does not terminate response collection early;
+- all C0/C3/CC/CD transactions share one start-to-start pacer;
+- default period is 150 ms and response timeout is 130 ms;
+- command address is individual `0..63`; broadcast `0xFF` is not used;
+- Power is independent from Mode;
+- an outgoing C3 has exactly one Mode and one Speed selection;
+- responses may represent Auto plus a physical active mode/speed;
+- a valid C0 is the only source of confirmed factual state;
+- C3/CC/CD replies cannot synchronize the factual cache;
+- a command cannot be built before the first valid C0 initializes the device;
+- local panel changes may update non-pending cached fields;
+- an old C0 must not overwrite a newer still-pending desired field;
+- factual MQTT topics are retained base topics;
+- command MQTT topics are non-retained and end in `/on1`.
+
+## 11. Offline-state invariant
+
+`mdvwb@.service` uses:
 
 ```text
--DMDVWB_REQUIRE_MOSQUITTO=ON
+ExecStopPost=-/usr/local/lib/mdvwb/mdvwb-run --publish-offline
 ```
 
-The GitHub workflow `.github/workflows/build-arm64-offline.yml` uses a native ARM runner and produces the offline artifact. Do not switch back to QEMU emulation; it previously failed in Debian package operations.
+The helper invokes `mdvwb-offline` with the configured bus, addresses and MQTT settings. It runs after normal stop and unexpected exit. Do not replace this with a manager-only callback that would fail when the manager is unavailable.
 
-Required tests currently include:
+## 12. Queue and threading invariants
 
-- `mdv_protocol_self_test`;
-- `mdv_buses_config_test`;
-- `mdvwb_manager_cli_test`;
-- `mdvwb_service_sync_test`;
-- `mdvwb_manager_mqtt_test`;
-- `mdvwb_discovery_runner_test`;
-- `mdvwb_migration_test`;
-- Node web model test.
+MQTT callbacks enqueue parsed work; they must not mutate serial-device state directly.
 
-## 22. Change rules for future agents
+The driver, manager and scheduler use bounded queues with byte limits. Same-key newer work may replace older queued work. Do not replace these structures with unbounded `std::queue`/`std::deque` intake.
 
-Before editing:
+The driver serial loop remains sequential. Manager discovery is the intentional exception: one worker is allowed per bus ID, different buses may run concurrently, and a second discovery for the same bus is rejected.
 
-1. Read this file.
-2. Inspect current source; source is authoritative when this file and code differ.
-3. Preserve real working behavior unless a change is explicitly requested.
-4. Prefer compact changes and minimal new files.
-5. Add or update tests for protocol, MQTT, config, migration, or service behavior.
-6. Do not assume hardware behavior not supported by captured frames or user testing.
+## 13. Discovery invariants
 
-When changing protocol code:
+- scan addresses `0..63` in ascending order;
+- complete three passes;
+- one strictly valid C0 reply is enough to include an address;
+- stop only the selected `mdvwb@N.service`;
+- leave that service stopped after completion;
+- never apply discovered addresses automatically;
+- serialize discovery for the same bus;
+- allow independent discovery for different buses;
+- keep MQTT manager processing responsive while discovery runs.
 
-- keep fixed frame sizes;
-- keep checksum invariants;
-- keep individual addressing;
-- keep exactly one command mode and speed;
-- preserve valid Auto + physical response combinations;
-- do not update confirmed state from C3;
-- keep one common 150 ms pacer unless hardware tests justify a deliberate change.
+## 14. Legacy migration invariants
 
-When changing MQTT:
+Migration reads assignment files as data and must never execute them.
 
-- retain factual states and metadata;
-- reject retained commands;
-- keep `/on1` command suffix;
-- publish only on actual change;
-- clear obsolete retained topics during configuration removal;
-- preserve current numeric mappings.
+Candidates are `/etc/default/mdvwb` and canonical `/etc/default/mdvwb-N` files. Migration must fail on malformed assignments, bad quoting, duplicate `MDVWB_*` variables, missing required fields, non-canonical file names, bus-ID disagreement, duplicate bus sources, invalid ports, invalid/duplicate addresses, or any final schema conflict.
 
-When changing multi-bus management:
+Do not restore the old behavior that silently skipped incomplete files or preferred one conflicting source.
 
-- support arbitrary bus count;
-- keep one process per bus;
-- never let one bus operation interrupt another bus;
-- validate before writing;
-- write configuration atomically;
-- avoid shell injection;
-- never auto-apply discovery addresses.
+## 15. Dashboard concurrency invariants
 
-When changing deployment:
+Dashboard configuration and background upload share one optimistic revision sequence.
 
-- use `/var/www/mdvwb` by default;
-- preserve `/etc/mdvwb/buses.json`;
-- preserve offline installation;
-- keep ARM64/Bullseye compatibility;
-- do not require internet on the target controller for the offline path.
+- submitted revision must match the current file;
+- successful save increments the revision;
+- upload start records the expected revision;
+- upload finish reloads and rechecks the current revision;
+- an older upload cannot overwrite a concurrent save;
+- terminal upload results report the authoritative current revision, including zero;
+- conflict handling republishes the current retained dashboard after the result;
+- bus services are not restarted by dashboard saves or image uploads.
 
-## 23. Collaboration workflow with the project owner
+## 16. Scheduler freshness invariants
 
-This section is mandatory for any AI agent working with the project owner. The
-project is developed incrementally through reviewable ZIP archives and Git
-commits. Do not replace this workflow with patches, background work, or an
-unreviewed large rewrite.
-
-### 23.1 Interaction sequence
-
-1. The project owner describes the requested change or the desired result.
-2. Read the request carefully and inspect the current repository when the
-   implementation depends on existing code or documentation.
-3. Ask additional questions only when the missing answer materially affects the
-   implementation. Recommendations and safer alternatives may be proposed at
-   any point.
-4. Before implementation, create a roadmap of reasonably sized steps. A step
-   must be cohesive and testable: not so small that it produces no meaningful
-   result, and not so large that several independent subsystems are changed at
-   once.
-5. The number of steps is chosen by the agent and may be changed later when new
-   dependencies, risks, or test results are discovered. Explain material roadmap
-   changes to the project owner.
-6. Implement only one step at a time.
-7. After each step, wait for either:
-   - the Git commit hash created by the project owner; or
-   - build/test output, an error report, or requested corrections.
-8. When a hash is provided, verify the commit in the current GitHub repository
-   before starting the next step. The verified repository state becomes the new
-   baseline.
-9. When an error or correction is provided instead of a hash, remain on the
-   current step and issue a corrected archive or instructions. Do not advance the
-   roadmap until the current step is accepted.
-
-### 23.2 Source-of-truth rules
-
-- The GitHub repository is the source of the current project files.
-- Use the latest commit hash confirmed by the project owner as the development
-  baseline. Do not silently work from an older cached copy.
-- Read only the files needed for the current step, but inspect all affected
-  contracts and tests before changing cross-component behavior.
-- Do not claim that files were applied, committed, pushed, built, or tested
-  unless that result was actually verified.
-- Preserve unrelated user changes and avoid broad formatting-only rewrites.
-
-### 23.3 Required structure of every implementation step
-
-Each step response should contain only the sections that are useful for that
-step, in this order:
-
-1. **Step summary**
-   - step number and short title;
-   - how many planned steps remain;
-   - concise goal and affected subsystem.
-2. **Archive**
-   - a ZIP archive containing the complete ready-to-use changed and new files;
-   - repository-relative directory structure must be preserved.
-3. **Unpack/copy commands**
-   - one copyable PowerShell block that extracts the archive directly over the
-     local project.
-4. **Build, run, and test commands**
-   - one copyable PowerShell block when the step needs compilation, execution, or
-     tests;
-   - omit this section when it adds no value, for example for a documentation-only
-     step.
-5. **Expected result / checks**
-   - only the meaningful behavior, output, or hardware checks required for this
-     step;
-   - do not add a generic checklist when there is nothing useful to verify.
-6. **Git commands**
-   - one copyable PowerShell block containing the required `git add`, `git commit`,
-     `git push`, and `git rev-parse HEAD` commands.
-
-### 23.4 Archive rules
-
-- Archives must contain complete final files, not unified diffs or patch files.
-- Do not use `.patch`, `git apply`, `apply.ps1`, or another helper application
-  script unless the project owner explicitly requests that format for a specific
-  step.
-- Preserve repository-relative paths, for example:
-
-  ```text
-  CMakeLists.txt
-  src/driver/mdv_driver.cpp
-  src/scheduler/mdvwb_scheduler.cpp
-  tests/scheduler/mdvwb_scheduler_test.cpp
-  ```
-
-- Include only files added or changed by the current step. Do not package the
-  whole repository or unrelated generated files.
-- The archive must be safe to extract directly into:
-
-  ```text
-  C:\Projects\MDVWB
-  ```
-
-- The usual download directory is:
-
-  ```text
-  C:\Users\pereverworkki\Downloads
-  ```
-
-- Before publishing an archive, verify its file list and directory structure.
-
-### 23.5 Command formatting
-
-- The development host is Windows and commands must use PowerShell syntax.
-- Group commands by purpose. Each purpose must be one copyable code block rather
-  than many isolated one-line blocks.
-- Typical groups are:
-  - unpack/copy;
-  - build/run/test;
-  - Git.
-- Multiple commands may appear on separate lines inside the same block so the
-  whole group can be copied with one action.
-- Use exact project and download paths when known.
-- Avoid unnecessary branch, baseline, clean-tree, or other preflight checks.
-- Do not add commands that are unrelated to applying or validating the current
-  step.
-
-### 23.6 Git completion handshake
-
-- Every accepted implementation step ends with a separate local commit and push.
-- The final Git block must print the commit hash with:
-
-  ```text
-  git rev-parse HEAD
-  ```
-
-- The project owner sends that hash back to the agent.
-- The agent verifies the commit contents in GitHub and only then proceeds to the
-  next step.
-- A commit message or hash alone is not proof that the expected files were
-  included; inspect the actual diff.
-- Do not trigger the ARM64 package workflow until an integrated checkpoint or
-  final artifact is required.
-
-### 23.7 Communication style
-
-- Keep explanations practical and tied to the current development decision.
-- Questions are allowed at any point when their answers materially improve
-  correctness or safety.
-- Recommendations are welcome, but distinguish them from requirements already
-  approved by the project owner.
-- Prefer a compact architecture and the minimum number of files needed for the
-  requested behavior.
-- Do not promise background work or a later result. Complete the current step in
-  the current interaction or clearly state what could not be completed.
-
-## 24. Known historical failure modes
-
-Do not repeat these regressions:
-
-- running Git reset outside the repository directory;
-- publishing actual state to `/on` or `/on1` instead of the base control topic;
-- publishing actual state without retain;
-- treating a C3 reply as confirmed new state;
-- making Power mutually exclusive with mode;
-- rejecting Auto + active mode/speed responses;
-- using a fixed two-bus UI or service design;
-- placing the web UI in `/mnt/data/www/mdvwb` on the tested controller;
-- continuing to create devices through hardcoded wb-rules `ArrID`;
-- applying discovery results automatically;
-- restarting the discovered bus automatically;
-- using QEMU for the ARM64 package workflow.
-
-## 25. Documentation plan
-
-The maintained documentation set should become:
+Before execution, the scheduler must use current contents of:
 
 ```text
-AGENTS.md
-README.md
-docs/DEVELOPER.md
-docs/INSTALLATION.md
-docs/WEB_AND_FANCOILS.md
+/etc/mdvwb/schedules.json
+/etc/mdvwb/buses.json
+/etc/mdvwb/dashboard.json
 ```
 
-`AGENTS.md` is the AI context. Human-facing details belong in the other files. Avoid duplicating large human explanations here; keep this file dense, technical, and authoritative for future coding agents.
+Fingerprints are required because replacement content can preserve file timestamp and size.
 
-## Dashboard editor implementation checkpoint
+A removed device, removed panel, removed bus, or disabled bus must not be controlled from stale cached configuration. Active and queued runs must reach a clear terminal state when dependencies become invalid. Valid repair must unblock future execution without restarting the scheduler process.
 
-The `/mdvwb/` engineering UI has bus configuration and dashboard configuration sections. Dashboard browser code is split into `dashboard-editor.js`, `dashboard-model.js`, and `dashboard-placement-editor.js`. The placement editor builds its device catalog from the applied `buses.json`, supports devices from arbitrary buses, stores relative coordinates, and allows one placement per `bus/address`. Missing bus/address references remain editable repairable markers and must never be deleted automatically. The MQTT client supports binary `Uint8Array` payloads for 48 KiB background chunks. Browser SHA-256 must continue to work on plain HTTP; do not remove the local fallback in favor of secure-context-only Web Crypto.
+## 17. Deployment invariants
 
-## Dashboard cycle step 7: operational page
+The offline installer:
 
-- `www/fancoils/` is the separate operational page served at `/fancoils/`.
-- It imports the shared browser MQTT client and dashboard model from `www/mdvwb/`; do not duplicate or diverge those contracts.
-- It subscribes to `/mdvwb/dashboard/config`, `/mdvwb/dashboard/status` and `/devices/+/controls/+`.
-- Individual commands are published non-retained to `/devices/Fan-<bus>_<address>/controls/<Control>/on1`; never optimistically rewrite factual state. A command remains pending until the matching factual base control confirms it or the 10-second UI timeout expires.
-- The page must consume factual base control topics only. It must not treat `/on1` command publications as state.
-- Marker state colors are derived from factual `Status`; `Alarm=2` or `Status=7` means offline.
-- Hidden placements remain in `dashboard.json` but are not rendered on the operational page.
-- Step 7 is intentionally read-only. Individual command controls are introduced in the next isolated step.
+- requires root and architecture `arm64`;
+- requires `libmosquitto.so.1`;
+- validates all required package files and `SHA256SUMS`;
+- installs all four executables and three systemd unit types;
+- installs both static web applications;
+- preserves existing non-empty `buses.json`, `dashboard.json`, and `schedules.json`;
+- preserves uploaded files under `/var/www/fancoils/assets`;
+- disables obsolete fixed services and the legacy ArrID wb-rules device definition;
+- runs driver and offline-publisher self-tests;
+- validates and applies bus configuration;
+- enables and starts manager and scheduler.
 
+Current installer caveat: when `buses.json` is absent or empty, both installers run `migrate-defaults`, but any nonzero migration result currently triggers installation of `buses.example.json`. The scripts do not distinguish “no legacy files” from malformed or ambiguous legacy files. Do not describe this fallback as lossless migration; review it whenever installer behavior is changed.
 
-## Dashboard group-control invariant
+The native ARM64 workflow packages the release inside Debian 11 Bullseye and includes internal checksums.
 
-The `/fancoils/` group editor may change only explicitly enabled `Power`, `Mode`, `Speed`, and `SetTemp` fields. It sends one non-retained `/on1` command per fan-coil and per selected field. Never replace this with MDV broadcast `0xFF`, retained commands, or optimistic state updates. Offline/unknown devices are skipped and the UI waits for factual base-topic confirmation for each operation.
+## 18. Forbidden regressions
 
+Do not reintroduce:
 
-## Compact operational UI invariant
+- fixed support for only one or two buses;
+- one multi-port driver process;
+- protocol broadcast control;
+- `/on` instead of `/on1`;
+- retained commands;
+- non-retained factual state;
+- C3 response as factual state;
+- unbounded MQTT queues;
+- automatic discovery result application;
+- automatic restart of the discovered bus;
+- global discovery exclusion across unrelated buses;
+- silent/partial legacy migration;
+- dashboard writes that ignore revision;
+- scheduler execution from stale bus/dashboard references;
+- removal of user JSON or uploaded assets during an update;
+- the old `ArrID` virtual-device rule;
+- obsolete `/mnt/data/www/mdvwb` web root.
 
-The user-facing `/fancoils/` page must keep one compact header and devote the remaining viewport height to the plan. Individual details, group commands and future schedules open as right-side drawers; they must not create additional full-width header sections. The page must not link to `/mdvwb/`, expose editor functions, or display/control `Blinds` and `Blok`. Normal text selection is disabled only in `/fancoils/`; do not apply that restriction to the engineering `/mdvwb/` UI.
+## 19. Change procedure by subsystem
 
-<!-- Step 9.2 UI correction: wheel zoom, compact numbered markers, map remains interactive while side drawers are open, direct individual/group selection, no status filter in header. -->
+### Driver/protocol change
 
-<!-- Step 9.3 UI invariant: the operational map is centered with pan margins, supports pointer dragging and wheel zoom, marker numbers must remain readable through 200, pending styling must not reflow control rows, and hover tooltips show label, mode, temperature and speed. -->
+1. Update exact frame/parser/device/driver tests.
+2. Preserve fixed frame lengths and checksum rules.
+3. Test first-C0 initialization, old-value confirmation behavior, and neighboring field preservation.
+4. Test MQTT publication only from factual C0.
+5. Run `mdv_protocol_self_test`, driver fairness, MQTT delivery, then full CTest.
 
+### Manager/configuration change
 
-### Compact dashboard editor correction
+1. Update parser and canonical serializer tests.
+2. Test unknown, missing, duplicate, invalid and revision-conflict input.
+3. Test atomic write, systemd plan, apply failure, rollback, and retained publication order.
+4. Check obsolete-topic cleanup.
+5. Run manager/config/revision/transaction tests, then full CTest.
 
-The engineering dashboard editor is now a single-header, map-first workspace. General settings and background upload share the temporary Parameters drawer, the search field is removed, markers use the approved fan icon, and every placement has a unique editable user number from 1 to 200. Existing configurations without a number are migrated sequentially.
+### Dashboard/upload change
 
-## Administrative web layout
+1. Test both schema versions and canonical version-2 output.
+2. Test panel and device references.
+3. Test upload chunk order, maximum size, SHA, real format and dimensions.
+4. Test concurrent save/upload revision conflict.
+5. Run dashboard config/upload/concurrency tests, then full CTest.
 
-- Keep `/mdvwb/#buses` to one compact top bar. Do not reintroduce stacked summary, manager, configuration, and section headers.
-- The dashboard editor must derive bus groups from `/mdvwb/config`; never assume exactly two buses.
-- Device and bus checkboxes control whether fan coils are visible on the current map.
-- The user number is visible in the left catalog and on the map, remains unique in the range 1–200, and is independent from MQTT bus/address.
-- Editor markers must visually match the numbered circular markers used by `/fancoils/`.
-- Coordinates snap to a 1% X/Y grid.
+### Discovery change
 
-- Dashboard editor marker size is one panel-wide UI setting. Keep all persisted `fans[].markerScale` values equal; do not reintroduce per-fan size controls.
-- Selecting a dashboard fan must highlight it both in the map and in the left device catalog. A click must never change coordinates; only an actual pointer drag may move a marker.
-- Bus administration cards are full-width vertical rows, not an auto-fitting multi-column grid.
+1. Test runner invocation/output parsing.
+2. Test same-bus rejection and different-bus parallel execution.
+3. Verify selected service remains stopped.
+4. Verify manager MQTT remains responsive.
+5. Run discovery runner/async tests, then full CTest.
 
+### Scheduler change
 
-### Multiple dashboard panels
+1. Test schedule schema and references.
+2. Test factual confirmation and timeout.
+3. Test manual and automatic execution.
+4. Test all three configuration fingerprints and invalid-reference blocking.
+5. Run scheduler, freshness and integration delivery tests, then full CTest.
 
-- `/etc/mdvwb/dashboard.json` canonical format is version 2: one global `revision`, `defaultPanel`, and 1–64 panel objects.
-- Continue accepting legacy version 1 and migrate it to panel `main`; never require a manual conversion before startup.
-- Panel IDs are stable URL identifiers `[A-Za-z0-9_-]`, 1–48 characters.
-- The operator URL is `/fancoils/?panel=<id>`. The operator page must not expose a panel selector or an admin link.
-- Each panel owns its title, image, fan list, user numbers and coordinates. Numbers are unique per panel, not globally.
-- Dashboard saves remain complete collection transactions protected by the global revision.
-- Background upload start must contain `panelId`; reject unknown panel IDs and update only the selected panel.
-- Image upload belongs inside Parameters. Do not restore a separate permanent image block or header button.
+### Deployment change
 
+1. Validate shell syntax.
+2. Validate default JSON.
+3. Check package required-file list and checksums.
+4. Confirm preserved files and assets.
+5. Run `Validate MDVWB` and the native ARM64 package workflow before release.
 
-### Step 9.8 editor interaction correction
+## 20. Documentation ownership
 
-The dashboard editor keeps the 1% grid switch inside **Panel settings**. The editor header contains no zoom controls; wheel input over the map changes only the temporary editor preview scale. The saved opening scale remains the explicit setting in the drawer. Marker rotation is no longer exposed or rendered; legacy `rotation` values are accepted for compatibility and normalized to zero on the next save.
+- `README.md`: concise current product and repository overview.
+- `AGENTS.md`: source map, non-negotiable implementation invariants, and test ownership.
+- `docs/DEVELOPER.md`: detailed internal architecture and contracts.
+- `docs/INSTALLATION.md`: installation, update, operation, recovery, and diagnostics.
+- `docs/WEB_AND_FANCOILS.md`: current engineering and operator UI behavior.
+- `docs/schedules-config.md`: canonical schedule schema and MQTT API.
+- `docs/RELEASE_CHECKLIST.md`: final release and controller smoke verification.
 
-
-## Schedule backend invariant
-
-- `/etc/mdvwb/schedules.json` is strict schema version 1 with one global optimistic-concurrency revision.
-- Schedule targets are always individual `bus/address` pairs; never use protocol broadcast.
-- Every saved target must exist in `buses.json` and be visible in the referenced dashboard panel.
-- Actions are opt-in Power/Mode/Speed/SetTemp fields and at least one action is required.
-- Manager validates `/run` and emits `/execute`; actual timing and `/on1` publishing belong to the separate scheduler service.
-- Retained save/run commands are forbidden. Configuration and status are retained; operation events/results are non-retained.
-
-
-## User schedule editor invariant
-
-- The `/fancoils/` schedule drawer must list only schedules whose `panelId` matches the current public panel URL.
-- Schedule target selection is performed on the existing map markers; do not add a separate technical bus/address picker as the primary workflow.
-- Saves are full schema-version-1 configuration transactions using the last retained `revision`. Never overwrite other panels' schedules or publish retained write commands.
-- Power, Mode, Speed and SetTemp remain independent opt-in actions. At least one target and one action are required.
-- Manual run is available only for a persisted, unchanged schedule and uses non-retained `/mdvwb/schedules/<id>/run`.
-- The browser never performs timed commands itself. `mdvwb-scheduler.service` remains the sole executor so schedules survive browser closure and controller restart.
+When changing behavior, update the owning detailed document and only the relevant summary in `README.md`/`AGENTS.md`. Avoid appending chronological “step” notes to permanent documentation.
