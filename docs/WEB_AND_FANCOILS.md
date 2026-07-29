@@ -1642,8 +1642,45 @@ referenceIssues
 
 Stored configuration может быть warning, а runtime scheduler — blocked/error.
 
-## 98. Что будет дополнено дальше
+## 98. Installation и эксплуатация
 
-Следующий шаг документационного аудита посвящён installation, offline update, systemd, Mosquitto WebSocket, backup, recovery и controller diagnostics.
+Актуальная production-инструкция:
 
-Разделы driver, manager, dashboard, web и scheduler к этому шагу актуализированы по текущему коду.
+```text
+docs/INSTALLATION.md
+```
+
+Она описывает:
+
+- ARM64 offline package;
+- checksums;
+- обязательный backup;
+- update и rollback;
+- systemd units;
+- manager/scheduler environment;
+- `/mqtt`;
+- permissions;
+- controller diagnostics;
+- удаление.
+
+Release verification:
+
+```text
+docs/RELEASE_CHECKLIST.md
+```
+
+## 99. Важные deployment ограничения
+
+- MDVWB installer не настраивает Mosquitto WebSocket `/mqtt`.
+- Offline installer сохраняет non-empty JSON и uploaded assets, но не создаёт backup.
+- Automatic rollback отсутствует.
+- Production installation выполняется offline ARM64 package.
+- Текущий online source installer не устанавливает полный `/fancoils/` application.
+- Перед update сохраняйте `/etc/mdvwb`, scheduler state и assets.
+- После installation проверяйте manager, scheduler и каждый expected `mdvwb@N`.
+
+## 100. Documentation status
+
+Разделы driver, manager, dashboard, direct control, group control, schedules и browser behavior актуализированы по текущей версии проекта.
+
+Installation и release procedure находятся в отдельных operational documents, чтобы команды восстановления и проверки не смешивались с пользовательским web guide.
