@@ -201,10 +201,6 @@ jobs:
             sha256sum -c SHA256SUMS
           )
 
-          sh dist/MDVWB-arm64/offline-install.sh verify --package-only
-          sh dist/MDVWB-arm64/offline-install.sh version |
-            grep -F "version=$PROJECT_VERSION"
-
           tar -C dist -czf "dist/$MDVWB_RELEASE_ARCHIVE" MDVWB-arm64
 
           install -m 0755 deploy/online-install.sh dist/online-install.sh
@@ -223,6 +219,41 @@ jobs:
               >"$MDVWB_RELEASE_CHECKSUMS"
             sha256sum -c "$MDVWB_RELEASE_CHECKSUMS"
           )
+
+      - name: Verify packaged runtime on Debian 11 ARM64
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          docker run --rm \
+            -e PROJECT_VERSION="$PROJECT_VERSION" \
+            -e MDVWB_RELEASE_ARCHIVE="$MDVWB_RELEASE_ARCHIVE" \
+            -e MDVWB_RELEASE_ARCHIVE_CHECKSUM="$MDVWB_RELEASE_ARCHIVE_CHECKSUM" \
+            -v "$PWD:/src" \
+            -w /src/dist \
+            debian:bullseye \
+            bash -lc '
+              set -eux
+              test "$(uname -m)" = "aarch64"
+
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                ca-certificates \
+                libmosquitto1
+
+              sha256sum -c "$MDVWB_RELEASE_ARCHIVE_CHECKSUM"
+
+              VERIFY_ROOT=/tmp/mdvwb-package-verify
+              rm -rf "$VERIFY_ROOT"
+              mkdir -p "$VERIFY_ROOT"
+              tar -C "$VERIFY_ROOT" -xzf "$MDVWB_RELEASE_ARCHIVE"
+              cd "$VERIFY_ROOT/MDVWB-arm64"
+
+              sha256sum -c SHA256SUMS
+              sh ./offline-install.sh verify --package-only
+              sh ./offline-install.sh version |
+                grep -F "version=$PROJECT_VERSION"
+            '
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4

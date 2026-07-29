@@ -68,6 +68,12 @@ require_text "$BUILD_WORKFLOW" '--generate-notes'
 require_text "$BUILD_WORKFLOW" '--prerelease'
 require_text "$BUILD_WORKFLOW" 'gh release upload'
 require_text "$BUILD_WORKFLOW" '--clobber'
+require_text "$BUILD_WORKFLOW" 'Verify packaged runtime on Debian 11 ARM64'
+require_text "$BUILD_WORKFLOW" 'libmosquitto1'
+require_text "$BUILD_WORKFLOW" 'sha256sum -c "$MDVWB_RELEASE_ARCHIVE_CHECKSUM"'
+require_text "$BUILD_WORKFLOW" 'tar -C "$VERIFY_ROOT" -xzf "$MDVWB_RELEASE_ARCHIVE"'
+require_text "$BUILD_WORKFLOW" 'sh ./offline-install.sh verify --package-only'
+require_text "$BUILD_WORKFLOW" 'grep -F "version=$PROJECT_VERSION"'
 
 require_text "$VALIDATE_WORKFLOW" 'tests/deploy/mdvwb_release_contract_test.sh'
 require_text "$VALIDATE_WORKFLOW" '".github/workflows/build-arm64-offline.yml"'
@@ -77,6 +83,11 @@ require_text "$VALIDATE_WORKFLOW" '"README.md"'
 if grep -Fq 'sha256sum dist/MDVWB-arm64-offline.tar.gz' \
     "$BUILD_WORKFLOW"; then
     fail "outer checksum must contain a portable basename, not dist/path"
+fi
+
+if grep -Fq 'sh dist/MDVWB-arm64/offline-install.sh verify --package-only' \
+    "$BUILD_WORKFLOW"; then
+    fail "packaged ARM64 binaries must not run on the Ubuntu host"
 fi
 
 asset_count=$(sed -n '/ASSETS=(/,/)/p' "$BUILD_WORKFLOW" |
