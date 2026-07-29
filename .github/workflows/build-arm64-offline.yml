@@ -50,9 +50,11 @@ jobs:
               sh -n deploy/mdvwb-run
               sh -n tests/deploy/mdvwb_install_engine_test.sh
               sh -n tests/deploy/mdvwb_backup_rollback_test.sh
+              sh -n tests/deploy/mdvwb_offline_lifecycle_test.sh
               sh tests/deploy/mdvwb_setup_test.sh
               sh tests/deploy/mdvwb_install_engine_test.sh
               sh tests/deploy/mdvwb_backup_rollback_test.sh
+              sh tests/deploy/mdvwb_offline_lifecycle_test.sh
               python3 -m json.tool deploy/package-manifest.json.in >/dev/null
               python3 -m json.tool deploy/buses.default.json >/dev/null
               python3 -m json.tool deploy/dashboard.default.json >/dev/null
@@ -133,6 +135,9 @@ jobs:
               xargs -0 sha256sum > SHA256SUMS
             sha256sum -c SHA256SUMS
           )
+
+          sh dist/MDVWB-arm64/offline-install.sh verify --package-only
+          sh dist/MDVWB-arm64/offline-install.sh version
 
           tar -C dist -czf dist/MDVWB-arm64-offline.tar.gz MDVWB-arm64
           sha256sum dist/MDVWB-arm64-offline.tar.gz > dist/MDVWB-arm64-offline.tar.gz.sha256

@@ -96,6 +96,7 @@ install -m 0755 "$BUILD_DIR/mdvwb-manager" "$STAGING/mdvwb-manager"
 install -m 0755 "$BUILD_DIR/mdvwb-scheduler" "$STAGING/mdvwb-scheduler"
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" "$STAGING/mdvwb-run"
 install -m 0755 "$SCRIPT_DIR/mdvwb-setup" "$STAGING/mdvwb-setup"
+install -m 0755 "$SCRIPT_DIR/offline-install.sh" "$STAGING/offline-install.sh"
 install -m 0644 "$SCRIPT_DIR/mdvwb@.service" "$STAGING/mdvwb@.service"
 install -m 0640 "$SCRIPT_DIR/mdvwb.env" "$STAGING/mdvwb.env"
 install -m 0644 "$SCRIPT_DIR/mdvwb-manager.service" \

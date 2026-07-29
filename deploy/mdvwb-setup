@@ -52,6 +52,7 @@ fi
 
 DEFAULT_STATE_PATH=${MDVWB_INSTALL_STATE:-$ROOT_PREFIX/var/lib/mdvwb/installation.json}
 DEFAULT_BACKUP_ROOT=${MDVWB_BACKUP_ROOT:-$ROOT_PREFIX/var/backups/mdvwb}
+DEFAULT_LOG_ROOT=${MDVWB_LOG_ROOT:-$ROOT_PREFIX/var/log/mdvwb}
 
 fail()
 {
@@ -68,7 +69,8 @@ MDVWB installation lifecycle utility
 
 Usage:
   mdvwb-setup manifest --manifest <manifest.json>
-  mdvwb-setup status [--state <installation.json>]
+  mdvwb-setup verify --package <directory> [--package-only]
+  mdvwb-setup status [--state <installation.json>] [--health]
   mdvwb-setup check-version --manifest <manifest.json>
       [--state <installation.json>] [--force] [--allow-downgrade]
   mdvwb-setup write-state --manifest <manifest.json>
@@ -94,6 +96,7 @@ Environment used by integration tests and advanced deployments:
   MDVWB_SERVICE_START_DELAY
   MDVWB_INSTALL_STATE
   MDVWB_BACKUP_ROOT
+  MDVWB_LOG_ROOT
   MDVWB_WWW_ROOT
 
 Exit codes:
@@ -103,7 +106,7 @@ Exit codes:
   4  the requested version is already installed
   5  downgrade is blocked
   6  package and installed architectures differ
-  7  installed service verification failed
+  7  installed service or configuration health check failed
   8  automatic rollback failed
 EOF
 }
@@ -356,6 +359,64 @@ EOF
     chmod 0640 "$temporary"
     mv -f "$temporary" "$state"
     trap - EXIT HUP INT TERM
+}
+
+
+validate_absolute_directory()
+{
+    directory=$1
+    description=$2
+    case "$directory" in
+        /*)
+            ;;
+        *)
+            fail 2 "$description must be an absolute path: $directory"
+            ;;
+    esac
+}
+
+start_operation_log()
+{
+    operation=$1
+    method=$2
+    current_version=$3
+    target_version=$4
+
+    validate_absolute_directory "$DEFAULT_LOG_ROOT" "log directory"
+    timestamp=$(date -u '+%Y%m%dT%H%M%SZ')
+    started_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    mkdir -p "$DEFAULT_LOG_ROOT"
+    OPERATION_LOG="$DEFAULT_LOG_ROOT/$timestamp-$operation-$$.log"
+    umask 027
+    cat >"$OPERATION_LOG" <<EOF
+logFormat=1
+product=MDVWB
+operation=$operation
+method=$method
+currentVersion=$current_version
+targetVersion=$target_version
+startedAt=$started_at
+root=$MDVWB_ROOT
+status=running
+EOF
+    chmod 0640 "$OPERATION_LOG"
+    printf 'log=%s\n' "$OPERATION_LOG"
+}
+
+append_operation_log()
+{
+    key=$1
+    value=$2
+    [ -n "${OPERATION_LOG:-}" ] || return 0
+    printf '%s=%s\n' "$key" "$value" >>"$OPERATION_LOG"
+}
+
+finish_operation_log()
+{
+    status=$1
+    finished_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    append_operation_log finishedAt "$finished_at"
+    append_operation_log finalStatus "$status"
 }
 
 
@@ -1143,15 +1204,84 @@ command_manifest()
         "builtAt=$MANIFEST_BUILT_AT"
 }
 
+command_verify()
+{
+    package=
+    package_only=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --package)
+                [ "$#" -ge 2 ] || fail 2 "--package requires a directory"
+                package=$2
+                shift 2
+                ;;
+            --package-only)
+                package_only=1
+                shift
+                ;;
+            *)
+                fail 2 "unknown verify argument: $1"
+                ;;
+        esac
+    done
+
+    [ -n "$package" ] || fail 2 "--package is required"
+    require_command sha256sum
+    require_command grep
+    require_command sed
+    require_command awk
+
+    package=$(canonical_directory "$package")
+    printf '[verify 1/5] Check package layout\n'
+    validate_package_layout "$package"
+    require_executable "$package/offline-install.sh"
+
+    printf '[verify 2/5] Validate package manifest\n'
+    load_manifest "$package/manifest.json"
+
+    printf '[verify 3/5] Verify package checksums\n'
+    verify_package_checksums "$package"
+
+    printf '[verify 4/5] Run package self-tests\n'
+    run_package_self_tests "$package"
+
+    if [ "$package_only" -eq 0 ]; then
+        printf '[verify 5/5] Verify controller and existing configuration\n'
+        verify_controller
+        validate_existing_configuration "$package"
+        verification_scope=controller
+    else
+        printf '[verify 5/5] Controller checks skipped\n'
+        verification_scope=package
+    fi
+
+    printf '%s\n' \
+        "VERIFY_RESULT=success" \
+        "scope=$verification_scope" \
+        "product=$MANIFEST_PRODUCT" \
+        "version=$MANIFEST_VERSION" \
+        "commit=$MANIFEST_COMMIT" \
+        "architecture=$MANIFEST_ARCHITECTURE" \
+        "package=$package"
+}
+
+
 command_status()
 {
     state=$DEFAULT_STATE_PATH
+    health=0
+
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --state)
                 [ "$#" -ge 2 ] || fail 2 "--state requires a path"
                 state=$2
                 shift 2
+                ;;
+            --health)
+                health=1
+                shift
                 ;;
             *)
                 fail 2 "unknown status argument: $1"
@@ -1172,6 +1302,71 @@ command_status()
         "installedAt=$STATE_INSTALLED_AT" \
         "installMethod=$STATE_METHOD" \
         "state=$state"
+
+    [ "$health" -eq 1 ] || return 0
+
+    require_command "$MDVWB_SYSTEMCTL"
+    manager=$(root_path /usr/local/bin/mdvwb-manager)
+    config=$(root_path /etc/mdvwb/buses.json)
+    health_ok=1
+    config_valid=0
+
+    if [ ! -x "$manager" ]; then
+        printf 'component=mdvwb-manager state=missing\n'
+        health_ok=0
+    elif [ ! -s "$config" ]; then
+        printf 'configuration=buses.json state=missing\n'
+        health_ok=0
+    elif "$manager" validate "$config" >/dev/null 2>&1; then
+        printf 'configuration=buses.json state=valid\n'
+        config_valid=1
+    else
+        printf 'configuration=buses.json state=invalid\n'
+        health_ok=0
+    fi
+
+    for service in mdvwb-manager.service mdvwb-scheduler.service; do
+        active=false
+        enabled=false
+        if "$MDVWB_SYSTEMCTL" is-active --quiet "$service" >/dev/null 2>&1; then
+            active=true
+        fi
+        if "$MDVWB_SYSTEMCTL" is-enabled --quiet "$service" >/dev/null 2>&1; then
+            enabled=true
+        fi
+        printf 'service=%s active=%s enabled=%s required=true\n' \
+            "$service" "$active" "$enabled"
+        if [ "$active" != true ] || [ "$enabled" != true ]; then
+            health_ok=0
+        fi
+    done
+
+    if [ "$config_valid" -eq 1 ]; then
+        for bus in $(enabled_bus_ids "$manager" "$config"); do
+            service="mdvwb@$bus.service"
+            active=false
+            enabled=false
+            if "$MDVWB_SYSTEMCTL" is-active --quiet "$service" >/dev/null 2>&1; then
+                active=true
+            fi
+            if "$MDVWB_SYSTEMCTL" is-enabled --quiet "$service" >/dev/null 2>&1; then
+                enabled=true
+            fi
+            printf 'service=%s active=%s enabled=%s required=true\n' \
+                "$service" "$active" "$enabled"
+            if [ "$active" != true ] || [ "$enabled" != true ]; then
+                health_ok=0
+            fi
+        done
+    fi
+
+    if [ "$health_ok" -eq 1 ]; then
+        printf '%s\n' "HEALTH=OK"
+        return 0
+    fi
+
+    printf '%s\n' "HEALTH=FAILED"
+    return 7
 }
 
 command_check_version()
@@ -1429,12 +1624,24 @@ command_install()
         return 0
     fi
 
+    start_operation_log "$ACTION" "$method" "$CURRENT_VERSION" "$MANIFEST_VERSION"
+    append_operation_log package "$package"
+
     backup=
     if [ "$no_backup" -eq 0 ]; then
         printf '[transaction] Create backup before system changes\n'
-        backup=$(create_backup \
-            "$backup_root" "automatic-$ACTION" "$package/mdvwb-manager")
-        printf 'BACKUP_CREATED path=%s\n' "$backup"
+        if backup=$(create_backup \
+            "$backup_root" "automatic-$ACTION" "$package/mdvwb-manager"); then
+            printf 'BACKUP_CREATED path=%s\n' "$backup"
+            append_operation_log backup "$backup"
+        else
+            backup_status=$?
+            append_operation_log backup failed
+            append_operation_log backupStatus "$backup_status"
+            finish_operation_log failed-before-changes
+            printf 'log=%s\n' "$OPERATION_LOG" >&2
+            return "$backup_status"
+        fi
     else
         printf '%s\n' \
             "WARNING: automatic backup and rollback are disabled." >&2
@@ -1445,6 +1652,8 @@ command_install()
         if [ -n "$backup" ]; then
             printf 'backup=%s\n' "$backup"
         fi
+        finish_operation_log success
+        printf 'log=%s\n' "$OPERATION_LOG"
         return 0
     else
         operation_status=$?
@@ -1452,10 +1661,14 @@ command_install()
 
     printf '%s\n' \
         "INSTALLATION_FAILED status=$operation_status action=$ACTION" >&2
+    append_operation_log installationStatus "$operation_status"
 
     if [ -z "$backup" ]; then
         printf '%s\n' \
             "ROLLBACK_RESULT=skipped reason=no-backup" >&2
+        append_operation_log rollback skipped
+        finish_operation_log failed
+        printf 'log=%s\n' "$OPERATION_LOG" >&2
         return "$operation_status"
     fi
 
@@ -1464,12 +1677,18 @@ command_install()
         printf '%s\n' \
             "AUTOMATIC_ROLLBACK=completed" \
             "backup=$backup" >&2
+        append_operation_log rollback completed
+        finish_operation_log failed-rolled-back
+        printf 'log=%s\n' "$OPERATION_LOG" >&2
         return "$operation_status"
     fi
 
     printf '%s\n' \
         "AUTOMATIC_ROLLBACK=failed" \
         "backup=$backup" >&2
+    append_operation_log rollback failed
+    finish_operation_log failed-rollback-failed
+    printf 'log=%s\n' "$OPERATION_LOG" >&2
     return 8
 }
 
@@ -1481,6 +1700,9 @@ fi
 case "$command" in
     manifest)
         command_manifest "$@"
+        ;;
+    verify)
+        command_verify "$@"
         ;;
     status)
         command_status "$@"
