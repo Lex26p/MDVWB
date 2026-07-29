@@ -2,6 +2,33 @@
 set -eu
 
 PROGRAM=${0##*/}
+case "$0" in
+    /*)
+        SELF_PATH=$0
+        ;;
+    */*)
+        SELF_PATH=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/${0##*/}
+        ;;
+    *)
+        SELF_PATH=$(command -v "$0" 2>/dev/null || printf '%s' "$0")
+        ;;
+esac
+
+case "${1:-}" in
+    install|update|rollback)
+        if [ "${MDVWB_SETUP_RUNNING_COPY:-0}" != "1" ]; then
+            temporary_self=${TMPDIR:-/tmp}/mdvwb-setup-running.$$
+            cp "$SELF_PATH" "$temporary_self"
+            chmod 0700 "$temporary_self"
+            MDVWB_SETUP_RUNNING_COPY=1             MDVWB_SETUP_TEMP_SELF=$temporary_self                 exec sh "$temporary_self" "$@"
+        fi
+        ;;
+esac
+
+if [ -n "${MDVWB_SETUP_TEMP_SELF:-}" ]; then
+    trap 'rm -f "$MDVWB_SETUP_TEMP_SELF"' EXIT HUP INT TERM
+fi
+
 MDVWB_ROOT=${MDVWB_ROOT:-/}
 MDVWB_SYSTEMCTL=${MDVWB_SYSTEMCTL:-systemctl}
 MDVWB_DPKG=${MDVWB_DPKG:-dpkg}
@@ -24,6 +51,7 @@ else
 fi
 
 DEFAULT_STATE_PATH=${MDVWB_INSTALL_STATE:-$ROOT_PREFIX/var/lib/mdvwb/installation.json}
+DEFAULT_BACKUP_ROOT=${MDVWB_BACKUP_ROOT:-$ROOT_PREFIX/var/backups/mdvwb}
 
 fail()
 {
@@ -46,12 +74,17 @@ Usage:
   mdvwb-setup write-state --manifest <manifest.json>
       --method <offline|online|source|rollback>
       [--state <installation.json>]
+  mdvwb-setup backup [--backup-dir <directory>]
+  mdvwb-setup rollback [--backup <directory>]
+      [--backup-dir <directory>]
   mdvwb-setup install --package <directory>
       --method <offline|online|source>
       [--force] [--allow-downgrade] [--dry-run]
+      [--backup-dir <directory>] [--no-backup]
   mdvwb-setup update --package <directory>
       --method <offline|online|source>
       [--force] [--allow-downgrade] [--dry-run]
+      [--backup-dir <directory>] [--no-backup]
 
 Environment used by integration tests and advanced deployments:
   MDVWB_ROOT
@@ -60,16 +93,18 @@ Environment used by integration tests and advanced deployments:
   MDVWB_LDCONFIG
   MDVWB_SERVICE_START_DELAY
   MDVWB_INSTALL_STATE
+  MDVWB_BACKUP_ROOT
   MDVWB_WWW_ROOT
 
 Exit codes:
   0  operation completed or is valid
-  2  invalid arguments, package, manifest, configuration or state
-  3  installation state does not exist
+  2  invalid arguments, package, manifest, configuration, backup or state
+  3  installation state or requested backup does not exist
   4  the requested version is already installed
   5  downgrade is blocked
   6  package and installed architectures differ
   7  installed service verification failed
+  8  automatic rollback failed
 EOF
 }
 
@@ -322,6 +357,387 @@ EOF
     mv -f "$temporary" "$state"
     trap - EXIT HUP INT TERM
 }
+
+
+validate_relative_backup_path()
+{
+    relative=$1
+    case "$relative" in
+        ""|/*|..|../*|*/..|*/../*)
+            fail 2 "unsafe backup path: $relative"
+            ;;
+    esac
+}
+
+backup_inventory_contains()
+{
+    inventory=$1
+    relative=$2
+    awk -F '\t' -v relative="$relative" '
+        $2 == relative { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$inventory"
+}
+
+backup_add_path()
+{
+    relative=$1
+    validate_relative_backup_path "$relative"
+    if backup_inventory_contains "$BACKUP_INVENTORY" "$relative"; then
+        return 0
+    fi
+
+    source_path=$(root_path "/$relative")
+    destination="$BACKUP_FILES/$relative"
+    destination_parent=${destination%/*}
+
+    if [ -e "$source_path" ] || [ -L "$source_path" ]; then
+        mkdir -p "$destination_parent"
+        cp -a "$source_path" "$destination"
+        printf 'present\t%s\n' "$relative" >>"$BACKUP_INVENTORY"
+    else
+        printf 'absent\t%s\n' "$relative" >>"$BACKUP_INVENTORY"
+    fi
+}
+
+backup_record_service()
+{
+    service=$1
+    if awk -F '\t' -v service="$service" '
+        $1 == service { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$BACKUP_SERVICES"; then
+        return 0
+    fi
+
+    active=0
+    enabled=0
+    if "$MDVWB_SYSTEMCTL" is-active --quiet "$service" >/dev/null 2>&1; then
+        active=1
+    fi
+    if "$MDVWB_SYSTEMCTL" is-enabled --quiet "$service" >/dev/null 2>&1; then
+        enabled=1
+    fi
+    printf '%s\t%s\t%s\n' "$service" "$active" "$enabled" \
+        >>"$BACKUP_SERVICES"
+}
+
+backup_fixed_paths()
+{
+    cat <<'EOF'
+usr/local/bin/MDVWB
+usr/local/bin/mdvwb-offline
+usr/local/bin/mdvwb-manager
+usr/local/bin/mdvwb-scheduler
+usr/local/bin/mdvwb-bus
+usr/local/sbin/mdvwb-setup
+usr/local/lib/mdvwb
+etc/mdvwb
+etc/default/mdvwb
+etc/default/mdvwb-manager
+etc/default/mdvwb-scheduler
+etc/systemd/system/mdvwb@.service
+etc/systemd/system/mdvwb-manager.service
+etc/systemd/system/mdvwb-scheduler.service
+etc/systemd/system/mdvwb.service
+etc/systemd/system/mdvwb-2.service
+etc/wb-rules/mdvwb-service-control.js
+var/lib/mdvwb
+var/www/mdvwb
+var/www/fancoils
+EOF
+}
+
+create_backup()
+{
+    backup_root=$1
+    reason=$2
+    manager=$3
+
+    case "$backup_root" in
+        /*)
+            ;;
+        *)
+            fail 2 "backup directory must be an absolute path: $backup_root"
+            ;;
+    esac
+
+    created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    directory_name=$(date -u '+%Y%m%dT%H%M%SZ')-$$
+    backup="$backup_root/$directory_name"
+    if [ -e "$backup" ]; then
+        fail 2 "backup destination already exists: $backup"
+    fi
+
+    mkdir -p "$backup/files"
+    BACKUP_PATH=$backup
+    BACKUP_FILES=$backup/files
+    BACKUP_INVENTORY=$backup/paths.tsv
+    BACKUP_SERVICES=$backup/services.tsv
+    : >"$BACKUP_INVENTORY"
+    : >"$BACKUP_SERVICES"
+
+    backup_version=none
+    if [ -s "$DEFAULT_STATE_PATH" ]; then
+        load_state "$DEFAULT_STATE_PATH"
+        backup_version=$STATE_VERSION
+    fi
+
+    cat >"$backup/backup.conf" <<EOF
+MDVWB_BACKUP_FORMAT=1
+MDVWB_BACKUP_PRODUCT=MDVWB
+MDVWB_BACKUP_CREATED_AT=$created_at
+MDVWB_BACKUP_REASON=$reason
+MDVWB_BACKUP_VERSION=$backup_version
+MDVWB_BACKUP_ROOT=$MDVWB_ROOT
+EOF
+
+    while IFS= read -r relative; do
+        [ -n "$relative" ] || continue
+        backup_add_path "$relative"
+    done <<EOF
+$(backup_fixed_paths)
+EOF
+
+    default_dir=$(root_path /etc/default)
+    if [ -d "$default_dir" ]; then
+        for path in "$default_dir"/mdvwb-[0-9]*; do
+            [ -e "$path" ] || [ -L "$path" ] || continue
+            relative=${path#"$ROOT_PREFIX/"}
+            backup_add_path "$relative"
+        done
+    fi
+
+    rules_dir=$(root_path /etc/wb-rules)
+    if [ -d "$rules_dir" ]; then
+        for rule in "$rules_dir"/*.js; do
+            [ -f "$rule" ] || continue
+            if grep -Eq 'var[[:space:]]+ArrID[[:space:]]*=' "$rule" &&
+               grep -q 'defineVirtualDevice("Fan-"' "$rule"; then
+                relative=${rule#"$ROOT_PREFIX/"}
+                backup_add_path "$relative"
+                backup_add_path "$relative.disabled-mdvwb"
+            fi
+        done
+        for disabled in "$rules_dir"/*.disabled-mdvwb; do
+            [ -e "$disabled" ] || [ -L "$disabled" ] || continue
+            relative=${disabled#"$ROOT_PREFIX/"}
+            backup_add_path "$relative"
+            original=${relative%.disabled-mdvwb}
+            backup_add_path "$original"
+        done
+    fi
+
+    backup_record_service mdvwb-manager.service
+    backup_record_service mdvwb-scheduler.service
+    backup_record_service mdvwb.service
+    backup_record_service mdvwb-2.service
+
+    config=$(root_path /etc/mdvwb/buses.json)
+    if [ -x "$manager" ] && [ -s "$config" ]; then
+        for bus in $(configured_bus_ids "$manager" "$config"); do
+            backup_add_path "etc/default/mdvwb-$bus"
+            backup_record_service "mdvwb@$bus.service"
+        done
+    fi
+
+    if [ -d "$default_dir" ]; then
+        for path in "$default_dir"/mdvwb-[0-9]*; do
+            [ -e "$path" ] || [ -L "$path" ] || continue
+            name=${path##*/}
+            bus=${name#mdvwb-}
+            case "$bus" in
+                ""|*[!0-9]*)
+                    ;;
+                *)
+                    backup_record_service "mdvwb@$bus.service"
+                    ;;
+            esac
+        done
+    fi
+
+    : >"$backup/COMPLETE"
+    printf '%s\n' "$backup"
+}
+
+backup_value()
+{
+    backup=$1
+    key=$2
+    values=$(sed -n "s/^$key=//p" "$backup/backup.conf")
+    count=$(printf '%s\n' "$values" | awk 'NF { count++ } END { print count + 0 }')
+    [ "$count" -eq 1 ] ||
+        fail 2 "backup field '$key' must occur exactly once in $backup/backup.conf"
+    printf '%s\n' "$values"
+}
+
+validate_backup()
+{
+    backup=$1
+    [ -d "$backup" ] || fail 3 "backup directory does not exist: $backup"
+    require_file "$backup/backup.conf"
+    require_file "$backup/COMPLETE"
+    require_file "$backup/paths.tsv"
+    require_file "$backup/services.tsv"
+    [ -d "$backup/files" ] || fail 2 "backup files directory is missing: $backup/files"
+
+    format=$(backup_value "$backup" MDVWB_BACKUP_FORMAT)
+    product=$(backup_value "$backup" MDVWB_BACKUP_PRODUCT)
+    backup_root=$(backup_value "$backup" MDVWB_BACKUP_ROOT)
+
+    [ "$format" = "1" ] || fail 2 "unsupported backup format: $format"
+    [ "$product" = "MDVWB" ] || fail 2 "unexpected backup product: $product"
+    [ "$backup_root" = "$MDVWB_ROOT" ] ||
+        fail 2 "backup root $backup_root differs from current root $MDVWB_ROOT"
+
+    tab=$(printf '\t')
+    while IFS="$tab" read -r status relative extra; do
+        [ -n "$status" ] || continue
+        [ -z "${extra:-}" ] || fail 2 "malformed backup inventory entry"
+        case "$status" in
+            present|absent)
+                ;;
+            *)
+                fail 2 "unknown backup inventory state: $status"
+                ;;
+        esac
+        validate_relative_backup_path "$relative"
+        if [ "$status" = "present" ]; then
+            source_path="$backup/files/$relative"
+            [ -e "$source_path" ] || [ -L "$source_path" ] ||
+                fail 2 "backup content is missing: $relative"
+        fi
+    done <"$backup/paths.tsv"
+}
+
+stop_services_for_restore()
+{
+    backup=$1
+    current_manager=$(root_path /usr/local/bin/mdvwb-manager)
+    current_config=$(root_path /etc/mdvwb/buses.json)
+
+    "$MDVWB_SYSTEMCTL" stop mdvwb-scheduler.service 2>/dev/null || true
+    "$MDVWB_SYSTEMCTL" stop mdvwb-manager.service 2>/dev/null || true
+    if [ -x "$current_manager" ] && [ -s "$current_config" ]; then
+        for bus in $(configured_bus_ids "$current_manager" "$current_config"); do
+            "$MDVWB_SYSTEMCTL" stop "mdvwb@$bus.service" 2>/dev/null || true
+        done
+    fi
+
+    tab=$(printf '\t')
+    while IFS="$tab" read -r service active enabled extra; do
+        [ -n "$service" ] || continue
+        [ -z "${extra:-}" ] || fail 2 "malformed backup service entry"
+        "$MDVWB_SYSTEMCTL" stop "$service" 2>/dev/null || true
+    done <"$backup/services.tsv"
+}
+
+restore_backup_files()
+{
+    backup=$1
+    tab=$(printf '\t')
+
+    while IFS="$tab" read -r status relative extra; do
+        [ -n "$status" ] || continue
+        target=$(root_path "/$relative")
+        rm -rf "$target"
+    done <"$backup/paths.tsv"
+
+    while IFS="$tab" read -r status relative extra; do
+        [ -n "$status" ] || continue
+        if [ "$status" = "present" ]; then
+            source_path="$backup/files/$relative"
+            target=$(root_path "/$relative")
+            target_parent=${target%/*}
+            mkdir -p "$target_parent"
+            cp -a "$source_path" "$target"
+        fi
+    done <"$backup/paths.tsv"
+}
+
+restore_service_states()
+{
+    backup=$1
+    restored_manager=$(root_path /usr/local/bin/mdvwb-manager)
+    restored_config=$(root_path /etc/mdvwb/buses.json)
+
+    "$MDVWB_SYSTEMCTL" daemon-reload
+
+    if [ -x "$restored_manager" ] && [ -s "$restored_config" ]; then
+        "$restored_manager" validate "$restored_config"
+        "$restored_manager" apply "$restored_config"
+    fi
+
+    tab=$(printf '\t')
+    while IFS="$tab" read -r service active enabled extra; do
+        [ -n "$service" ] || continue
+        case "$enabled" in
+            1)
+                "$MDVWB_SYSTEMCTL" enable "$service"
+                ;;
+            0)
+                "$MDVWB_SYSTEMCTL" disable "$service" 2>/dev/null || true
+                ;;
+            *)
+                fail 2 "invalid enabled state for $service: $enabled"
+                ;;
+        esac
+    done <"$backup/services.tsv"
+
+    while IFS="$tab" read -r service active enabled extra; do
+        [ -n "$service" ] || continue
+        case "$active" in
+            1)
+                "$MDVWB_SYSTEMCTL" start "$service"
+                ;;
+            0)
+                "$MDVWB_SYSTEMCTL" stop "$service" 2>/dev/null || true
+                ;;
+            *)
+                fail 2 "invalid active state for $service: $active"
+                ;;
+        esac
+    done <"$backup/services.tsv"
+}
+
+restore_backup()
+{
+    backup=$1
+    require_root
+    validate_backup "$backup"
+
+    printf '[rollback 1/4] Stop current MDVWB services\n'
+    stop_services_for_restore "$backup"
+
+    printf '[rollback 2/4] Restore files and configuration\n'
+    restore_backup_files "$backup"
+
+    printf '[rollback 3/4] Restore systemd service states\n'
+    restore_service_states "$backup"
+
+    printf '[rollback 4/4] Rollback complete\n'
+    printf '%s\n' \
+        "ROLLBACK_RESULT=success" \
+        "backup=$backup"
+}
+
+latest_backup()
+{
+    backup_root=$1
+    [ -d "$backup_root" ] || fail 3 "backup directory does not exist: $backup_root"
+
+    latest=
+    for candidate in $(ls -1dt "$backup_root"/* 2>/dev/null || true); do
+        if [ -f "$candidate/backup.conf" ] &&
+           [ -f "$candidate/COMPLETE" ]; then
+            latest=$candidate
+            break
+        fi
+    done
+    [ -n "$latest" ] || fail 3 "no MDVWB backups were found in $backup_root"
+    printf '%s\n' "$latest"
+}
+
 
 required_package_files()
 {
@@ -686,6 +1102,21 @@ perform_install()
         "operatorWeb=http://<WB-address>/fancoils/"
 }
 
+
+command_apply_internal()
+{
+    [ "$#" -eq 4 ] ||
+        fail 2 "internal apply requires package, method, state and action"
+
+    package=$1
+    method=$2
+    state=$3
+    ACTION=$4
+    load_manifest "$package/manifest.json"
+    perform_install "$package" "$method" "$state"
+}
+
+
 command_manifest()
 {
     manifest=
@@ -827,6 +1258,74 @@ command_write_state()
         "$MANIFEST_VERSION" "$method" "$state"
 }
 
+
+command_backup()
+{
+    backup_root=$DEFAULT_BACKUP_ROOT
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --backup-dir)
+                [ "$#" -ge 2 ] || fail 2 "--backup-dir requires a directory"
+                backup_root=$2
+                shift 2
+                ;;
+            *)
+                fail 2 "unknown backup argument: $1"
+                ;;
+        esac
+    done
+
+    require_root
+    require_command cp
+    require_command awk
+    require_command sed
+    require_command grep
+    require_command date
+    require_command "$MDVWB_SYSTEMCTL"
+
+    manager=$(root_path /usr/local/bin/mdvwb-manager)
+    backup=$(create_backup "$backup_root" manual "$manager")
+    printf '%s\n' \
+        "BACKUP_CREATED path=$backup" \
+        "backup=$backup"
+}
+
+command_rollback()
+{
+    backup=
+    backup_root=$DEFAULT_BACKUP_ROOT
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --backup)
+                [ "$#" -ge 2 ] || fail 2 "--backup requires a directory"
+                backup=$2
+                shift 2
+                ;;
+            --backup-dir)
+                [ "$#" -ge 2 ] || fail 2 "--backup-dir requires a directory"
+                backup_root=$2
+                shift 2
+                ;;
+            *)
+                fail 2 "unknown rollback argument: $1"
+                ;;
+        esac
+    done
+
+    require_root
+    require_command cp
+    require_command awk
+    require_command sed
+    require_command ls
+    require_command "$MDVWB_SYSTEMCTL"
+
+    if [ -z "$backup" ]; then
+        backup=$(latest_backup "$backup_root")
+    fi
+    restore_backup "$backup"
+}
+
+
 command_install()
 {
     require_existing=$1
@@ -837,6 +1336,8 @@ command_install()
     force=0
     allow_downgrade=0
     dry_run=0
+    no_backup=0
+    backup_root=$DEFAULT_BACKUP_ROOT
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -862,6 +1363,15 @@ command_install()
                 dry_run=1
                 shift
                 ;;
+            --backup-dir)
+                [ "$#" -ge 2 ] || fail 2 "--backup-dir requires a directory"
+                backup_root=$2
+                shift 2
+                ;;
+            --no-backup)
+                no_backup=1
+                shift
+                ;;
             *)
                 fail 2 "unknown installation argument: $1"
                 ;;
@@ -884,6 +1394,7 @@ command_install()
     require_command grep
     require_command sed
     require_command awk
+    require_command date
 
     package=$(canonical_directory "$package")
     printf '[preflight 1/6] Check package layout\n'
@@ -907,12 +1418,59 @@ command_install()
     validate_existing_configuration "$package"
 
     print_install_plan "$package" "$method" "$DEFAULT_STATE_PATH"
+    if [ "$no_backup" -eq 1 ]; then
+        printf '%s\n' "backup=disabled"
+    else
+        printf 'backupRoot=%s\n' "$backup_root"
+    fi
+
     if [ "$dry_run" -eq 1 ]; then
         printf '%s\n' "DRY_RUN=complete"
         return 0
     fi
 
-    perform_install "$package" "$method" "$DEFAULT_STATE_PATH"
+    backup=
+    if [ "$no_backup" -eq 0 ]; then
+        printf '[transaction] Create backup before system changes\n'
+        backup=$(create_backup \
+            "$backup_root" "automatic-$ACTION" "$package/mdvwb-manager")
+        printf 'BACKUP_CREATED path=%s\n' "$backup"
+    else
+        printf '%s\n' \
+            "WARNING: automatic backup and rollback are disabled." >&2
+    fi
+
+    if sh "$SELF_PATH" __apply \
+        "$package" "$method" "$DEFAULT_STATE_PATH" "$ACTION"; then
+        if [ -n "$backup" ]; then
+            printf 'backup=%s\n' "$backup"
+        fi
+        return 0
+    else
+        operation_status=$?
+    fi
+
+    printf '%s\n' \
+        "INSTALLATION_FAILED status=$operation_status action=$ACTION" >&2
+
+    if [ -z "$backup" ]; then
+        printf '%s\n' \
+            "ROLLBACK_RESULT=skipped reason=no-backup" >&2
+        return "$operation_status"
+    fi
+
+    printf 'Automatic rollback from %s\n' "$backup" >&2
+    if restore_backup "$backup"; then
+        printf '%s\n' \
+            "AUTOMATIC_ROLLBACK=completed" \
+            "backup=$backup" >&2
+        return "$operation_status"
+    fi
+
+    printf '%s\n' \
+        "AUTOMATIC_ROLLBACK=failed" \
+        "backup=$backup" >&2
+    return 8
 }
 
 command=${1:-help}
@@ -932,6 +1490,15 @@ case "$command" in
         ;;
     write-state)
         command_write_state "$@"
+        ;;
+    backup)
+        command_backup "$@"
+        ;;
+    rollback)
+        command_rollback "$@"
+        ;;
+    __apply)
+        command_apply_internal "$@"
         ;;
     install)
         command_install 0 "$@"

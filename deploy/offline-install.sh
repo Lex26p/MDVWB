@@ -13,7 +13,8 @@ if [ "$#" -gt 0 ]; then
         --help|-h)
             printf '%s\n' \
                 "Usage: ./offline-install.sh [install|update]" \
-                "       [--force] [--allow-downgrade] [--dry-run]"
+                "       [--force] [--allow-downgrade] [--dry-run]" \
+                "       [--backup-dir <directory>] [--no-backup]"
             exit 0
             ;;
     esac

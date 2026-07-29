@@ -10,6 +10,11 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 SOURCE_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 BUILD_DIR=${MDVWB_BUILD_DIR:-$SOURCE_DIR/out/build/wirenboard-release}
 OPERATION=install
+FORCE=0
+ALLOW_DOWNGRADE=0
+DRY_RUN=0
+NO_BACKUP=0
+BACKUP_DIR=
 
 if [ "$#" -gt 0 ]; then
     case "$1" in
@@ -20,20 +25,41 @@ if [ "$#" -gt 0 ]; then
     esac
 fi
 
-FORWARD_ARGUMENTS=
-for argument in "$@"; do
-    case "$argument" in
-        --force|--allow-downgrade|--dry-run)
-            FORWARD_ARGUMENTS="$FORWARD_ARGUMENTS $argument"
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --force)
+            FORCE=1
+            shift
+            ;;
+        --allow-downgrade)
+            ALLOW_DOWNGRADE=1
+            shift
+            ;;
+        --dry-run)
+            DRY_RUN=1
+            shift
+            ;;
+        --no-backup)
+            NO_BACKUP=1
+            shift
+            ;;
+        --backup-dir)
+            [ "$#" -ge 2 ] || {
+                echo "--backup-dir requires a directory." >&2
+                exit 2
+            }
+            BACKUP_DIR=$2
+            shift 2
             ;;
         --help|-h)
             printf '%s\n' \
                 "Usage: ./deploy/install_wirenboard.sh [install|update]" \
-                "       [--force] [--allow-downgrade] [--dry-run]"
+                "       [--force] [--allow-downgrade] [--dry-run]" \
+                "       [--backup-dir <directory>] [--no-backup]"
             exit 0
             ;;
         *)
-            echo "Unknown installer argument: $argument" >&2
+            echo "Unknown installer argument: $1" >&2
             exit 2
             ;;
     esac
@@ -102,7 +128,11 @@ sed \
     sha256sum -c SHA256SUMS
 )
 
-# FORWARD_ARGUMENTS contains only three fixed flag names validated above.
-# shellcheck disable=SC2086
-sh "$SCRIPT_DIR/mdvwb-setup" "$OPERATION" \
-    --package "$STAGING" --method source $FORWARD_ARGUMENTS
+set -- "$OPERATION" --package "$STAGING" --method source
+[ "$FORCE" -eq 0 ] || set -- "$@" --force
+[ "$ALLOW_DOWNGRADE" -eq 0 ] || set -- "$@" --allow-downgrade
+[ "$DRY_RUN" -eq 0 ] || set -- "$@" --dry-run
+[ "$NO_BACKUP" -eq 0 ] || set -- "$@" --no-backup
+[ -z "$BACKUP_DIR" ] || set -- "$@" --backup-dir "$BACKUP_DIR"
+
+sh "$SCRIPT_DIR/mdvwb-setup" "$@"
