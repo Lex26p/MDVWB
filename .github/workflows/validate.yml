@@ -59,7 +59,11 @@ jobs:
           set -euxo pipefail
           sh -n deploy/offline-install.sh
           sh -n deploy/install_wirenboard.sh
+          sh -n deploy/mdvwb-setup
           sh -n deploy/mdvwb-run
+          sh -n tests/deploy/mdvwb_setup_test.sh
+          sh tests/deploy/mdvwb_setup_test.sh
+          python3 -m json.tool deploy/package-manifest.json.in >/dev/null
           python3 -m json.tool deploy/buses.default.json >/dev/null
           python3 -m json.tool deploy/dashboard.default.json >/dev/null
           python3 -m json.tool deploy/schedules.default.json >/dev/null
@@ -76,6 +80,7 @@ jobs:
           test -f www/fancoils/model.js
           test -f www/fancoils/schedule-model.js
           test -f www/fancoils/scheduler-status-ui.js
+          test -f www/fancoils/scheduler-status-health.js
           test -f www/fancoils/styles.css
 
       - name: Configure Release build

@@ -7,6 +7,28 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+FORCE=0
+ALLOW_DOWNGRADE=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --force)
+            FORCE=1
+            ;;
+        --allow-downgrade)
+            ALLOW_DOWNGRADE=1
+            ;;
+        --help|-h)
+            printf '%s\n' "Usage: ./offline-install.sh [--force] [--allow-downgrade]"
+            exit 0
+            ;;
+        *)
+            echo "Unknown installer argument: $1" >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
 EXPECTED_ARCH="arm64"
 ACTUAL_ARCH=$(dpkg --print-architecture 2>/dev/null || true)
 WWW_ROOT=${MDVWB_WWW_ROOT:-/var/www}
@@ -23,6 +45,7 @@ fi
 
 for required in \
     MDVWB mdvwb-offline mdvwb-manager mdvwb-scheduler mdvwb-run \
+    mdvwb-setup manifest.json \
     'mdvwb@.service' mdvwb.env mdvwb-manager.service mdvwb-manager.env \
     mdvwb-scheduler.service mdvwb-scheduler.env buses.default.json \
     buses.example.json dashboard.default.json schedules.default.json \
@@ -32,6 +55,7 @@ for required in \
     www/mdvwb/dashboard-placement-editor.js \
     www/fancoils/index.html www/fancoils/app.js www/fancoils/model.js \
     www/fancoils/schedule-model.js www/fancoils/scheduler-status-ui.js \
+    www/fancoils/scheduler-status-health.js \
     www/fancoils/styles.css SHA256SUMS; do
     if [ ! -e "$SCRIPT_DIR/$required" ]; then
         echo "Offline package is incomplete: missing $required" >&2
@@ -44,17 +68,27 @@ done
     sha256sum -c SHA256SUMS
 )
 
+set -- check-version --manifest "$SCRIPT_DIR/manifest.json"
+if [ "$FORCE" -eq 1 ]; then
+    set -- "$@" --force
+fi
+if [ "$ALLOW_DOWNGRADE" -eq 1 ]; then
+    set -- "$@" --allow-downgrade
+fi
+"$SCRIPT_DIR/mdvwb-setup" "$@"
+
 systemctl stop mdvwb-scheduler.service 2>/dev/null || true
 systemctl stop mdvwb-manager.service 2>/dev/null || true
 
 install -d -m 0755 \
-    /usr/local/bin /usr/local/lib/mdvwb /etc/mdvwb /etc/default \
+    /usr/local/bin /usr/local/sbin /usr/local/lib/mdvwb /etc/mdvwb /etc/default \
     /etc/systemd/system /var/lib/mdvwb \
     "$WWW_ROOT/mdvwb" "$WWW_ROOT/fancoils" "$WWW_ROOT/fancoils/assets"
 install -m 0755 "$SCRIPT_DIR/MDVWB" /usr/local/bin/MDVWB
 install -m 0755 "$SCRIPT_DIR/mdvwb-offline" /usr/local/bin/mdvwb-offline
 install -m 0755 "$SCRIPT_DIR/mdvwb-manager" /usr/local/bin/mdvwb-manager
 install -m 0755 "$SCRIPT_DIR/mdvwb-scheduler" /usr/local/bin/mdvwb-scheduler
+install -m 0755 "$SCRIPT_DIR/mdvwb-setup" /usr/local/sbin/mdvwb-setup
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" /usr/local/lib/mdvwb/mdvwb-run
 install -m 0640 "$SCRIPT_DIR/mdvwb.env" /usr/local/lib/mdvwb/mdvwb.env
 install -m 0644 "$SCRIPT_DIR/mdvwb@.service" /etc/systemd/system/mdvwb@.service
@@ -158,6 +192,10 @@ if ! systemctl is-active --quiet mdvwb-scheduler.service; then
     systemctl status mdvwb-scheduler.service --no-pager >&2 || true
     exit 6
 fi
+
+/usr/local/sbin/mdvwb-setup write-state \
+    --manifest "$SCRIPT_DIR/manifest.json" \
+    --method offline
 
 printf '%s\n' "Installed MDVWB multi-bus manager and scheduler."
 printf '%s\n' "Configuration: /etc/mdvwb/buses.json"

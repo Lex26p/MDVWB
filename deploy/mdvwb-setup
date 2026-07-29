@@ -1,0 +1,408 @@
+#!/bin/sh
+set -eu
+
+PROGRAM=${0##*/}
+DEFAULT_STATE_PATH=${MDVWB_INSTALL_STATE:-/var/lib/mdvwb/installation.json}
+
+fail()
+{
+    code=$1
+    shift
+    printf '%s: %s\n' "$PROGRAM" "$*" >&2
+    exit "$code"
+}
+
+usage()
+{
+    cat <<'EOF'
+MDVWB installation metadata utility
+
+Usage:
+  mdvwb-setup manifest --manifest <manifest.json>
+  mdvwb-setup status [--state <installation.json>]
+  mdvwb-setup check-version --manifest <manifest.json>
+      [--state <installation.json>] [--force] [--allow-downgrade]
+  mdvwb-setup write-state --manifest <manifest.json>
+      --method <offline|online|source|rollback>
+      [--state <installation.json>]
+
+Exit codes:
+  0  operation is valid
+  2  invalid arguments, manifest or installation state
+  3  installation state does not exist
+  4  the requested version is already installed
+  5  downgrade is blocked
+  6  package and installed architectures differ
+EOF
+}
+
+require_file()
+{
+    [ -f "$1" ] || fail 2 "file does not exist: $1"
+    [ -r "$1" ] || fail 2 "file is not readable: $1"
+}
+
+json_string()
+{
+    file=$1
+    key=$2
+    values=$(sed -n \
+        "s/^[[:space:]]*\"$key\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p" \
+        "$file")
+    count=$(printf '%s\n' "$values" | awk 'NF { count++ } END { print count + 0 }')
+    [ "$count" -eq 1 ] ||
+        fail 2 "JSON field '$key' must occur exactly once in $file"
+    printf '%s\n' "$values"
+}
+
+json_number()
+{
+    file=$1
+    key=$2
+    values=$(sed -n \
+        "s/^[[:space:]]*\"$key\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\)[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p" \
+        "$file")
+    count=$(printf '%s\n' "$values" | awk 'NF { count++ } END { print count + 0 }')
+    [ "$count" -eq 1 ] ||
+        fail 2 "JSON field '$key' must occur exactly once in $file"
+    printf '%s\n' "$values"
+}
+
+validate_version()
+{
+    version=$1
+    printf '%s\n' "$version" | awk -F. '
+        NF != 3 { exit 1 }
+        {
+            for (field = 1; field <= 3; ++field) {
+                if ($field !~ /^[0-9]+$/) {
+                    exit 1
+                }
+                if (length($field) > 1 && substr($field, 1, 1) == "0") {
+                    exit 1
+                }
+            }
+        }
+    ' || fail 2 "version must use canonical MAJOR.MINOR.PATCH form: $version"
+}
+
+validate_commit()
+{
+    commit=$1
+    if [ "$commit" = "unknown" ]; then
+        return
+    fi
+    [ "${#commit}" -eq 40 ] ||
+        fail 2 "commit must be a 40-character lowercase SHA or unknown"
+    case "$commit" in
+        *[!0-9a-f]*)
+            fail 2 "commit must be a 40-character lowercase SHA or unknown"
+            ;;
+    esac
+}
+
+validate_timestamp()
+{
+    timestamp=$1
+    case "$timestamp" in
+        unknown|????-??-??T??:??:??Z)
+            ;;
+        *)
+            fail 2 "timestamp must use UTC YYYY-MM-DDTHH:MM:SSZ form or unknown"
+            ;;
+    esac
+}
+
+load_manifest()
+{
+    MANIFEST_PATH=$1
+    require_file "$MANIFEST_PATH"
+
+    MANIFEST_FORMAT=$(json_number "$MANIFEST_PATH" packageFormat)
+    MANIFEST_PRODUCT=$(json_string "$MANIFEST_PATH" product)
+    MANIFEST_VERSION=$(json_string "$MANIFEST_PATH" version)
+    MANIFEST_COMMIT=$(json_string "$MANIFEST_PATH" commit)
+    MANIFEST_ARCHITECTURE=$(json_string "$MANIFEST_PATH" architecture)
+    MANIFEST_BUILD_OS=$(json_string "$MANIFEST_PATH" buildOs)
+    MANIFEST_BUILT_AT=$(json_string "$MANIFEST_PATH" builtAt)
+
+    [ "$MANIFEST_FORMAT" = "1" ] ||
+        fail 2 "unsupported package format: $MANIFEST_FORMAT"
+    [ "$MANIFEST_PRODUCT" = "MDVWB" ] ||
+        fail 2 "unexpected package product: $MANIFEST_PRODUCT"
+    validate_version "$MANIFEST_VERSION"
+    validate_commit "$MANIFEST_COMMIT"
+    [ "$MANIFEST_ARCHITECTURE" = "arm64" ] ||
+        fail 2 "unsupported package architecture: $MANIFEST_ARCHITECTURE"
+    [ -n "$MANIFEST_BUILD_OS" ] ||
+        fail 2 "package buildOs must not be empty"
+    validate_timestamp "$MANIFEST_BUILT_AT"
+}
+
+load_state()
+{
+    STATE_PATH=$1
+    require_file "$STATE_PATH"
+
+    STATE_FORMAT=$(json_number "$STATE_PATH" stateFormat)
+    STATE_PRODUCT=$(json_string "$STATE_PATH" product)
+    STATE_VERSION=$(json_string "$STATE_PATH" version)
+    STATE_COMMIT=$(json_string "$STATE_PATH" commit)
+    STATE_ARCHITECTURE=$(json_string "$STATE_PATH" architecture)
+    STATE_INSTALLED_AT=$(json_string "$STATE_PATH" installedAt)
+    STATE_METHOD=$(json_string "$STATE_PATH" installMethod)
+
+    [ "$STATE_FORMAT" = "1" ] ||
+        fail 2 "unsupported installation state format: $STATE_FORMAT"
+    [ "$STATE_PRODUCT" = "MDVWB" ] ||
+        fail 2 "unexpected installation state product: $STATE_PRODUCT"
+    validate_version "$STATE_VERSION"
+    validate_commit "$STATE_COMMIT"
+    [ "$STATE_ARCHITECTURE" = "arm64" ] ||
+        fail 2 "unsupported installed architecture: $STATE_ARCHITECTURE"
+    validate_timestamp "$STATE_INSTALLED_AT"
+    case "$STATE_METHOD" in
+        offline|online|source|rollback)
+            ;;
+        *)
+            fail 2 "unsupported install method: $STATE_METHOD"
+            ;;
+    esac
+}
+
+compare_versions()
+{
+    left=$1
+    right=$2
+    awk -v left="$left" -v right="$right" 'BEGIN {
+        split(left, a, ".")
+        split(right, b, ".")
+        for (field = 1; field <= 3; ++field) {
+            if ((a[field] + 0) < (b[field] + 0)) {
+                print -1
+                exit
+            }
+            if ((a[field] + 0) > (b[field] + 0)) {
+                print 1
+                exit
+            }
+        }
+        print 0
+    }'
+}
+
+command_manifest()
+{
+    manifest=
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --manifest)
+                [ "$#" -ge 2 ] || fail 2 "--manifest requires a path"
+                manifest=$2
+                shift 2
+                ;;
+            *)
+                fail 2 "unknown manifest argument: $1"
+                ;;
+        esac
+    done
+    [ -n "$manifest" ] || fail 2 "--manifest is required"
+    load_manifest "$manifest"
+
+    printf '%s\n' \
+        "PACKAGE_OK product=$MANIFEST_PRODUCT version=$MANIFEST_VERSION" \
+        "commit=$MANIFEST_COMMIT" \
+        "architecture=$MANIFEST_ARCHITECTURE" \
+        "buildOs=$MANIFEST_BUILD_OS" \
+        "builtAt=$MANIFEST_BUILT_AT"
+}
+
+command_status()
+{
+    state=$DEFAULT_STATE_PATH
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --state)
+                [ "$#" -ge 2 ] || fail 2 "--state requires a path"
+                state=$2
+                shift 2
+                ;;
+            *)
+                fail 2 "unknown status argument: $1"
+                ;;
+        esac
+    done
+
+    if [ ! -s "$state" ]; then
+        printf 'NOT_INSTALLED state=%s\n' "$state"
+        return 3
+    fi
+
+    load_state "$state"
+    printf '%s\n' \
+        "INSTALLED product=$STATE_PRODUCT version=$STATE_VERSION" \
+        "commit=$STATE_COMMIT" \
+        "architecture=$STATE_ARCHITECTURE" \
+        "installedAt=$STATE_INSTALLED_AT" \
+        "installMethod=$STATE_METHOD" \
+        "state=$state"
+}
+
+command_check_version()
+{
+    manifest=
+    state=$DEFAULT_STATE_PATH
+    force=0
+    allow_downgrade=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --manifest)
+                [ "$#" -ge 2 ] || fail 2 "--manifest requires a path"
+                manifest=$2
+                shift 2
+                ;;
+            --state)
+                [ "$#" -ge 2 ] || fail 2 "--state requires a path"
+                state=$2
+                shift 2
+                ;;
+            --force)
+                force=1
+                shift
+                ;;
+            --allow-downgrade)
+                allow_downgrade=1
+                shift
+                ;;
+            *)
+                fail 2 "unknown check-version argument: $1"
+                ;;
+        esac
+    done
+
+    [ -n "$manifest" ] || fail 2 "--manifest is required"
+    load_manifest "$manifest"
+
+    if [ ! -s "$state" ]; then
+        printf 'ACTION=install current=none target=%s architecture=%s\n' \
+            "$MANIFEST_VERSION" "$MANIFEST_ARCHITECTURE"
+        return 0
+    fi
+
+    load_state "$state"
+    [ "$STATE_ARCHITECTURE" = "$MANIFEST_ARCHITECTURE" ] ||
+        fail 6 "installed architecture $STATE_ARCHITECTURE differs from package architecture $MANIFEST_ARCHITECTURE"
+
+    comparison=$(compare_versions "$MANIFEST_VERSION" "$STATE_VERSION")
+    if [ "$comparison" -gt 0 ]; then
+        action=update
+    elif [ "$comparison" -eq 0 ]; then
+        if [ "$force" -ne 1 ]; then
+            fail 4 "MDVWB $STATE_VERSION is already installed; use --force for repair"
+        fi
+        action=repair
+    else
+        if [ "$allow_downgrade" -ne 1 ]; then
+            fail 5 "downgrade from $STATE_VERSION to $MANIFEST_VERSION requires --allow-downgrade"
+        fi
+        action=downgrade
+    fi
+
+    printf 'ACTION=%s current=%s target=%s architecture=%s\n' \
+        "$action" "$STATE_VERSION" "$MANIFEST_VERSION" "$MANIFEST_ARCHITECTURE"
+}
+
+command_write_state()
+{
+    manifest=
+    state=$DEFAULT_STATE_PATH
+    method=
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --manifest)
+                [ "$#" -ge 2 ] || fail 2 "--manifest requires a path"
+                manifest=$2
+                shift 2
+                ;;
+            --state)
+                [ "$#" -ge 2 ] || fail 2 "--state requires a path"
+                state=$2
+                shift 2
+                ;;
+            --method)
+                [ "$#" -ge 2 ] || fail 2 "--method requires a value"
+                method=$2
+                shift 2
+                ;;
+            *)
+                fail 2 "unknown write-state argument: $1"
+                ;;
+        esac
+    done
+
+    [ -n "$manifest" ] || fail 2 "--manifest is required"
+    case "$method" in
+        offline|online|source|rollback)
+            ;;
+        *)
+            fail 2 "--method must be offline, online, source or rollback"
+            ;;
+    esac
+
+    load_manifest "$manifest"
+    installed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    state_directory=${state%/*}
+    if [ "$state_directory" = "$state" ]; then
+        state_directory=.
+    fi
+    mkdir -p "$state_directory"
+    temporary="$state.tmp.$$"
+    trap 'rm -f "$temporary"' EXIT HUP INT TERM
+    umask 027
+    cat >"$temporary" <<EOF
+{
+  "stateFormat": 1,
+  "product": "MDVWB",
+  "version": "$MANIFEST_VERSION",
+  "commit": "$MANIFEST_COMMIT",
+  "architecture": "$MANIFEST_ARCHITECTURE",
+  "installedAt": "$installed_at",
+  "installMethod": "$method"
+}
+EOF
+    chmod 0640 "$temporary"
+    mv -f "$temporary" "$state"
+    trap - EXIT HUP INT TERM
+
+    printf 'STATE_WRITTEN version=%s method=%s path=%s\n' \
+        "$MANIFEST_VERSION" "$method" "$state"
+}
+
+command=${1:-help}
+if [ "$#" -gt 0 ]; then
+    shift
+fi
+
+case "$command" in
+    manifest)
+        command_manifest "$@"
+        ;;
+    status)
+        command_status "$@"
+        ;;
+    check-version)
+        command_check_version "$@"
+        ;;
+    write-state)
+        command_write_state "$@"
+        ;;
+    help|--help|-h)
+        usage
+        ;;
+    *)
+        usage >&2
+        fail 2 "unknown command: $command"
+        ;;
+esac

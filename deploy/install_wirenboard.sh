@@ -7,9 +7,51 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+FORCE=0
+ALLOW_DOWNGRADE=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --force)
+            FORCE=1
+            ;;
+        --allow-downgrade)
+            ALLOW_DOWNGRADE=1
+            ;;
+        --help|-h)
+            printf '%s\n' "Usage: ./deploy/install_wirenboard.sh [--force] [--allow-downgrade]"
+            exit 0
+            ;;
+        *)
+            echo "Unknown installer argument: $1" >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
+
 SOURCE_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 BUILD_DIR=${MDVWB_BUILD_DIR:-$SOURCE_DIR/out/build/wirenboard-release}
 WWW_ROOT=${MDVWB_WWW_ROOT:-/var/www}
+
+PROJECT_VERSION=$(sed -n     's/^project(MDVWB VERSION \([0-9][0-9.]*\) LANGUAGES CXX)$/\1/p'     "$SOURCE_DIR/CMakeLists.txt")
+[ -n "$PROJECT_VERSION" ] || {
+    echo "Cannot determine MDVWB project version." >&2
+    exit 2
+}
+PROJECT_COMMIT=$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || printf '%s' unknown)
+BUILT_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+SOURCE_MANIFEST=${TMPDIR:-/tmp}/mdvwb-source-manifest.$$.json
+trap 'rm -f "$SOURCE_MANIFEST"' EXIT HUP INT TERM
+sed     -e "s/@MDVWB_VERSION@/$PROJECT_VERSION/g"     -e "s/@MDVWB_COMMIT@/$PROJECT_COMMIT/g"     -e "s/@MDVWB_BUILT_AT@/$BUILT_AT/g"     "$SCRIPT_DIR/package-manifest.json.in" >"$SOURCE_MANIFEST"
+
+set -- check-version --manifest "$SOURCE_MANIFEST"
+if [ "$FORCE" -eq 1 ]; then
+    set -- "$@" --force
+fi
+if [ "$ALLOW_DOWNGRADE" -eq 1 ]; then
+    set -- "$@" --allow-downgrade
+fi
+"$SCRIPT_DIR/mdvwb-setup" "$@"
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -22,12 +64,13 @@ cmake --build "$BUILD_DIR" --parallel 1
 (cd "$BUILD_DIR" && ctest --output-on-failure)
 
 install -d -m 0755 \
-    /usr/local/bin /usr/local/lib/mdvwb /etc/mdvwb /etc/default \
+    /usr/local/bin /usr/local/sbin /usr/local/lib/mdvwb /etc/mdvwb /etc/default \
     /etc/systemd/system /var/lib/mdvwb "$WWW_ROOT/mdvwb"
 install -m 0755 "$BUILD_DIR/MDVWB" /usr/local/bin/MDVWB
 install -m 0755 "$BUILD_DIR/mdvwb-offline" /usr/local/bin/mdvwb-offline
 install -m 0755 "$BUILD_DIR/mdvwb-manager" /usr/local/bin/mdvwb-manager
 install -m 0755 "$BUILD_DIR/mdvwb-scheduler" /usr/local/bin/mdvwb-scheduler
+install -m 0755 "$SCRIPT_DIR/mdvwb-setup" /usr/local/sbin/mdvwb-setup
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" /usr/local/lib/mdvwb/mdvwb-run
 install -m 0640 "$SCRIPT_DIR/mdvwb.env" /usr/local/lib/mdvwb/mdvwb.env
 install -m 0644 "$SCRIPT_DIR/mdvwb@.service" /etc/systemd/system/mdvwb@.service
@@ -66,5 +109,9 @@ systemctl daemon-reload
 /usr/local/bin/mdvwb-manager apply /etc/mdvwb/buses.json
 systemctl enable --now mdvwb-manager.service
 systemctl enable --now mdvwb-scheduler.service
+
+/usr/local/sbin/mdvwb-setup write-state \
+    --manifest "$SOURCE_MANIFEST" \
+    --method source
 
 echo "Installed MDVWB manager, scheduler and web page: http://<WB-address>/mdvwb/"

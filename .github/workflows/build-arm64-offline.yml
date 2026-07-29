@@ -46,7 +46,10 @@ jobs:
 
               sh -n deploy/offline-install.sh
               sh -n deploy/install_wirenboard.sh
+              sh -n deploy/mdvwb-setup
               sh -n deploy/mdvwb-run
+              sh tests/deploy/mdvwb_setup_test.sh
+              python3 -m json.tool deploy/package-manifest.json.in >/dev/null
               python3 -m json.tool deploy/buses.default.json >/dev/null
               python3 -m json.tool deploy/dashboard.default.json >/dev/null
               python3 -m json.tool deploy/schedules.default.json >/dev/null
@@ -78,6 +81,7 @@ jobs:
           install -m 0755 out/build/arm64-release/mdvwb-manager dist/MDVWB-arm64/mdvwb-manager
           install -m 0755 out/build/arm64-release/mdvwb-scheduler dist/MDVWB-arm64/mdvwb-scheduler
           install -m 0755 deploy/mdvwb-run dist/MDVWB-arm64/mdvwb-run
+          install -m 0755 deploy/mdvwb-setup dist/MDVWB-arm64/mdvwb-setup
           install -m 0755 deploy/offline-install.sh dist/MDVWB-arm64/offline-install.sh
           install -m 0644 deploy/mdvwb@.service dist/MDVWB-arm64/mdvwb@.service
           install -m 0640 deploy/mdvwb.env dist/MDVWB-arm64/mdvwb.env
@@ -91,10 +95,20 @@ jobs:
           install -m 0640 deploy/schedules.default.json dist/MDVWB-arm64/schedules.default.json
           install -m 0644 docs/RELEASE_CHECKLIST.md dist/MDVWB-arm64/docs/RELEASE_CHECKLIST.md
 
+          PROJECT_VERSION=$(sed -n             's/^project(MDVWB VERSION \([0-9][0-9.]*\) LANGUAGES CXX)$/\1/p'             CMakeLists.txt)
+          test -n "$PROJECT_VERSION"
+          PROJECT_COMMIT=$(git rev-parse HEAD)
+          BUILT_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          sed             -e "s/@MDVWB_VERSION@/$PROJECT_VERSION/g"             -e "s/@MDVWB_COMMIT@/$PROJECT_COMMIT/g"             -e "s/@MDVWB_BUILT_AT@/$BUILT_AT/g"             deploy/package-manifest.json.in >dist/MDVWB-arm64/manifest.json
+
           cp -a www/mdvwb dist/MDVWB-arm64/www/mdvwb
           cp -a www/fancoils dist/MDVWB-arm64/www/fancoils
 
           test -f dist/MDVWB-arm64/buses.default.json
+          test -f dist/MDVWB-arm64/mdvwb-setup
+          test -f dist/MDVWB-arm64/manifest.json
+          sh dist/MDVWB-arm64/mdvwb-setup manifest             --manifest dist/MDVWB-arm64/manifest.json
+          sh dist/MDVWB-arm64/mdvwb-setup check-version             --manifest dist/MDVWB-arm64/manifest.json             --state dist/MDVWB-arm64/not-installed.json
           test -f dist/MDVWB-arm64/www/mdvwb/dashboard-editor.js
           test -f dist/MDVWB-arm64/www/mdvwb/dashboard-model.js
           test -f dist/MDVWB-arm64/www/mdvwb/dashboard-placement-editor.js
@@ -102,6 +116,7 @@ jobs:
           test -f dist/MDVWB-arm64/www/fancoils/app.js
           test -f dist/MDVWB-arm64/www/fancoils/schedule-model.js
           test -f dist/MDVWB-arm64/www/fancoils/scheduler-status-ui.js
+          test -f dist/MDVWB-arm64/www/fancoils/scheduler-status-health.js
 
           file dist/MDVWB-arm64/MDVWB
           file dist/MDVWB-arm64/mdvwb-offline

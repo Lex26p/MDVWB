@@ -1,0 +1,9 @@
+{
+  "packageFormat": 1,
+  "product": "MDVWB",
+  "version": "@MDVWB_VERSION@",
+  "commit": "@MDVWB_COMMIT@",
+  "architecture": "arm64",
+  "buildOs": "debian-bullseye",
+  "builtAt": "@MDVWB_BUILT_AT@"
+}
