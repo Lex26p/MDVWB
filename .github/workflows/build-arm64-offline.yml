@@ -45,7 +45,9 @@ jobs:
                 python3
 
               sh -n deploy/offline-install.sh
+              sh -n deploy/install_wirenboard.sh
               sh -n deploy/mdvwb-run
+              python3 -m json.tool deploy/buses.default.json >/dev/null
               python3 -m json.tool deploy/dashboard.default.json >/dev/null
               python3 -m json.tool deploy/schedules.default.json >/dev/null
 
@@ -60,6 +62,7 @@ jobs:
               ./out/build/arm64-release/MDVWB --self-test
               ./out/build/arm64-release/mdvwb-offline --self-test
               ./out/build/arm64-release/mdvwb-manager validate config/buses.example.json
+              ./out/build/arm64-release/mdvwb-manager validate deploy/buses.default.json
               ./out/build/arm64-release/mdvwb-scheduler --help
             '
 
@@ -82,6 +85,7 @@ jobs:
           install -m 0640 deploy/mdvwb-manager.env dist/MDVWB-arm64/mdvwb-manager.env
           install -m 0644 deploy/mdvwb-scheduler.service dist/MDVWB-arm64/mdvwb-scheduler.service
           install -m 0640 deploy/mdvwb-scheduler.env dist/MDVWB-arm64/mdvwb-scheduler.env
+          install -m 0640 deploy/buses.default.json dist/MDVWB-arm64/buses.default.json
           install -m 0640 deploy/buses.example.json dist/MDVWB-arm64/buses.example.json
           install -m 0640 deploy/dashboard.default.json dist/MDVWB-arm64/dashboard.default.json
           install -m 0640 deploy/schedules.default.json dist/MDVWB-arm64/schedules.default.json
@@ -90,6 +94,7 @@ jobs:
           cp -a www/mdvwb dist/MDVWB-arm64/www/mdvwb
           cp -a www/fancoils dist/MDVWB-arm64/www/fancoils
 
+          test -f dist/MDVWB-arm64/buses.default.json
           test -f dist/MDVWB-arm64/www/mdvwb/dashboard-editor.js
           test -f dist/MDVWB-arm64/www/mdvwb/dashboard-model.js
           test -f dist/MDVWB-arm64/www/mdvwb/dashboard-placement-editor.js

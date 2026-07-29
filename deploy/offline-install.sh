@@ -24,8 +24,8 @@ fi
 for required in \
     MDVWB mdvwb-offline mdvwb-manager mdvwb-scheduler mdvwb-run \
     'mdvwb@.service' mdvwb.env mdvwb-manager.service mdvwb-manager.env \
-    mdvwb-scheduler.service mdvwb-scheduler.env buses.example.json \
-    dashboard.default.json schedules.default.json \
+    mdvwb-scheduler.service mdvwb-scheduler.env buses.default.json \
+    buses.example.json dashboard.default.json schedules.default.json \
     www/mdvwb/index.html www/mdvwb/app.js www/mdvwb/model.js \
     www/mdvwb/mqtt-client.js www/mdvwb/styles.css \
     www/mdvwb/dashboard-editor.js www/mdvwb/dashboard-model.js \
@@ -74,12 +74,22 @@ cp -R "$SCRIPT_DIR/www/fancoils/." "$WWW_ROOT/fancoils/"
 find "$WWW_ROOT/mdvwb" "$WWW_ROOT/fancoils" -type d -exec chmod 0755 {} +
 find "$WWW_ROOT/mdvwb" "$WWW_ROOT/fancoils" -type f -exec chmod 0644 {} +
 
-# Build the first buses.json from the currently working per-bus files. Existing
-# buses.json is never overwritten by an update.
+# Build the first buses.json only from valid legacy files. A controller without
+# legacy files starts with no configured buses. A malformed legacy file stops
+# installation instead of silently activating example ports and addresses.
 if [ ! -s /etc/mdvwb/buses.json ]; then
-    if ! /usr/local/bin/mdvwb-manager migrate-defaults /etc/mdvwb/buses.json; then
-        install -m 0640 "$SCRIPT_DIR/buses.example.json" /etc/mdvwb/buses.json
-        echo "No legacy configuration was found; installed buses.example.json." >&2
+    if /usr/local/bin/mdvwb-manager migrate-defaults /etc/mdvwb/buses.json; then
+        echo "Migrated legacy MDVWB bus configuration."
+    else
+        MIGRATION_STATUS=$?
+        if [ "$MIGRATION_STATUS" -eq 3 ]; then
+            install -m 0640 "$SCRIPT_DIR/buses.default.json" /etc/mdvwb/buses.json
+            echo "No legacy configuration was found; installed an empty buses.json."
+        else
+            echo "Legacy MDVWB configuration exists but could not be migrated." >&2
+            echo "Fix the reported legacy configuration error and run the installer again." >&2
+            exit "$MIGRATION_STATUS"
+        fi
     fi
 fi
 

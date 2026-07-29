@@ -5,10 +5,13 @@
 #include "mdvwb_manager_mqtt.h"
 #include "mdvwb_migration.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <ostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -45,6 +48,53 @@ std::string JoinAddresses(const std::vector<int>& addresses) {
     return result.str();
 }
 
+bool IsLegacyCandidateName(std::string_view filename) {
+    if (filename == "mdvwb") {
+        return true;
+    }
+
+    constexpr std::string_view Prefix = "mdvwb-";
+    if (!filename.starts_with(Prefix)) {
+        return false;
+    }
+
+    const std::string_view suffix = filename.substr(Prefix.size());
+    return std::all_of(suffix.begin(), suffix.end(), [](char character) {
+        return std::isdigit(static_cast<unsigned char>(character)) != 0;
+    });
+}
+
+bool HasLegacyConfigurationCandidates(const std::filesystem::path& directory) {
+    std::error_code error;
+    if (!std::filesystem::is_directory(directory, error)) {
+        const std::string suffix = error ? ": " + error.message() : std::string{};
+        throw std::runtime_error(
+            "legacy configuration directory does not exist: " +
+            directory.string() + suffix);
+    }
+
+    for (std::filesystem::directory_iterator iterator(directory, error), end;
+         iterator != end;
+         iterator.increment(error)) {
+        if (error) {
+            throw std::runtime_error(
+                "cannot enumerate legacy configuration directory: " +
+                error.message());
+        }
+
+        if (IsLegacyCandidateName(iterator->path().filename().string())) {
+            return true;
+        }
+    }
+
+    if (error) {
+        throw std::runtime_error(
+            "cannot enumerate legacy configuration directory: " +
+            error.message());
+    }
+    return false;
+}
+
 void PrintHelp(std::ostream& output) {
     output
         << "MDVWB configuration manager\n"
@@ -63,6 +113,7 @@ void PrintHelp(std::ostream& output) {
         << "mdvwb@N.service instances. apply must be run as root.\n"
         << "mqtt runs the long-lived MQTT configuration endpoint and must be run as root.\n"
         << "migrate-defaults converts existing /etc/default/mdvwb-N files to buses.json.\n"
+        << "migrate-defaults returns code 3 when no legacy MDVWB files are present.\n"
         << "\n"
         << "When the path is omitted, MDVWB_BUSES_CONFIG is used if set;\n"
         << "otherwise /etc/mdvwb/buses.json is used.\n";
@@ -158,7 +209,14 @@ int RunManagerCommand(
                 errors << "MANAGER_ERROR: migrate-defaults must be run as root\n";
                 return 1;
             }
+
             const ServiceSyncPaths paths = ServiceSyncPathsFromEnvironment();
+            if (!HasLegacyConfigurationCandidates(paths.defaultDirectory)) {
+                errors
+                    << "MIGRATION_NOT_FOUND: no legacy MDVWB bus configurations were found\n";
+                return 3;
+            }
+
             NativeCommandRunner runner;
             const BusesConfig migrated = MigrateLegacyDefaults(paths, runner);
             WriteTextFileAtomically(configPath, SerializeBusesConfig(migrated));

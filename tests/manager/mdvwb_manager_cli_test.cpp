@@ -1,13 +1,16 @@
 #include "mdvwb_manager_cli.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -17,6 +20,73 @@ void Require(bool condition, std::string_view message) {
         throw std::runtime_error(std::string(message));
     }
 }
+
+void SetEnvironment(std::string_view name, std::optional<std::string_view> value) {
+#ifdef _WIN32
+    const std::string text = value.has_value() ? std::string(*value) : std::string{};
+    if (_putenv_s(std::string(name).c_str(), text.c_str()) != 0) {
+        throw std::runtime_error("cannot update test environment");
+    }
+#else
+    const int result = value.has_value()
+        ? setenv(std::string(name).c_str(), std::string(*value).c_str(), 1)
+        : unsetenv(std::string(name).c_str());
+    if (result != 0) {
+        throw std::runtime_error("cannot update test environment");
+    }
+#endif
+}
+
+class ScopedEnvironment final {
+public:
+    ScopedEnvironment(std::string name, std::string value)
+        : name_(std::move(name)) {
+        if (const char* current = std::getenv(name_.c_str()); current != nullptr) {
+            previous_ = current;
+        }
+        SetEnvironment(name_, std::string_view(value));
+    }
+
+    ~ScopedEnvironment() {
+        try {
+            if (previous_.has_value()) {
+                SetEnvironment(name_, std::string_view(*previous_));
+            } else {
+                SetEnvironment(name_, std::nullopt);
+            }
+        } catch (...) {
+        }
+    }
+
+private:
+    std::string name_;
+    std::optional<std::string> previous_;
+};
+
+class TemporaryDirectory final {
+public:
+    TemporaryDirectory() {
+        static unsigned long long counter = 0;
+        const auto token =
+            std::chrono::steady_clock::now().time_since_epoch().count();
+        path_ = std::filesystem::temp_directory_path() /
+            ("mdvwb-manager-cli-test-" + std::to_string(token) + "-" +
+             std::to_string(++counter));
+        std::filesystem::create_directories(path_);
+    }
+
+    ~TemporaryDirectory() {
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+    const std::filesystem::path& Path() const {
+        return path_;
+    }
+
+private:
+    std::filesystem::path path_;
+};
 
 class TemporaryConfig final {
 public:
@@ -44,6 +114,17 @@ public:
 private:
     std::filesystem::path path_;
 };
+
+void Write(const std::filesystem::path& path, std::string_view content) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) {
+        throw std::runtime_error("cannot create test file");
+    }
+    output << content;
+    if (!output) {
+        throw std::runtime_error("cannot write test file");
+    }
+}
 
 struct CommandResult {
     int code = 0;
@@ -100,6 +181,48 @@ void TestSummary() {
         "disabled bus summary is wrong");
 }
 
+void TestMigrationNotFoundExitCode() {
+    TemporaryDirectory defaults;
+    const std::filesystem::path target = defaults.Path() / "buses.json";
+    const ScopedEnvironment allow("MDVWB_ALLOW_UNPRIVILEGED_APPLY", "1");
+    const ScopedEnvironment directory("MDVWB_DEFAULT_DIR", defaults.Path().string());
+
+    const CommandResult result =
+        Run({"migrate-defaults", target.string()});
+
+    Require(result.code == 3, "missing legacy configuration did not return code 3");
+    Require(result.output.empty(), "missing legacy configuration wrote normal output");
+    Require(
+        result.errors ==
+            "MIGRATION_NOT_FOUND: no legacy MDVWB bus configurations were found\n",
+        "missing legacy configuration has an unstable result");
+    Require(!std::filesystem::exists(target), "missing migration created a target file");
+}
+
+void TestMalformedMigrationIsNotReportedAsMissing() {
+    TemporaryDirectory defaults;
+    const std::filesystem::path target = defaults.Path() / "buses.json";
+    Write(
+        defaults.Path() / "mdvwb-1",
+        "MDVWB_PORT=\"/dev/ttyRS485-1\"\n"
+        "MDVWB_BUS=\"1\"\n");
+
+    const ScopedEnvironment allow("MDVWB_ALLOW_UNPRIVILEGED_APPLY", "1");
+    const ScopedEnvironment directory("MDVWB_DEFAULT_DIR", defaults.Path().string());
+
+    const CommandResult result =
+        Run({"migrate-defaults", target.string()});
+
+    Require(result.code == 2, "malformed legacy configuration did not return code 2");
+    Require(
+        result.errors.find("CONFIG_ERROR:") == 0,
+        "malformed legacy configuration was reported as missing");
+    Require(
+        result.errors.find("MDVWB_ADDRESSES") != std::string::npos,
+        "malformed migration lost its validation detail");
+    Require(!std::filesystem::exists(target), "failed migration created a target file");
+}
+
 void TestErrors() {
     TemporaryConfig invalid(R"json({"version":1,"buses":[
       {"id":1,"enabled":true,"port":"tty0","addresses":[1]}
@@ -122,6 +245,8 @@ void TestErrors() {
             "help does not mention apply");
     Require(help.output.find("mdvwb-manager mqtt") != std::string::npos,
             "help does not mention mqtt");
+    Require(help.output.find("returns code 3") != std::string::npos,
+            "help does not document the no-legacy result");
 }
 
 }  // namespace
@@ -131,6 +256,8 @@ int main() {
         TestValidate();
         TestShowCanonicalJson();
         TestSummary();
+        TestMigrationNotFoundExitCode();
+        TestMalformedMigrationIsNotReportedAsMissing();
         TestErrors();
         std::cout << "MDVWB manager CLI tests: OK\n";
         return 0;

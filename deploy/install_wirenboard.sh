@@ -39,9 +39,23 @@ install -m 0644 "$SCRIPT_DIR/mdvwb-scheduler.service" /etc/systemd/system/mdvwb-
     install -m 0640 "$SCRIPT_DIR/mdvwb-scheduler.env" /etc/default/mdvwb-scheduler
 cp -a "$SOURCE_DIR/www/mdvwb/." "$WWW_ROOT/mdvwb/"
 
+# A fresh controller starts with an empty bus configuration. Existing malformed
+# legacy files are reported and stop installation instead of being replaced by
+# an example containing real ports and addresses.
 if [ ! -s /etc/mdvwb/buses.json ]; then
-    /usr/local/bin/mdvwb-manager migrate-defaults /etc/mdvwb/buses.json || \
-        install -m 0640 "$SCRIPT_DIR/buses.example.json" /etc/mdvwb/buses.json
+    if /usr/local/bin/mdvwb-manager migrate-defaults /etc/mdvwb/buses.json; then
+        echo "Migrated legacy MDVWB bus configuration."
+    else
+        MIGRATION_STATUS=$?
+        if [ "$MIGRATION_STATUS" -eq 3 ]; then
+            install -m 0640 "$SCRIPT_DIR/buses.default.json" /etc/mdvwb/buses.json
+            echo "No legacy configuration was found; installed an empty buses.json."
+        else
+            echo "Legacy MDVWB configuration exists but could not be migrated." >&2
+            echo "Fix the reported legacy configuration error and run the installer again." >&2
+            exit "$MIGRATION_STATUS"
+        fi
+    fi
 fi
 
 systemctl disable --now mdvwb.service mdvwb-2.service 2>/dev/null || true

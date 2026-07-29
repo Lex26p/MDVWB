@@ -46,14 +46,21 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             build-essential             cmake             libmosquitto-dev             ninja-build             python3
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            libmosquitto-dev \
+            ninja-build \
+            python3
 
       - name: Validate deployment files
         shell: bash
         run: |
           set -euxo pipefail
           sh -n deploy/offline-install.sh
+          sh -n deploy/install_wirenboard.sh
           sh -n deploy/mdvwb-run
+          python3 -m json.tool deploy/buses.default.json >/dev/null
           python3 -m json.tool deploy/dashboard.default.json >/dev/null
           python3 -m json.tool deploy/schedules.default.json >/dev/null
 
@@ -75,7 +82,10 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          cmake -S . -B out/build/ci-release             -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DMDVWB_REQUIRE_MOSQUITTO=ON
+          cmake -S . -B out/build/ci-release \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMDVWB_REQUIRE_MOSQUITTO=ON
 
       - name: Build
         shell: bash
@@ -92,4 +102,5 @@ jobs:
           ./out/build/ci-release/MDVWB --version
           ./out/build/ci-release/MDVWB --self-test
           ./out/build/ci-release/mdvwb-manager validate config/buses.example.json
+          ./out/build/ci-release/mdvwb-manager validate deploy/buses.default.json
           ./out/build/ci-release/mdvwb-scheduler --help
