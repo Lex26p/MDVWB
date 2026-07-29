@@ -2,7 +2,28 @@
 set -eu
 
 PROGRAM=${0##*/}
-DEFAULT_STATE_PATH=${MDVWB_INSTALL_STATE:-/var/lib/mdvwb/installation.json}
+MDVWB_ROOT=${MDVWB_ROOT:-/}
+MDVWB_SYSTEMCTL=${MDVWB_SYSTEMCTL:-systemctl}
+MDVWB_DPKG=${MDVWB_DPKG:-dpkg}
+MDVWB_LDCONFIG=${MDVWB_LDCONFIG:-ldconfig}
+MDVWB_SERVICE_START_DELAY=${MDVWB_SERVICE_START_DELAY:-3}
+
+case "$MDVWB_ROOT" in
+    /*)
+        ;;
+    *)
+        printf '%s: MDVWB_ROOT must be an absolute path\n' "$PROGRAM" >&2
+        exit 2
+        ;;
+esac
+
+if [ "$MDVWB_ROOT" = "/" ]; then
+    ROOT_PREFIX=
+else
+    ROOT_PREFIX=${MDVWB_ROOT%/}
+fi
+
+DEFAULT_STATE_PATH=${MDVWB_INSTALL_STATE:-$ROOT_PREFIX/var/lib/mdvwb/installation.json}
 
 fail()
 {
@@ -15,7 +36,7 @@ fail()
 usage()
 {
     cat <<'EOF'
-MDVWB installation metadata utility
+MDVWB installation lifecycle utility
 
 Usage:
   mdvwb-setup manifest --manifest <manifest.json>
@@ -25,21 +46,61 @@ Usage:
   mdvwb-setup write-state --manifest <manifest.json>
       --method <offline|online|source|rollback>
       [--state <installation.json>]
+  mdvwb-setup install --package <directory>
+      --method <offline|online|source>
+      [--force] [--allow-downgrade] [--dry-run]
+  mdvwb-setup update --package <directory>
+      --method <offline|online|source>
+      [--force] [--allow-downgrade] [--dry-run]
+
+Environment used by integration tests and advanced deployments:
+  MDVWB_ROOT
+  MDVWB_SYSTEMCTL
+  MDVWB_DPKG
+  MDVWB_LDCONFIG
+  MDVWB_SERVICE_START_DELAY
+  MDVWB_INSTALL_STATE
+  MDVWB_WWW_ROOT
 
 Exit codes:
-  0  operation is valid
-  2  invalid arguments, manifest or installation state
+  0  operation completed or is valid
+  2  invalid arguments, package, manifest, configuration or state
   3  installation state does not exist
   4  the requested version is already installed
   5  downgrade is blocked
   6  package and installed architectures differ
+  7  installed service verification failed
 EOF
+}
+
+root_path()
+{
+    printf '%s%s\n' "$ROOT_PREFIX" "$1"
 }
 
 require_file()
 {
     [ -f "$1" ] || fail 2 "file does not exist: $1"
     [ -r "$1" ] || fail 2 "file is not readable: $1"
+}
+
+require_executable()
+{
+    require_file "$1"
+    [ -x "$1" ] || fail 2 "file is not executable: $1"
+}
+
+require_root()
+{
+    if [ "$MDVWB_ROOT" = "/" ] && [ "$(id -u)" -ne 0 ]; then
+        fail 2 "installation must be run as root"
+    fi
+}
+
+require_command()
+{
+    command -v "$1" >/dev/null 2>&1 ||
+        fail 2 "required command is not available: $1"
 }
 
 json_string()
@@ -191,6 +252,440 @@ compare_versions()
     }'
 }
 
+determine_action()
+{
+    manifest=$1
+    state=$2
+    force=$3
+    allow_downgrade=$4
+    require_existing=$5
+
+    load_manifest "$manifest"
+    if [ ! -s "$state" ]; then
+        if [ "$require_existing" -eq 1 ]; then
+            fail 3 "MDVWB is not installed; use install instead of update"
+        fi
+        ACTION=install
+        CURRENT_VERSION=none
+        return
+    fi
+
+    load_state "$state"
+    [ "$STATE_ARCHITECTURE" = "$MANIFEST_ARCHITECTURE" ] ||
+        fail 6 "installed architecture $STATE_ARCHITECTURE differs from package architecture $MANIFEST_ARCHITECTURE"
+
+    CURRENT_VERSION=$STATE_VERSION
+    comparison=$(compare_versions "$MANIFEST_VERSION" "$STATE_VERSION")
+    if [ "$comparison" -gt 0 ]; then
+        ACTION=update
+    elif [ "$comparison" -eq 0 ]; then
+        if [ "$force" -ne 1 ]; then
+            fail 4 "MDVWB $STATE_VERSION is already installed; use --force for repair"
+        fi
+        ACTION=repair
+    else
+        if [ "$allow_downgrade" -ne 1 ]; then
+            fail 5 "downgrade from $STATE_VERSION to $MANIFEST_VERSION requires --allow-downgrade"
+        fi
+        ACTION=downgrade
+    fi
+}
+
+write_installation_state()
+{
+    manifest=$1
+    method=$2
+    state=$3
+
+    load_manifest "$manifest"
+    installed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    state_directory=${state%/*}
+    if [ "$state_directory" = "$state" ]; then
+        state_directory=.
+    fi
+    mkdir -p "$state_directory"
+    temporary="$state.tmp.$$"
+    trap 'rm -f "$temporary"' EXIT HUP INT TERM
+    umask 027
+    cat >"$temporary" <<EOF
+{
+  "stateFormat": 1,
+  "product": "MDVWB",
+  "version": "$MANIFEST_VERSION",
+  "commit": "$MANIFEST_COMMIT",
+  "architecture": "$MANIFEST_ARCHITECTURE",
+  "installedAt": "$installed_at",
+  "installMethod": "$method"
+}
+EOF
+    chmod 0640 "$temporary"
+    mv -f "$temporary" "$state"
+    trap - EXIT HUP INT TERM
+}
+
+required_package_files()
+{
+    cat <<'EOF'
+MDVWB
+mdvwb-offline
+mdvwb-manager
+mdvwb-scheduler
+mdvwb-run
+mdvwb-setup
+manifest.json
+mdvwb@.service
+mdvwb.env
+mdvwb-manager.service
+mdvwb-manager.env
+mdvwb-scheduler.service
+mdvwb-scheduler.env
+buses.default.json
+dashboard.default.json
+schedules.default.json
+www/mdvwb/index.html
+www/mdvwb/app.js
+www/mdvwb/model.js
+www/mdvwb/mqtt-client.js
+www/mdvwb/styles.css
+www/mdvwb/dashboard-editor.js
+www/mdvwb/dashboard-model.js
+www/mdvwb/dashboard-placement-editor.js
+www/fancoils/index.html
+www/fancoils/app.js
+www/fancoils/model.js
+www/fancoils/schedule-model.js
+www/fancoils/scheduler-status-ui.js
+www/fancoils/scheduler-status-health.js
+www/fancoils/styles.css
+SHA256SUMS
+EOF
+}
+
+canonical_directory()
+{
+    directory=$1
+    [ -d "$directory" ] || fail 2 "package directory does not exist: $directory"
+    (CDPATH= cd -- "$directory" && pwd)
+}
+
+validate_package_layout()
+{
+    package=$1
+    while IFS= read -r required; do
+        [ -n "$required" ] || continue
+        require_file "$package/$required"
+    done <<EOF
+$(required_package_files)
+EOF
+
+    require_executable "$package/MDVWB"
+    require_executable "$package/mdvwb-offline"
+    require_executable "$package/mdvwb-manager"
+    require_executable "$package/mdvwb-scheduler"
+    require_executable "$package/mdvwb-run"
+    require_executable "$package/mdvwb-setup"
+}
+
+verify_package_checksums()
+{
+    package=$1
+    require_command sha256sum
+    (
+        cd "$package"
+        sha256sum -c SHA256SUMS
+    )
+}
+
+verify_controller()
+{
+    require_command "$MDVWB_DPKG"
+    require_command "$MDVWB_LDCONFIG"
+    require_command "$MDVWB_SYSTEMCTL"
+
+    actual_architecture=$("$MDVWB_DPKG" --print-architecture 2>/dev/null || true)
+    [ "$actual_architecture" = "$MANIFEST_ARCHITECTURE" ] ||
+        fail 2 "unsupported controller architecture: $actual_architecture; expected $MANIFEST_ARCHITECTURE"
+
+    "$MDVWB_LDCONFIG" -p 2>/dev/null | grep -q 'libmosquitto\.so\.1' ||
+        fail 2 "libmosquitto.so.1 is not installed on this controller"
+}
+
+run_package_self_tests()
+{
+    package=$1
+    "$package/MDVWB" --version
+    "$package/MDVWB" --self-test
+    "$package/mdvwb-offline" --self-test
+    "$package/mdvwb-scheduler" --help >/dev/null
+}
+
+configured_bus_ids()
+{
+    manager=$1
+    config=$2
+    [ -s "$config" ] || return 0
+    "$manager" summary "$config" |
+        sed -n 's/^bus=\([0-9][0-9]*\) .*/\1/p'
+}
+
+enabled_bus_ids()
+{
+    manager=$1
+    config=$2
+    [ -s "$config" ] || return 0
+    "$manager" summary "$config" |
+        sed -n 's/^bus=\([0-9][0-9]*\) enabled=true .*/\1/p'
+}
+
+validate_existing_configuration()
+{
+    package=$1
+    config=$(root_path /etc/mdvwb/buses.json)
+    if [ -s "$config" ]; then
+        "$package/mdvwb-manager" validate "$config"
+    fi
+
+    dashboard=$(root_path /etc/mdvwb/dashboard.json)
+    schedules=$(root_path /etc/mdvwb/schedules.json)
+    [ ! -e "$dashboard" ] || [ -r "$dashboard" ] ||
+        fail 2 "existing dashboard configuration is not readable: $dashboard"
+    [ ! -e "$schedules" ] || [ -r "$schedules" ] ||
+        fail 2 "existing schedules configuration is not readable: $schedules"
+}
+
+print_install_plan()
+{
+    package=$1
+    method=$2
+    state=$3
+
+    printf '%s\n' \
+        "ACTION=$ACTION current=$CURRENT_VERSION target=$MANIFEST_VERSION architecture=$MANIFEST_ARCHITECTURE" \
+        "package=$package" \
+        "method=$method" \
+        "root=$MDVWB_ROOT" \
+        "state=$state" \
+        "preserve=/etc/mdvwb/buses.json" \
+        "preserve=/etc/mdvwb/dashboard.json" \
+        "preserve=/etc/mdvwb/schedules.json" \
+        "preserve=/var/www/fancoils/assets"
+}
+
+stop_existing_services()
+{
+    package=$1
+    config=$(root_path /etc/mdvwb/buses.json)
+
+    "$MDVWB_SYSTEMCTL" stop mdvwb-scheduler.service 2>/dev/null || true
+    "$MDVWB_SYSTEMCTL" stop mdvwb-manager.service 2>/dev/null || true
+    for bus in $(configured_bus_ids "$package/mdvwb-manager" "$config"); do
+        "$MDVWB_SYSTEMCTL" stop "mdvwb@$bus.service" 2>/dev/null || true
+    done
+}
+
+install_runtime_files()
+{
+    package=$1
+    www_root=$2
+
+    bin_dir=$(root_path /usr/local/bin)
+    sbin_dir=$(root_path /usr/local/sbin)
+    lib_dir=$(root_path /usr/local/lib/mdvwb)
+    config_dir=$(root_path /etc/mdvwb)
+    default_dir=$(root_path /etc/default)
+    systemd_dir=$(root_path /etc/systemd/system)
+    state_dir=$(root_path /var/lib/mdvwb)
+
+    install -d -m 0755 \
+        "$bin_dir" "$sbin_dir" "$lib_dir" "$config_dir" "$default_dir" \
+        "$systemd_dir" "$state_dir" \
+        "$www_root/mdvwb" "$www_root/fancoils" "$www_root/fancoils/assets"
+
+    install -m 0755 "$package/MDVWB" "$bin_dir/MDVWB"
+    install -m 0755 "$package/mdvwb-offline" "$bin_dir/mdvwb-offline"
+    install -m 0755 "$package/mdvwb-manager" "$bin_dir/mdvwb-manager"
+    install -m 0755 "$package/mdvwb-scheduler" "$bin_dir/mdvwb-scheduler"
+    install -m 0755 "$package/mdvwb-setup" "$sbin_dir/mdvwb-setup"
+    install -m 0755 "$package/mdvwb-run" "$lib_dir/mdvwb-run"
+    install -m 0640 "$package/mdvwb.env" "$lib_dir/mdvwb.env"
+    install -m 0644 "$package/mdvwb@.service" "$systemd_dir/mdvwb@.service"
+    install -m 0644 "$package/mdvwb-manager.service" \
+        "$systemd_dir/mdvwb-manager.service"
+    install -m 0644 "$package/mdvwb-scheduler.service" \
+        "$systemd_dir/mdvwb-scheduler.service"
+
+    if [ ! -e "$default_dir/mdvwb-manager" ]; then
+        install -m 0640 "$package/mdvwb-manager.env" "$default_dir/mdvwb-manager"
+    fi
+    if [ ! -e "$default_dir/mdvwb-scheduler" ]; then
+        install -m 0640 "$package/mdvwb-scheduler.env" "$default_dir/mdvwb-scheduler"
+    fi
+
+    cp -R "$package/www/mdvwb/." "$www_root/mdvwb/"
+    cp -R "$package/www/fancoils/." "$www_root/fancoils/"
+    find "$www_root/mdvwb" "$www_root/fancoils" -type d -exec chmod 0755 {} +
+    find "$www_root/mdvwb" "$www_root/fancoils" -type f -exec chmod 0644 {} +
+}
+
+ensure_initial_configuration()
+{
+    package=$1
+    bin_dir=$(root_path /usr/local/bin)
+    config_dir=$(root_path /etc/mdvwb)
+    buses="$config_dir/buses.json"
+
+    if [ ! -s "$buses" ]; then
+        if "$bin_dir/mdvwb-manager" migrate-defaults "$buses"; then
+            printf '%s\n' "Migrated legacy MDVWB bus configuration."
+        else
+            migration_status=$?
+            if [ "$migration_status" -eq 3 ]; then
+                install -m 0640 "$package/buses.default.json" "$buses"
+                printf '%s\n' \
+                    "No legacy configuration was found; installed an empty buses.json."
+            else
+                fail "$migration_status" \
+                    "legacy MDVWB configuration exists but could not be migrated"
+            fi
+        fi
+    fi
+
+    if [ ! -s "$config_dir/dashboard.json" ]; then
+        install -m 0640 "$package/dashboard.default.json" \
+            "$config_dir/dashboard.json"
+    fi
+    if [ ! -s "$config_dir/schedules.json" ]; then
+        install -m 0640 "$package/schedules.default.json" \
+            "$config_dir/schedules.json"
+    fi
+
+    "$bin_dir/mdvwb-manager" validate "$buses"
+}
+
+clean_legacy_runtime()
+{
+    systemd_dir=$(root_path /etc/systemd/system)
+    bin_dir=$(root_path /usr/local/bin)
+    rules_dir=$(root_path /etc/wb-rules)
+
+    "$MDVWB_SYSTEMCTL" disable --now mdvwb.service mdvwb-2.service \
+        2>/dev/null || true
+    rm -f "$systemd_dir/mdvwb.service" "$systemd_dir/mdvwb-2.service"
+    rm -f "$bin_dir/mdvwb-bus"
+
+    if [ -d "$rules_dir" ]; then
+        for rule in "$rules_dir"/*.js; do
+            [ -f "$rule" ] || continue
+            if grep -Eq 'var[[:space:]]+ArrID[[:space:]]*=' "$rule" &&
+               grep -q 'defineVirtualDevice("Fan-"' "$rule"; then
+                mv "$rule" "$rule.disabled-mdvwb"
+                printf 'Disabled legacy fan virtual-device rule: %s\n' "$rule"
+            fi
+        done
+        rm -f "$rules_dir/mdvwb-service-control.js"
+        "$MDVWB_SYSTEMCTL" restart wb-rules.service 2>/dev/null || true
+    fi
+}
+
+clean_retained_topics()
+{
+    manager=$1
+    config=$2
+
+    command -v mqtt-delete-retained >/dev/null 2>&1 || return 0
+    for bus in $(configured_bus_ids "$manager" "$config"); do
+        address=0
+        while [ "$address" -le 63 ]; do
+            mqtt-delete-retained \
+                "/devices/Fan-${bus}_${address}/#" >/dev/null 2>&1 || true
+            address=$((address + 1))
+        done
+        mqtt-delete-retained "/devices/sist-${bus}/#" >/dev/null 2>&1 || true
+    done
+}
+
+start_and_verify_services()
+{
+    bin_dir=$(root_path /usr/local/bin)
+    config=$(root_path /etc/mdvwb/buses.json)
+
+    "$MDVWB_SYSTEMCTL" daemon-reload
+    "$bin_dir/MDVWB" --version
+    "$bin_dir/MDVWB" --self-test
+    "$bin_dir/mdvwb-offline" --self-test
+    "$bin_dir/mdvwb-manager" validate "$config"
+    "$bin_dir/mdvwb-manager" apply "$config"
+    "$MDVWB_SYSTEMCTL" enable --now mdvwb-manager.service
+    "$MDVWB_SYSTEMCTL" enable --now mdvwb-scheduler.service
+
+    if [ "$MDVWB_SERVICE_START_DELAY" -gt 0 ]; then
+        sleep "$MDVWB_SERVICE_START_DELAY"
+    fi
+
+    "$MDVWB_SYSTEMCTL" is-active --quiet mdvwb-manager.service ||
+        fail 7 "mdvwb-manager.service failed to start"
+    "$MDVWB_SYSTEMCTL" is-active --quiet mdvwb-scheduler.service ||
+        fail 7 "mdvwb-scheduler.service failed to start"
+
+    for bus in $(enabled_bus_ids "$bin_dir/mdvwb-manager" "$config"); do
+        "$MDVWB_SYSTEMCTL" is-active --quiet "mdvwb@$bus.service" ||
+            fail 7 "mdvwb@$bus.service failed to start"
+    done
+}
+
+perform_install()
+{
+    package=$1
+    method=$2
+    state=$3
+
+    if [ -n "${MDVWB_WWW_ROOT:-}" ]; then
+        www_root=$MDVWB_WWW_ROOT
+    else
+        www_root=$(root_path /var/www)
+    fi
+    case "$www_root" in
+        /*)
+            ;;
+        *)
+            fail 2 "MDVWB_WWW_ROOT must be an absolute path"
+            ;;
+    esac
+
+    printf '[1/8] Stop MDVWB services\n'
+    stop_existing_services "$package"
+
+    printf '[2/8] Install binaries, units and web applications\n'
+    install_runtime_files "$package" "$www_root"
+
+    printf '[3/8] Prepare configuration\n'
+    ensure_initial_configuration "$package"
+
+    printf '[4/8] Clean legacy runtime files\n'
+    clean_legacy_runtime
+
+    printf '[5/8] Clean retained device topics\n'
+    clean_retained_topics \
+        "$(root_path /usr/local/bin/mdvwb-manager)" \
+        "$(root_path /etc/mdvwb/buses.json)"
+
+    printf '[6/8] Apply configuration and start services\n'
+    start_and_verify_services
+
+    printf '[7/8] Write installation state\n'
+    write_installation_state "$package/manifest.json" "$method" "$state"
+
+    printf '[8/8] Installation complete\n'
+    printf '%s\n' \
+        "MDVWB_RESULT=success" \
+        "action=$ACTION" \
+        "version=$MANIFEST_VERSION" \
+        "method=$method" \
+        "state=$state" \
+        "engineeringWeb=http://<WB-address>/mdvwb/" \
+        "operatorWeb=http://<WB-address>/fancoils/"
+}
+
 command_manifest()
 {
     manifest=
@@ -282,35 +777,10 @@ command_check_version()
     done
 
     [ -n "$manifest" ] || fail 2 "--manifest is required"
-    load_manifest "$manifest"
-
-    if [ ! -s "$state" ]; then
-        printf 'ACTION=install current=none target=%s architecture=%s\n' \
-            "$MANIFEST_VERSION" "$MANIFEST_ARCHITECTURE"
-        return 0
-    fi
-
-    load_state "$state"
-    [ "$STATE_ARCHITECTURE" = "$MANIFEST_ARCHITECTURE" ] ||
-        fail 6 "installed architecture $STATE_ARCHITECTURE differs from package architecture $MANIFEST_ARCHITECTURE"
-
-    comparison=$(compare_versions "$MANIFEST_VERSION" "$STATE_VERSION")
-    if [ "$comparison" -gt 0 ]; then
-        action=update
-    elif [ "$comparison" -eq 0 ]; then
-        if [ "$force" -ne 1 ]; then
-            fail 4 "MDVWB $STATE_VERSION is already installed; use --force for repair"
-        fi
-        action=repair
-    else
-        if [ "$allow_downgrade" -ne 1 ]; then
-            fail 5 "downgrade from $STATE_VERSION to $MANIFEST_VERSION requires --allow-downgrade"
-        fi
-        action=downgrade
-    fi
-
+    determine_action "$manifest" "$state" "$force" "$allow_downgrade" 0
     printf 'ACTION=%s current=%s target=%s architecture=%s\n' \
-        "$action" "$STATE_VERSION" "$MANIFEST_VERSION" "$MANIFEST_ARCHITECTURE"
+        "$ACTION" "$CURRENT_VERSION" "$MANIFEST_VERSION" \
+        "$MANIFEST_ARCHITECTURE"
 }
 
 command_write_state()
@@ -351,33 +821,98 @@ command_write_state()
             ;;
     esac
 
+    write_installation_state "$manifest" "$method" "$state"
     load_manifest "$manifest"
-    installed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-    state_directory=${state%/*}
-    if [ "$state_directory" = "$state" ]; then
-        state_directory=.
-    fi
-    mkdir -p "$state_directory"
-    temporary="$state.tmp.$$"
-    trap 'rm -f "$temporary"' EXIT HUP INT TERM
-    umask 027
-    cat >"$temporary" <<EOF
-{
-  "stateFormat": 1,
-  "product": "MDVWB",
-  "version": "$MANIFEST_VERSION",
-  "commit": "$MANIFEST_COMMIT",
-  "architecture": "$MANIFEST_ARCHITECTURE",
-  "installedAt": "$installed_at",
-  "installMethod": "$method"
-}
-EOF
-    chmod 0640 "$temporary"
-    mv -f "$temporary" "$state"
-    trap - EXIT HUP INT TERM
-
     printf 'STATE_WRITTEN version=%s method=%s path=%s\n' \
         "$MANIFEST_VERSION" "$method" "$state"
+}
+
+command_install()
+{
+    require_existing=$1
+    shift
+
+    package=
+    method=
+    force=0
+    allow_downgrade=0
+    dry_run=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --package)
+                [ "$#" -ge 2 ] || fail 2 "--package requires a directory"
+                package=$2
+                shift 2
+                ;;
+            --method)
+                [ "$#" -ge 2 ] || fail 2 "--method requires a value"
+                method=$2
+                shift 2
+                ;;
+            --force)
+                force=1
+                shift
+                ;;
+            --allow-downgrade)
+                allow_downgrade=1
+                shift
+                ;;
+            --dry-run)
+                dry_run=1
+                shift
+                ;;
+            *)
+                fail 2 "unknown installation argument: $1"
+                ;;
+        esac
+    done
+
+    [ -n "$package" ] || fail 2 "--package is required"
+    case "$method" in
+        offline|online|source)
+            ;;
+        *)
+            fail 2 "--method must be offline, online or source"
+            ;;
+    esac
+
+    require_root
+    require_command install
+    require_command cp
+    require_command find
+    require_command grep
+    require_command sed
+    require_command awk
+
+    package=$(canonical_directory "$package")
+    printf '[preflight 1/6] Check package layout\n'
+    validate_package_layout "$package"
+
+    printf '[preflight 2/6] Validate manifest and version transition\n'
+    determine_action \
+        "$package/manifest.json" "$DEFAULT_STATE_PATH" \
+        "$force" "$allow_downgrade" "$require_existing"
+
+    printf '[preflight 3/6] Verify package checksums\n'
+    verify_package_checksums "$package"
+
+    printf '[preflight 4/6] Verify controller\n'
+    verify_controller
+
+    printf '[preflight 5/6] Run package self-tests\n'
+    run_package_self_tests "$package"
+
+    printf '[preflight 6/6] Validate existing configuration\n'
+    validate_existing_configuration "$package"
+
+    print_install_plan "$package" "$method" "$DEFAULT_STATE_PATH"
+    if [ "$dry_run" -eq 1 ]; then
+        printf '%s\n' "DRY_RUN=complete"
+        return 0
+    fi
+
+    perform_install "$package" "$method" "$DEFAULT_STATE_PATH"
 }
 
 command=${1:-help}
@@ -397,6 +932,12 @@ case "$command" in
         ;;
     write-state)
         command_write_state "$@"
+        ;;
+    install)
+        command_install 0 "$@"
+        ;;
+    update)
+        command_install 1 "$@"
         ;;
     help|--help|-h)
         usage
