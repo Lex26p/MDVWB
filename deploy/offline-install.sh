@@ -2,12 +2,22 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+INSTALL_METHOD=${MDVWB_INSTALL_METHOD:-offline}
 COMMAND=${1:-install}
+
+case "$INSTALL_METHOD" in
+    offline|online)
+        ;;
+    *)
+        echo "Unsupported MDVWB_INSTALL_METHOD: $INSTALL_METHOD" >&2
+        exit 2
+        ;;
+esac
 
 case "$COMMAND" in
     install|update)
         [ "$#" -eq 0 ] || shift
-        set -- "$COMMAND" --package "$SCRIPT_DIR" --method offline "$@"
+        set -- "$COMMAND" --package "$SCRIPT_DIR" --method "$INSTALL_METHOD" "$@"
         exec sh "$SCRIPT_DIR/mdvwb-setup" "$@"
         ;;
     verify)
@@ -67,7 +77,7 @@ treated as an install option.
 EOF
         ;;
     -*)
-        set -- install --package "$SCRIPT_DIR" --method offline "$@"
+        set -- install --package "$SCRIPT_DIR" --method "$INSTALL_METHOD" "$@"
         exec sh "$SCRIPT_DIR/mdvwb-setup" "$@"
         ;;
     *)

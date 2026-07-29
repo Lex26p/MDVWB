@@ -58,17 +58,21 @@ jobs:
         run: |
           set -euxo pipefail
           sh -n deploy/offline-install.sh
+          sh -n deploy/online-install.sh
           sh -n deploy/install_wirenboard.sh
+          sh -n deploy/install-from-source.sh
           sh -n deploy/mdvwb-setup
           sh -n deploy/mdvwb-run
           sh -n tests/deploy/mdvwb_setup_test.sh
           sh -n tests/deploy/mdvwb_install_engine_test.sh
           sh -n tests/deploy/mdvwb_backup_rollback_test.sh
           sh -n tests/deploy/mdvwb_offline_lifecycle_test.sh
+          sh -n tests/deploy/mdvwb_online_installer_test.sh
           sh tests/deploy/mdvwb_setup_test.sh
           sh tests/deploy/mdvwb_install_engine_test.sh
           sh tests/deploy/mdvwb_backup_rollback_test.sh
           sh tests/deploy/mdvwb_offline_lifecycle_test.sh
+          sh tests/deploy/mdvwb_online_installer_test.sh
           python3 -m json.tool deploy/package-manifest.json.in >/dev/null
           python3 -m json.tool deploy/buses.default.json >/dev/null
           python3 -m json.tool deploy/dashboard.default.json >/dev/null

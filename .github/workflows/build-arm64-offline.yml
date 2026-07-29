@@ -45,16 +45,20 @@ jobs:
                 python3
 
               sh -n deploy/offline-install.sh
+              sh -n deploy/online-install.sh
               sh -n deploy/install_wirenboard.sh
+              sh -n deploy/install-from-source.sh
               sh -n deploy/mdvwb-setup
               sh -n deploy/mdvwb-run
               sh -n tests/deploy/mdvwb_install_engine_test.sh
               sh -n tests/deploy/mdvwb_backup_rollback_test.sh
               sh -n tests/deploy/mdvwb_offline_lifecycle_test.sh
+              sh -n tests/deploy/mdvwb_online_installer_test.sh
               sh tests/deploy/mdvwb_setup_test.sh
               sh tests/deploy/mdvwb_install_engine_test.sh
               sh tests/deploy/mdvwb_backup_rollback_test.sh
               sh tests/deploy/mdvwb_offline_lifecycle_test.sh
+              sh tests/deploy/mdvwb_online_installer_test.sh
               python3 -m json.tool deploy/package-manifest.json.in >/dev/null
               python3 -m json.tool deploy/buses.default.json >/dev/null
               python3 -m json.tool deploy/dashboard.default.json >/dev/null
@@ -141,6 +145,8 @@ jobs:
 
           tar -C dist -czf dist/MDVWB-arm64-offline.tar.gz MDVWB-arm64
           sha256sum dist/MDVWB-arm64-offline.tar.gz > dist/MDVWB-arm64-offline.tar.gz.sha256
+          install -m 0755 deploy/online-install.sh dist/online-install.sh
+          install -m 0755 deploy/install_wirenboard.sh dist/install_wirenboard.sh
 
       - name: Upload offline package
         uses: actions/upload-artifact@v4
@@ -149,5 +155,7 @@ jobs:
           path: |
             dist/MDVWB-arm64-offline.tar.gz
             dist/MDVWB-arm64-offline.tar.gz.sha256
+            dist/online-install.sh
+            dist/install_wirenboard.sh
           if-no-files-found: error
           retention-days: 30
