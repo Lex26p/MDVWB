@@ -2606,3 +2606,1210 @@ result -> current retained configuration
 - active/enabled mapping;
 - final enabled-empty rejection;
 - target unchanged on failure.
+
+## 68. Dashboard: назначение и владение данными
+
+Dashboard — конфигурация пользовательских панелей расположения фанкойлов.
+
+Production-файл:
+
+```text
+/etc/mdvwb/dashboard.json
+```
+
+Production-каталог изображений:
+
+```text
+/var/www/fancoils/assets
+```
+
+Владельцем записи является:
+
+```text
+mdvwb-manager
+```
+
+Браузер не пишет файл напрямую. Он отправляет новую конфигурацию и бинарные chunks по MQTT.
+
+Dashboard не управляет физическими шинами и не заменяет `buses.json`.
+
+Он связывает пользовательское представление:
+
+```text
+панель
+подложка
+пользовательский номер
+подпись
+координаты
+видимость
+```
+
+с физическим устройством:
+
+```text
+Fan-<bus>_<address>
+```
+
+Исходники:
+
+| Файл | Ответственность |
+|---|---|
+| `src/manager/mdv_dashboard_config.cpp`, `.h` | Parser, validation, migration v1 → v2, canonical serializer и reference inspection |
+| `src/manager/mdvwb_dashboard_upload.cpp`, `.h` | Start/chunk/finish/cancel, SHA-256 и проверка изображения |
+| `src/manager/mdvwb_manager_mqtt.cpp` | MQTT API, revision checks, atomic dashboard write и commit assets |
+| `www/mdvwb/dashboard-model.js` | Browser normalization и вспомогательная модель |
+| `www/mdvwb/dashboard-editor.js` | Редактор нескольких панелей и upload workflow |
+| `www/mdvwb/dashboard-placement-editor.js` | Выбор устройств, маркеры, drag и координаты |
+| `www/fancoils/model.js` | Выбор панели и отображение factual MQTT state |
+| `www/fancoils/app.js` | Пользовательская панель управления |
+
+## 69. Canonical `dashboard.json` version 2
+
+Manager всегда сериализует коллекцию version 2.
+
+Пример:
+
+```json
+{
+  "version": 2,
+  "revision": 12,
+  "defaultPanel": "main",
+  "panels": [
+    {
+      "id": "main",
+      "title": "Главный корпус",
+      "background": {
+        "file": "background-4d1f8a6b7c2e9012.webp",
+        "naturalWidth": 1920,
+        "naturalHeight": 1080,
+        "defaultScale": 1,
+        "fit": "contain"
+      },
+      "fans": [
+        {
+          "id": "fan-1-3",
+          "number": 5,
+          "bus": 1,
+          "address": 3,
+          "label": "Переговорная",
+          "x": 0.245,
+          "y": 0.418,
+          "markerScale": 1,
+          "rotation": 0,
+          "visible": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+Root fields:
+
+```text
+version
+revision
+defaultPanel
+panels
+```
+
+Неизвестные fields и duplicate JSON keys отклоняются.
+
+## 70. Миграция dashboard version 1
+
+Parser по-прежнему принимает legacy single-panel schema version 1:
+
+```text
+title
+background
+fans
+```
+
+При загрузке она преобразуется в memory:
+
+```text
+version = 2
+defaultPanel = main
+panels[0].id = main
+panels[0].title = legacy.title
+panels[0].background = legacy.background
+panels[0].fans = legacy.fans
+revision сохраняется
+```
+
+Следующая canonical запись создаёт version 2.
+
+Если в старом placement отсутствует `number`, он назначается последовательно:
+
+```text
+1, 2, 3, ...
+```
+
+## 71. Ограничения коллекции панелей
+
+```text
+version = 2
+revision = 0..2147483647
+panels = 1..64
+defaultPanel length = 1..48 bytes
+```
+
+`defaultPanel`:
+
+- содержит только ASCII letters, digits, `_` и `-`;
+- обязан ссылаться на существующую panel;
+- используется `/fancoils/`, когда query parameter `panel` отсутствует или неверен.
+
+Panel ID уникальны во всей коллекции.
+
+Порядок panels сохраняется canonical serializer.
+
+## 72. Schema одной panel
+
+Fields:
+
+```text
+id
+title
+background
+fans
+```
+
+Ограничения:
+
+```text
+id length = 1..48 bytes
+title length = 1..160 bytes
+fans = 0..4096
+```
+
+Panel ID содержит:
+
+```text
+A-Z
+a-z
+0-9
+_
+-
+```
+
+Каждая panel имеет независимые:
+
+- title;
+- background;
+- список placements;
+- пользовательские номера;
+- координаты.
+
+Один физический `Fan-B_A` может присутствовать на разных panels. Ограничение duplicate device действует внутри одной panel.
+
+## 73. Background schema
+
+Fields:
+
+```text
+file
+naturalWidth
+naturalHeight
+defaultScale
+fit
+```
+
+Ограничения:
+
+```text
+naturalWidth = 0..8192
+naturalHeight = 0..8192
+defaultScale = 0.25..4
+```
+
+`fit`:
+
+| Значение | Назначение |
+|---|---|
+| `contain` | Вписать подложку в viewport |
+| `width` | Масштабировать по доступной ширине |
+| `actual` | Использовать физический масштаб 1:1 |
+| `custom` | Использовать `defaultScale` |
+
+Если `file` пуст:
+
+```text
+naturalWidth = 0
+naturalHeight = 0
+```
+
+Если `file` задан:
+
+```text
+naturalWidth > 0
+naturalHeight > 0
+```
+
+Допустим только безопасный base filename без `/` и `\` с расширением:
+
+```text
+png
+jpg
+jpeg
+webp
+```
+
+Полный URL формируется браузером:
+
+```text
+/fancoils/assets/<encoded-file-name>
+```
+
+## 74. Placement schema
+
+Fields:
+
+```text
+id
+number
+bus
+address
+label
+x
+y
+markerScale
+rotation
+visible
+```
+
+Ограничения:
+
+```text
+id length = 1..64 bytes
+number = 1..200
+bus = 1..999
+address = 0..63
+label length = 1..120 bytes
+x = 0..1
+y = 0..1
+markerScale = 0.5..3
+rotation = -180..180
+visible = boolean
+```
+
+`id` содержит только ASCII letters, digits, `_` и `-`.
+
+Координаты относительные:
+
+```text
+x = 0   левый край
+x = 1   правый край
+y = 0   верхний край
+y = 1   нижний край
+```
+
+Они не зависят от resolution браузера или подложки.
+
+## 75. Уникальность внутри panel
+
+В одной panel уникальны:
+
+```text
+placement.id
+placement.number
+пара placement.bus + placement.address
+```
+
+Следствия:
+
+- один физический фанкойл нельзя дважды разместить на одной panel;
+- пользовательский номер можно использовать повторно на другой panel;
+- одинаковый physical device можно показывать на разных panels;
+- hidden placement остаётся частью проверки уникальности.
+
+Canonical serializer сортирует placements:
+
+```text
+bus
+address
+id
+```
+
+## 76. `visible` и удаление placement
+
+```json
+"visible": false
+```
+
+означает:
+
+- placement сохраняется в `dashboard.json`;
+- устройство не показывается на пользовательской карте;
+- пользовательский номер остаётся занятым;
+- placement можно снова включить без повторного создания.
+
+Полное удаление в editor удаляет object из `fans`.
+
+Это две разные операции.
+
+## 77. Reference inspection
+
+Dashboard parser проверяет структуру, но отсутствие bus или address не является parse error.
+
+`InspectDashboardReferences()` возвращает:
+
+```text
+MissingBus
+MissingAddress
+```
+
+Issue содержит:
+
+```text
+panelId
+placementId
+bus
+address
+```
+
+Dashboard save с существующей stale reference разрешён. Это позволяет открыть editor и удалить или исправить marker.
+
+Status сообщает количество:
+
+```json
+"referenceIssues": 2
+```
+
+При изменении `buses.json` manager запрещает создавать новые broken dashboard references.
+
+## 78. Создание dashboard по умолчанию
+
+При старте manager:
+
+- существующий `dashboard.json` загружается строго;
+- отсутствующий файл создаётся atomically;
+- invalid существующий файл не заменяется пустым автоматически.
+
+Default collection:
+
+```json
+{
+  "version": 2,
+  "revision": 0,
+  "defaultPanel": "main",
+  "panels": [
+    {
+      "id": "main",
+      "title": "Панель фанкойлов",
+      "background": {
+        "file": "",
+        "naturalWidth": 0,
+        "naturalHeight": 0,
+        "defaultScale": 1,
+        "fit": "contain"
+      },
+      "fans": []
+    }
+  ]
+}
+```
+
+## 79. MQTT API dashboard
+
+Topics:
+
+```text
+/mdvwb/dashboard/config
+/mdvwb/dashboard/config/set
+/mdvwb/dashboard/config/result
+/mdvwb/dashboard/status
+```
+
+| Topic | Retain | Назначение |
+|---|---:|---|
+| `/mdvwb/dashboard/config` | Да | Current canonical dashboard v2 |
+| `/mdvwb/dashboard/config/set` | Нет | Save request |
+| `/mdvwb/dashboard/config/result` | Нет | Result текущей операции |
+| `/mdvwb/dashboard/status` | Да | Общий dashboard status |
+
+Set payload:
+
+```text
+maximum 1048576 bytes
+```
+
+Retained save request отклоняется.
+
+Ready status:
+
+```json
+{
+  "state": "ready",
+  "revision": 12,
+  "fans": 34,
+  "referenceIssues": 0
+}
+```
+
+`fans` — сумма placements во всех panels, включая hidden.
+
+Error status может дополнительно содержать:
+
+```json
+"message": "..."
+```
+
+Result:
+
+```json
+{
+  "success": true,
+  "saved": true,
+  "message": "Dashboard configuration saved",
+  "revision": 13,
+  "fans": 34,
+  "referenceIssues": 0
+}
+```
+
+Даже error result сообщает текущую известную revision и текущие counts.
+
+## 80. Dashboard optimistic concurrency
+
+Клиент отправляет revision, с которой был создан draft:
+
+```text
+submitted.revision == current.revision
+```
+
+При успехе:
+
+```text
+saved.revision = current.revision + 1
+```
+
+Последовательность:
+
+```text
+parse
+revision check
+revision increment
+canonical serialize
+reference inspection
+atomic dashboard.json write
+retained config publication
+retained status publication
+non-retained result publication
+schedules reference status refresh
+```
+
+При stale revision:
+
+1. файл не изменяется;
+2. сначала публикуется error result с current revision;
+3. затем публикуется current retained dashboard;
+4. затем ready status с current revision.
+
+Result публикуется первым специально для multi-browser editor.
+
+При revision `2147483647` новое сохранение запрещено.
+
+## 81. Browser draft при конкурентном изменении
+
+`DashboardEditor` хранит:
+
+```text
+collection       — последняя server configuration
+collectionDraft  — локальный draft
+pendingSave
+```
+
+Если другой browser сохранил dashboard, а локальный draft dirty:
+
+- новая server configuration становится новой base;
+- локальный draft не перезаписывается;
+- editor показывает предупреждение;
+- пользователь может отменить draft и загрузить server version;
+- либо повторно сохранить draft уже с новой base revision.
+
+При ответе save error `pendingSave` снимается до прихода current retained config.
+
+Это позволяет избежать потери локальных изменений после revision conflict.
+
+## 82. Текущее поведение web editor
+
+Manager page:
+
+```text
+/mdvwb/#dashboard
+```
+
+Конкретную panel можно открыть параметром:
+
+```text
+/mdvwb/?panel=floor-2#dashboard
+```
+
+Editor поддерживает:
+
+- создание panel;
+- копирование panel;
+- изменение panel ID;
+- выбор default panel;
+- удаление panel;
+- отдельный title;
+- отдельную background;
+- выбор устройств из `buses.json`;
+- включение и скрытие placements;
+- пользовательский номер `1..200`;
+- label;
+- drag marker;
+- координаты в процентах;
+- keyboard movement;
+- grid;
+- общий marker scale текущей panel.
+
+Удалить единственную panel нельзя.
+
+Если удаляется default panel, default автоматически переключается на первую оставшуюся.
+
+## 83. Ограничения текущего web editor
+
+Backend schema хранит per-placement:
+
+```text
+markerScale
+rotation
+```
+
+Текущий editor:
+
+- применяет один общий marker scale ко всем placements выбранной panel;
+- не предоставляет control для rotation;
+- browser normalization устанавливает `rotation = 0`.
+
+Поэтому non-zero rotation, записанная вручную или старой версией, будет потеряна при сохранении через текущий editor.
+
+Это текущее поведение, а не ограничение backend schema.
+
+## 84. Placement editor
+
+Список доступных устройств строится из всех buses и addresses, включая disabled buses.
+
+Для нового placement автоматически выбираются:
+
+```text
+id = fan-<bus>-<address>
+number = первый свободный 1..200
+label = Fan-<bus>_<address>
+markerScale = текущий общий scale
+visible = true
+```
+
+Начальная позиция размещается по простой сетке.
+
+Drag:
+
+- начинается после движения минимум на 4 pixels;
+- координаты округляются до 0.01;
+- результат ограничивается `0..1`.
+
+Keyboard:
+
+```text
+Arrow = шаг 0.01
+Shift + Arrow = шаг 0.05
+```
+
+Inspector позволяет:
+
+- изменить пользовательский номер;
+- изменить label;
+- изменить X и Y в процентах;
+- центрировать marker;
+- полностью удалить placement.
+
+## 85. Пользовательские panel URL
+
+Operator page:
+
+```text
+/fancoils/
+```
+
+Конкретная panel:
+
+```text
+/fancoils/?panel=<panel-id>
+```
+
+Выбор:
+
+1. если `panel` существует — используется он;
+2. если parameter отсутствует — используется `defaultPanel`;
+3. если parameter неверен — открывается `defaultPanel` и показывается warning.
+
+Editor показывает готовый user URL выбранной panel.
+
+## 86. Отображение panel в `/fancoils/`
+
+Operator page:
+
+- загружает retained dashboard;
+- выбирает нужную panel;
+- подписывается на `/devices/+/controls/+`;
+- отображает только `visible=true`;
+- использует пользовательский `number` и `label`;
+- показывает factual Status, Temp, SetTemp, Power, Mode, Speed и Alarm;
+- поддерживает filters;
+- показывает counters placed/visible/online/alarm/offline/waiting;
+- открывает details drawer по marker;
+- поддерживает zoom wheel/buttons;
+- поддерживает pan карты;
+- возвращает configured fit кнопкой fit.
+
+При пустом retained `Temp` browser хранит `null` и показывает `—`.
+
+## 87. Индивидуальное управление из `/fancoils/`
+
+Из details drawer доступны:
+
+```text
+Power
+Mode
+Speed
+SetTemp
+Blinds
+Blok
+```
+
+Команды публикуются:
+
+```text
+/devices/Fan-<bus>_<address>/controls/<Control>/on1
+```
+
+Перед отправкой browser проверяет:
+
+- MQTT connected;
+- factual Status уже получен;
+- устройство не offline;
+- payload находится в допустимом диапазоне.
+
+Команда считается подтверждённой только после factual base-topic publication с ожидаемым значением.
+
+Browser timeout подтверждения:
+
+```text
+10 seconds
+```
+
+Это UI timeout. Физические C3 retry и C0 confirmation выполняет driver независимо.
+
+## 88. Групповое управление
+
+Групповой режим позволяет:
+
+- выбрать отдельные visible markers;
+- выбрать все visible markers;
+- очистить выбор;
+- применить любую комбинацию:
+
+```text
+Power
+Mode
+Speed
+SetTemp
+```
+
+Browser строит операции отдельно для каждого device и каждого выбранного control.
+
+Пропускаются:
+
+- устройства без factual state;
+- offline устройства;
+- операции того же control, уже ожидающие confirmation;
+- все операции при отключённом MQTT.
+
+Групповая команда не использует MDV broadcast.
+
+## 89. Background upload topics
+
+```text
+/mdvwb/dashboard/background/upload/start
+/mdvwb/dashboard/background/upload/chunk/<uploadId>/<index>
+/mdvwb/dashboard/background/upload/finish/<uploadId>
+/mdvwb/dashboard/background/upload/cancel/<uploadId>
+/mdvwb/dashboard/background/upload/status
+/mdvwb/dashboard/background/upload/result
+```
+
+Command topics должны быть non-retained.
+
+Status retained.
+
+Result non-retained.
+
+## 90. Upload start payload
+
+```json
+{
+  "version": 1,
+  "uploadId": "web-mabc1234-x9p2",
+  "fileName": "floor-2.webp",
+  "panelId": "floor-2",
+  "size": 482193,
+  "sha256": "64 lowercase or uppercase hex characters",
+  "revision": 12
+}
+```
+
+`panelId` необязателен только для legacy clients и по умолчанию равен `main`.
+
+Ограничения:
+
+```text
+version = 1
+uploadId length = 1..64
+panelId length = 1..48
+size = 1..10485760
+sha256 length = 64 hex
+fileName length = 1..128
+```
+
+`uploadId` и `panelId` содержат ASCII letters, digits, `_`, `-`.
+
+`fileName`:
+
+- является base name;
+- не содержит `/` и `\`;
+- допускает letters, digits, `_`, `-`, `.`;
+- имеет PNG/JPEG/WebP extension.
+
+Start дополнительно проверяет:
+
+- panel существует;
+- submitted revision совпадает с dashboard revision.
+
+## 91. Одна активная upload-сессия
+
+`DashboardBackgroundUpload` хранит одну активную session на весь manager process.
+
+Новый successful start:
+
+- удаляет temporary file предыдущей session;
+- заменяет активную session новой.
+
+Поэтому одновременно загружать две подложки из разных browser или panels нельзя.
+
+Текущий API не публикует отдельный cancel result предыдущему client при вытеснении session. Такой client получит mismatch/error или browser timeout.
+
+## 92. Upload chunks
+
+Размер chunk:
+
+```text
+1..49152 bytes
+```
+
+Topic index начинается с:
+
+```text
+0
+```
+
+и должен увеличиваться без пропусков:
+
+```text
+0, 1, 2, 3, ...
+```
+
+Payload является raw binary, не Base64.
+
+Manager отклоняет:
+
+- пустой chunk;
+- chunk больше 48 KiB;
+- другой uploadId;
+- неверный index;
+- превышение declared size;
+- chunk без active upload.
+
+Browser отправляет следующий chunk только после retained status, подтверждающего новый `received` count.
+
+## 93. Проверка загруженного файла
+
+На finish manager требует:
+
+```text
+receivedBytes == declared size
+```
+
+Затем:
+
+1. читает temporary file;
+2. вычисляет SHA-256;
+3. сравнивает с declaration;
+4. определяет format по binary header;
+5. извлекает dimensions;
+6. проверяет dimensions `1..8192`;
+7. проверяет совпадение extension и format.
+
+Поддерживаются:
+
+```text
+PNG
+JPEG
+WebP VP8
+WebP VP8L
+WebP VP8X
+```
+
+SVG и файлы, только переименованные в `.png`, отклоняются.
+
+## 94. Content-addressed asset
+
+Final filename:
+
+```text
+background-<первые 16 hex SHA-256>.<detected-extension>
+```
+
+Пример:
+
+```text
+background-4d1f8a6b7c2e9012.webp
+```
+
+Преимущества:
+
+- одинаковый content переиспользует одинаковое имя;
+- browser cache безопасен;
+- user filename не становится production path;
+- path traversal невозможен.
+
+Если final file уже существует, manager сверяет его полный SHA-256.
+
+## 95. Finish и dashboard commit
+
+При успешном finish:
+
+1. повторно загружается current dashboard;
+2. проверяется active uploadId;
+3. сравнивается current revision с revision start;
+4. temporary asset подготавливается;
+5. asset переименовывается в final path или переиспользуется;
+6. обновляется background выбранной panel;
+7. записываются detected width/height;
+8. dashboard revision увеличивается;
+9. `dashboard.json` записывается atomically;
+10. публикуется retained dashboard;
+11. публикуются dashboard status/result;
+12. публикуются upload status/result;
+13. старый неиспользуемый managed asset удаляется.
+
+Если запись dashboard не удалась, только что созданный final asset удаляется.
+
+## 96. Конфликт upload с параллельным save
+
+Upload запоминает:
+
+```text
+expectedRevision = revision из start
+```
+
+Finish допускается только при:
+
+```text
+currentDashboard.revision == expectedRevision
+```
+
+Если другой browser сохранил dashboard во время передачи chunks:
+
+- upload отменяется;
+- temporary file удаляется;
+- background не меняется;
+- current dashboard не перезаписывается;
+- result содержит current revision;
+- current retained dashboard публикуется повторно;
+- ready status содержит current revision.
+
+Таким образом, долгая фоновая загрузка не может затереть более новое изменение panel.
+
+## 97. Upload status
+
+Start:
+
+```json
+{
+  "state": "uploading",
+  "uploadId": "...",
+  "fileName": "...",
+  "received": 0,
+  "total": 482193,
+  "progress": 0,
+  "message": "Upload started"
+}
+```
+
+Chunks обновляют:
+
+```text
+received
+total
+progress
+```
+
+Successful finish:
+
+```text
+state = completed
+```
+
+Error:
+
+```text
+state = error
+message = ...
+```
+
+Без active upload manager публикует:
+
+```json
+{"state":"idle"}
+```
+
+## 98. Upload result
+
+Start result:
+
+```json
+{
+  "success": true,
+  "saved": false,
+  "message": "Upload started",
+  "uploadId": "...",
+  "fileName": "...",
+  "sha256": "...",
+  "size": 482193,
+  "revision": 12
+}
+```
+
+Finish result:
+
+```json
+{
+  "success": true,
+  "saved": true,
+  "message": "Background image uploaded",
+  "uploadId": "...",
+  "fileName": "background-4d1f8a6b7c2e9012.webp",
+  "sha256": "...",
+  "size": 482193,
+  "width": 1920,
+  "height": 1080,
+  "revision": 13
+}
+```
+
+Error result всегда содержит:
+
+```text
+revision
+```
+
+включая initial revision `0`.
+
+## 99. Browser upload workflow
+
+Editor разрешает upload только когда:
+
+- MQTT connected;
+- file выбран;
+- нет pending save;
+- нет другого upload;
+- dashboard draft не dirty.
+
+Browser:
+
+1. проверяет file size и extension;
+2. читает dimensions;
+3. вычисляет SHA-256;
+4. использует Web Crypto, если доступно;
+5. иначе использует встроенный JavaScript SHA-256;
+6. отправляет start;
+7. ждёт `uploading`;
+8. отправляет chunks по одному;
+9. после каждого ждёт status progress;
+10. отправляет finish;
+11. ждёт `saved=true`.
+
+Timeout:
+
+```text
+обычный upload event = 30 seconds
+finish = 60 seconds
+```
+
+При потере MQTT browser прекращает ожидание и показывает ошибку.
+
+Cancel публикует:
+
+```text
+/mdvwb/dashboard/background/upload/cancel/<uploadId>
+```
+
+## 100. Удаление старых assets
+
+После успешной замены background manager проверяет все panels.
+
+Старый file удаляется, только если:
+
+- он больше не используется ни одной panel;
+- имя начинается с `background-`;
+- имя не содержит path separators;
+- имя состоит из безопасных characters.
+
+Ручные или неизвестные files автоматически не удаляются.
+
+## 101. Профильные dashboard tests
+
+### 101.1. `mdvwb_dashboard_config_test`
+
+Проверяет:
+
+- v1 parser;
+- canonical sorting;
+- legacy number assignment;
+- strict schema;
+- background restrictions;
+- coordinates;
+- duplicate device;
+- duplicate number;
+- reference issues;
+- v1 → v2 migration;
+- multiple panels;
+- independent backgrounds;
+- default panel;
+- panel IDs.
+
+### 101.2. `mdvwb_dashboard_upload_test`
+
+Проверяет:
+
+- SHA-256;
+- start JSON;
+- default `panelId=main`;
+- unsafe uploadId/panelId;
+- sequential chunks;
+- image dimensions;
+- content-addressed filename;
+- expected revision;
+- SHA mismatch.
+
+### 101.3. `mdvwb_manager_revision_test`
+
+Проверяет ordering:
+
+```text
+result before current retained dashboard
+```
+
+при stale revision.
+
+### 101.4. `mdvwb_dashboard_concurrency_test`
+
+Проверяет:
+
+- revision `0` присутствует в terminal upload result;
+- invalid save сообщает current revision;
+- successful save сообщает committed revision;
+- failed finish сообщает current revision;
+- upload start на revision N;
+- параллельный dashboard save в N+1;
+- stale finish отклоняется;
+- current dashboard N+1 сохраняется;
+- error result приходит раньше republished current config.
+
+## 102. Проверки при изменении dashboard schema
+
+Обязательно проверить:
+
+- v1 migration;
+- version 2 canonical output;
+- revision;
+- 1..64 panels;
+- unique panel IDs;
+- existing default panel;
+- independent background;
+- 0..4096 placements per panel;
+- placement ID;
+- number 1..200;
+- bus/address range;
+- per-panel duplicate device;
+- x/y `0..1`;
+- markerScale `0.5..3`;
+- rotation `-180..180`;
+- visible;
+- stale references remain editable;
+- canonical sorting.
+
+## 103. Проверки при изменении dashboard MQTT
+
+Обязательно проверить:
+
+- retained config;
+- non-retained set/result;
+- retained set rejected;
+- 1 MiB payload limit;
+- stale revision;
+- result-before-current ordering;
+- current revision in every error result;
+- successful increment;
+- atomic write;
+- schedules status refresh;
+- dirty browser draft preservation.
+
+## 104. Проверки при изменении upload
+
+Обязательно проверить:
+
+- one active session;
+- safe uploadId;
+- safe panelId;
+- existing panel;
+- safe fileName;
+- 10 MiB file limit;
+- 48 KiB chunk limit;
+- sequential index;
+- exact declared size;
+- SHA-256;
+- detected image format;
+- extension match;
+- dimensions `1..8192`;
+- content-addressed filename;
+- current revision at start;
+- same revision at finish;
+- stale finish does not overwrite dashboard;
+- current revision in error result;
+- cleanup temporary file;
+- cleanup newly committed asset on dashboard write failure;
+- old asset removed only when unreferenced;
+- current retained dashboard republished after conflict.
+
+## 105. Dashboard invariants
+
+- Manager является единственным writer `dashboard.json`.
+- Canonical persisted schema имеет version 2.
+- Collection содержит минимум одну panel.
+- `defaultPanel` всегда существует.
+- Panel IDs уникальны.
+- Placement uniqueness является panel-local.
+- Координаты хранятся относительно, а не в pixels.
+- Missing bus/address является reference warning, а не parse failure.
+- Save использует optimistic revision.
+- Conflict не изменяет файл.
+- Error result сообщает current revision.
+- Background upload начинается только с current revision.
+- Background finish повторно проверяет revision.
+- Binary content проверяется независимо от extension.
+- User fileName не становится final production filename.
+- Долгий upload не может затереть более новый dashboard save.
+- Старый asset не удаляется, пока используется хотя бы одной panel.
