@@ -68,11 +68,13 @@ jobs:
           sh -n tests/deploy/mdvwb_backup_rollback_test.sh
           sh -n tests/deploy/mdvwb_offline_lifecycle_test.sh
           sh -n tests/deploy/mdvwb_online_installer_test.sh
+          sh -n tests/deploy/mdvwb_uninstall_test.sh
           sh tests/deploy/mdvwb_setup_test.sh
           sh tests/deploy/mdvwb_install_engine_test.sh
           sh tests/deploy/mdvwb_backup_rollback_test.sh
           sh tests/deploy/mdvwb_offline_lifecycle_test.sh
           sh tests/deploy/mdvwb_online_installer_test.sh
+          sh tests/deploy/mdvwb_uninstall_test.sh
           python3 -m json.tool deploy/package-manifest.json.in >/dev/null
           python3 -m json.tool deploy/buses.default.json >/dev/null
           python3 -m json.tool deploy/dashboard.default.json >/dev/null

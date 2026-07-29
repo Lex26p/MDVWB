@@ -15,7 +15,7 @@ case "$0" in
 esac
 
 case "${1:-}" in
-    install|update|rollback)
+    install|update|rollback|uninstall|purge)
         if [ "${MDVWB_SETUP_RUNNING_COPY:-0}" != "1" ]; then
             temporary_self=${TMPDIR:-/tmp}/mdvwb-setup-running.$$
             cp "$SELF_PATH" "$temporary_self"
@@ -79,6 +79,11 @@ Usage:
   mdvwb-setup backup [--backup-dir <directory>]
   mdvwb-setup rollback [--backup <directory>]
       [--backup-dir <directory>]
+  mdvwb-setup uninstall --yes [--dry-run] [--force]
+      [--backup-dir <directory>] [--no-backup] [--keep-retained]
+  mdvwb-setup purge --yes [--dry-run] [--force]
+      [--backup-dir <directory>] [--no-backup] [--keep-retained]
+      [--remove-backups]
   mdvwb-setup install --package <directory>
       --method <offline|online|source>
       [--force] [--allow-downgrade] [--dry-run]
@@ -1454,6 +1459,403 @@ command_write_state()
 }
 
 
+
+known_bus_ids()
+{
+    manager=$1
+    config=$2
+
+    if [ -x "$manager" ] && [ -s "$config" ]; then
+        configured_bus_ids "$manager" "$config"
+    fi
+
+    default_dir=$(root_path /etc/default)
+    if [ -d "$default_dir" ]; then
+        for path in "$default_dir"/mdvwb-[0-9]*; do
+            [ -e "$path" ] || [ -L "$path" ] || continue
+            name=${path##*/}
+            bus=${name#mdvwb-}
+            case "$bus" in
+                ""|*[!0-9]*)
+                    ;;
+                *)
+                    printf '%s\n' "$bus"
+                    ;;
+            esac
+        done
+    fi
+}
+
+stop_and_disable_managed_services()
+{
+    manager=$1
+    config=$2
+
+    "$MDVWB_SYSTEMCTL" disable --now mdvwb-scheduler.service \
+        2>/dev/null || true
+    "$MDVWB_SYSTEMCTL" disable --now mdvwb-manager.service \
+        2>/dev/null || true
+
+    for bus in $(known_bus_ids "$manager" "$config" | sort -n -u); do
+        "$MDVWB_SYSTEMCTL" disable --now "mdvwb@$bus.service" \
+            2>/dev/null || true
+    done
+
+    "$MDVWB_SYSTEMCTL" disable --now mdvwb.service mdvwb-2.service \
+        2>/dev/null || true
+}
+
+clean_owned_retained_topics()
+{
+    manager=$1
+    config=$2
+
+    command -v mqtt-delete-retained >/dev/null 2>&1 || return 0
+    [ -x "$manager" ] || return 0
+    [ -s "$config" ] || return 0
+
+    "$manager" validate "$config"
+
+    "$manager" summary "$config" |
+    while IFS= read -r line; do
+        case "$line" in
+            bus=*)
+                bus=$(printf '%s\n' "$line" |
+                    sed -n 's/^bus=\([0-9][0-9]*\) .*/\1/p')
+                addresses=$(printf '%s\n' "$line" |
+                    sed -n 's/.* addresses=//p')
+                [ -n "$bus" ] || continue
+
+                for address in $(printf '%s\n' "$addresses" | tr ',' ' '); do
+                    case "$address" in
+                        ""|*[!0-9]*)
+                            continue
+                            ;;
+                    esac
+                    mqtt-delete-retained \
+                        "/devices/Fan-${bus}_${address}/#" \
+                        >/dev/null 2>&1 || true
+                done
+                mqtt-delete-retained \
+                    "/devices/sist-${bus}/#" \
+                    >/dev/null 2>&1 || true
+                ;;
+        esac
+    done
+}
+
+remove_operator_web_preserving_assets()
+{
+    operator_root=$1
+    [ -d "$operator_root" ] || return 0
+
+    for path in "$operator_root"/* "$operator_root"/.[!.]* "$operator_root"/..?*; do
+        [ -e "$path" ] || [ -L "$path" ] || continue
+        [ "${path##*/}" = assets ] && continue
+        rm -rf "$path"
+    done
+}
+
+remove_managed_runtime()
+{
+    mode=$1
+    keep_retained=$2
+
+    bin_dir=$(root_path /usr/local/bin)
+    sbin_dir=$(root_path /usr/local/sbin)
+    lib_dir=$(root_path /usr/local/lib/mdvwb)
+    systemd_dir=$(root_path /etc/systemd/system)
+    config=$(root_path /etc/mdvwb/buses.json)
+    manager="$bin_dir/mdvwb-manager"
+
+    if [ -n "${MDVWB_WWW_ROOT:-}" ]; then
+        www_root=$MDVWB_WWW_ROOT
+    else
+        www_root=$(root_path /var/www)
+    fi
+
+    printf '[remove 1/6] Stop and disable MDVWB services\n'
+    stop_and_disable_managed_services "$manager" "$config"
+
+    printf '[remove 2/6] Clean owned retained MQTT topics\n'
+    if [ "$keep_retained" -eq 1 ]; then
+        printf '%s\n' "retained=preserved"
+    else
+        clean_owned_retained_topics "$manager" "$config"
+        printf '%s\n' "retained=cleaned"
+    fi
+
+    printf '[remove 3/6] Remove binaries and systemd units\n'
+    rm -f \
+        "$bin_dir/MDVWB" \
+        "$bin_dir/mdvwb-offline" \
+        "$bin_dir/mdvwb-manager" \
+        "$bin_dir/mdvwb-scheduler" \
+        "$bin_dir/mdvwb-bus"
+    rm -rf "$lib_dir"
+    rm -f \
+        "$systemd_dir/mdvwb@.service" \
+        "$systemd_dir/mdvwb-manager.service" \
+        "$systemd_dir/mdvwb-scheduler.service" \
+        "$systemd_dir/mdvwb.service" \
+        "$systemd_dir/mdvwb-2.service"
+    "$MDVWB_SYSTEMCTL" daemon-reload
+
+    printf '[remove 4/6] Remove installed web applications\n'
+    rm -rf "$www_root/mdvwb"
+    if [ "$mode" = purge ]; then
+        rm -rf "$www_root/fancoils"
+    else
+        remove_operator_web_preserving_assets "$www_root/fancoils"
+    fi
+
+    printf '[remove 5/6] Remove installation state\n'
+    rm -f "$DEFAULT_STATE_PATH"
+
+    if [ "$mode" = purge ]; then
+        default_dir=$(root_path /etc/default)
+        config_dir=$(root_path /etc/mdvwb)
+        state_dir=$(root_path /var/lib/mdvwb)
+
+        rm -rf "$config_dir" "$state_dir"
+        rm -f \
+            "$default_dir/mdvwb" \
+            "$default_dir/mdvwb-manager" \
+            "$default_dir/mdvwb-scheduler"
+        for path in "$default_dir"/mdvwb-[0-9]*; do
+            [ -e "$path" ] || [ -L "$path" ] || continue
+            rm -f "$path"
+        done
+    fi
+
+    printf '[remove 6/6] Remove lifecycle utility last\n'
+    rm -f "$sbin_dir/mdvwb-setup"
+}
+
+remove_mdvw_backups()
+{
+    backup_root=$1
+    [ -d "$backup_root" ] || return 0
+
+    for backup in "$backup_root"/*; do
+        [ -d "$backup" ] || continue
+        [ -f "$backup/backup.conf" ] || continue
+        [ -f "$backup/COMPLETE" ] || continue
+        grep -q '^MDVWB_BACKUP_PRODUCT=MDVWB$' \
+            "$backup/backup.conf" || continue
+        rm -rf "$backup"
+    done
+
+    rmdir "$backup_root" 2>/dev/null || true
+}
+
+print_removal_plan()
+{
+    mode=$1
+    backup_root=$2
+    no_backup=$3
+    keep_retained=$4
+    remove_backups=$5
+
+    printf '%s\n' \
+        "ACTION=$mode" \
+        "root=$MDVWB_ROOT" \
+        "remove=/usr/local/bin/MDVWB" \
+        "remove=/usr/local/bin/mdvwb-offline" \
+        "remove=/usr/local/bin/mdvwb-manager" \
+        "remove=/usr/local/bin/mdvwb-scheduler" \
+        "remove=/usr/local/lib/mdvwb" \
+        "remove=/usr/local/sbin/mdvwb-setup" \
+        "remove=/etc/systemd/system/mdvwb*.service" \
+        "remove=/var/www/mdvwb"
+
+    if [ "$mode" = uninstall ]; then
+        printf '%s\n' \
+            "preserve=/etc/mdvwb" \
+            "preserve=/etc/default/mdvwb*" \
+            "preserve=/var/lib/mdvwb/scheduler-state.tsv" \
+            "preserve=/var/www/fancoils/assets" \
+            "preserve=/var/log/mdvwb" \
+            "preserve=$backup_root"
+    else
+        printf '%s\n' \
+            "remove=/etc/mdvwb" \
+            "remove=/etc/default/mdvwb*" \
+            "remove=/var/lib/mdvwb" \
+            "remove=/var/www/fancoils" \
+            "remove=/var/log/mdvwb"
+        if [ "$remove_backups" -eq 1 ]; then
+            printf 'remove=%s\n' "$backup_root"
+        else
+            printf 'preserve=%s\n' "$backup_root"
+        fi
+    fi
+
+    [ "$no_backup" -eq 0 ] &&
+        printf 'backupRoot=%s\n' "$backup_root" ||
+        printf '%s\n' "backup=disabled"
+
+    [ "$keep_retained" -eq 0 ] &&
+        printf '%s\n' "retained=clean-exact-configured-topics" ||
+        printf '%s\n' "retained=preserve"
+}
+
+command_remove()
+{
+    mode=$1
+    shift
+
+    confirmed=0
+    dry_run=0
+    force=0
+    no_backup=0
+    keep_retained=0
+    remove_backups=0
+    backup_root=$DEFAULT_BACKUP_ROOT
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --yes)
+                confirmed=1
+                shift
+                ;;
+            --dry-run)
+                dry_run=1
+                shift
+                ;;
+            --force)
+                force=1
+                shift
+                ;;
+            --no-backup)
+                no_backup=1
+                shift
+                ;;
+            --keep-retained)
+                keep_retained=1
+                shift
+                ;;
+            --remove-backups)
+                [ "$mode" = purge ] ||
+                    fail 2 "--remove-backups is valid only with purge"
+                remove_backups=1
+                shift
+                ;;
+            --backup-dir)
+                [ "$#" -ge 2 ] ||
+                    fail 2 "--backup-dir requires a directory"
+                backup_root=$2
+                shift 2
+                ;;
+            *)
+                fail 2 "unknown $mode argument: $1"
+                ;;
+        esac
+    done
+
+    require_root
+    require_command awk
+    require_command cp
+    require_command date
+    require_command grep
+    require_command sed
+    require_command sort
+    require_command tr
+    require_command "$MDVWB_SYSTEMCTL"
+
+    if [ ! -s "$DEFAULT_STATE_PATH" ] && [ "$force" -ne 1 ]; then
+        fail 3 "MDVWB installation state was not found; use --force to remove leftovers"
+    fi
+
+    print_removal_plan \
+        "$mode" "$backup_root" "$no_backup" \
+        "$keep_retained" "$remove_backups"
+
+    if [ "$dry_run" -eq 1 ]; then
+        printf '%s\n' "DRY_RUN=complete"
+        return 0
+    fi
+
+    [ "$confirmed" -eq 1 ] ||
+        fail 2 "$mode requires --yes after reviewing --dry-run output"
+
+    current_version=unknown
+    if [ -s "$DEFAULT_STATE_PATH" ]; then
+        load_state "$DEFAULT_STATE_PATH"
+        current_version=$STATE_VERSION
+    fi
+
+    start_operation_log "$mode" local "$current_version" none
+
+    manager=$(root_path /usr/local/bin/mdvwb-manager)
+    backup=
+    if [ "$no_backup" -eq 0 ]; then
+        printf '[transaction] Create backup before removal\n'
+        if backup=$(create_backup \
+            "$backup_root" "automatic-$mode" "$manager"); then
+            printf 'BACKUP_CREATED path=%s\n' "$backup"
+            append_operation_log backup "$backup"
+        else
+            backup_status=$?
+            append_operation_log backup failed
+            append_operation_log backupStatus "$backup_status"
+            finish_operation_log failed-before-changes
+            return "$backup_status"
+        fi
+    else
+        printf '%s\n' \
+            "WARNING: automatic backup and rollback are disabled." >&2
+    fi
+
+    if sh "$SELF_PATH" __remove "$mode" "$keep_retained"; then
+        finish_operation_log success
+    else
+        removal_status=$?
+        append_operation_log removalStatus "$removal_status"
+
+        if [ -z "$backup" ]; then
+            finish_operation_log failed
+            return "$removal_status"
+        fi
+
+        if restore_backup "$backup"; then
+            append_operation_log rollback completed
+            finish_operation_log failed-rolled-back
+            return "$removal_status"
+        fi
+
+        append_operation_log rollback failed
+        finish_operation_log failed-rollback-failed
+        return 8
+    fi
+
+    if [ "$mode" = purge ]; then
+        rm -rf "$DEFAULT_LOG_ROOT"
+        if [ "$remove_backups" -eq 1 ]; then
+            remove_mdvw_backups "$backup_root"
+        fi
+    fi
+
+    printf '%s\n' \
+        "REMOVE_RESULT=success" \
+        "mode=$mode"
+    [ -z "$backup" ] || printf 'backup=%s\n' "$backup"
+
+    if [ "$mode" = uninstall ]; then
+        printf '%s\n' \
+            "preserved=/etc/mdvwb" \
+            "preserved=/etc/default/mdvwb*" \
+            "preserved=/var/lib/mdvwb/scheduler-state.tsv" \
+            "preserved=/var/www/fancoils/assets" \
+            "preserved=/var/log/mdvwb" \
+            "preserved=$backup_root"
+    elif [ "$remove_backups" -eq 0 ]; then
+        printf 'preserved=%s\n' "$backup_root"
+    else
+        printf '%s\n' "backups=removed"
+    fi
+}
+
 command_backup()
 {
     backup_root=$DEFAULT_BACKUP_ROOT
@@ -1718,6 +2120,15 @@ case "$command" in
         ;;
     rollback)
         command_rollback "$@"
+        ;;
+    uninstall)
+        command_remove uninstall "$@"
+        ;;
+    purge)
+        command_remove purge "$@"
+        ;;
+    __remove)
+        remove_managed_runtime "$@"
         ;;
     __apply)
         command_apply_internal "$@"

@@ -51,6 +51,14 @@ case "$COMMAND" in
         shift
         exec sh "$SCRIPT_DIR/mdvwb-setup" rollback "$@"
         ;;
+    uninstall)
+        shift
+        exec sh "$SCRIPT_DIR/mdvwb-setup" uninstall "$@"
+        ;;
+    purge)
+        shift
+        exec sh "$SCRIPT_DIR/mdvwb-setup" purge "$@"
+        ;;
     help|--help|-h)
         cat <<'EOF'
 MDVWB offline package
@@ -64,6 +72,16 @@ Usage:
   ./offline-install.sh backup [--backup-dir <directory>]
   ./offline-install.sh rollback [--backup <directory>]
       [--backup-dir <directory>]
+  ./offline-install.sh uninstall --yes [options]
+  ./offline-install.sh purge --yes [options]
+
+Removal options:
+  --dry-run
+  --force
+  --backup-dir <directory>
+  --no-backup
+  --keep-retained
+  --remove-backups  (purge only)
 
 Install and update options:
   --force
