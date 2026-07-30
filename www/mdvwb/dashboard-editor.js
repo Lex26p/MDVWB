@@ -254,13 +254,14 @@ export class DashboardEditor {
     const preferred = findDashboardPanel(incoming, this.state.selectedPanelId)
       ? this.state.selectedPanelId
       : incoming.defaultPanel;
-    this.loadPanel(preferred);
+    const preserveSelectedFile = this.state.pendingSave && preferred === this.state.selectedPanelId;
+    this.loadPanel(preferred, { preserveSelectedFile });
     this.state.pendingSave = false;
     this.state.received = true;
     this.hideConfigResult();
   }
 
-  loadPanel(panelId) {
+  loadPanel(panelId, { preserveSelectedFile = false } = {}) {
     const panel = findDashboardPanel(this.state.collectionDraft, panelId);
     if (!panel) {
       throw new Error(`Панель «${panelId}» не найдена`);
@@ -276,7 +277,9 @@ export class DashboardEditor {
     this.state.config = applyUniformMarkerScale(incoming, markerScaleFromConfiguration(incoming));
     this.state.draft = applyUniformMarkerScale(draft, this.state.markerScale);
     this.state.previewScale = this.state.draft.background.defaultScale;
-    this.clearSelectedFileAfterUpload();
+    if (!preserveSelectedFile) {
+      this.clearSelectedFileAfterUpload();
+    }
     this.hideUploadResult();
     this.placementEditor.clearSelection?.();
   }
