@@ -466,6 +466,62 @@ export class DashboardEditor {
       this.setPreviewScale(this.state.previewScale * factor);
     }, { passive: false });
 
+    const viewport = this.elements.previewViewport;
+    let pan = null;
+
+    viewport.addEventListener("pointerdown", (event) => {
+      if (event.button !== 1) {
+        return;
+      }
+
+      event.preventDefault();
+      pan = {
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        startScrollLeft: viewport.scrollLeft,
+        startScrollTop: viewport.scrollTop,
+        previousCursor: viewport.style.cursor,
+        previousUserSelect: viewport.style.userSelect,
+      };
+      viewport.setPointerCapture(event.pointerId);
+      viewport.style.cursor = "grabbing";
+      viewport.style.userSelect = "none";
+    });
+
+    viewport.addEventListener("pointermove", (event) => {
+      if (!pan || event.pointerId !== pan.pointerId) {
+        return;
+      }
+
+      event.preventDefault();
+      viewport.scrollLeft = pan.startScrollLeft - (event.clientX - pan.startClientX);
+      viewport.scrollTop = pan.startScrollTop - (event.clientY - pan.startClientY);
+    });
+
+    const finishPan = (event) => {
+      if (!pan || event.pointerId !== pan.pointerId) {
+        return;
+      }
+
+      const completedPan = pan;
+      pan = null;
+      if (viewport.hasPointerCapture(event.pointerId)) {
+        viewport.releasePointerCapture(event.pointerId);
+      }
+      viewport.style.cursor = completedPan.previousCursor;
+      viewport.style.userSelect = completedPan.previousUserSelect;
+    };
+
+    viewport.addEventListener("pointerup", finishPan);
+    viewport.addEventListener("pointercancel", finishPan);
+    viewport.addEventListener("lostpointercapture", finishPan);
+    viewport.addEventListener("auxclick", (event) => {
+      if (event.button === 1) {
+        event.preventDefault();
+      }
+    });
+
     this.elements.resetButton.addEventListener("click", () => {
       this.state.collectionDraft = cloneDashboardCollection(this.state.collection);
       const nextPanel = findDashboardPanel(this.state.collectionDraft, this.state.selectedPanelId)
