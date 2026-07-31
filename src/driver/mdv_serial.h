@@ -1,13 +1,13 @@
 #pragma once
 
 #include "mdv_protocol.h"
+#include "serial_port.h"
 
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 
@@ -39,38 +39,6 @@ public:
 private:
     TimingSettings settings_{};
     std::optional<std::chrono::steady_clock::time_point> nextAllowedStart_;
-};
-
-class SerialPort {
-public:
-    SerialPort() = default;
-    ~SerialPort();
-
-    SerialPort(const SerialPort&) = delete;
-    SerialPort& operator=(const SerialPort&) = delete;
-
-    SerialPort(SerialPort&& other) noexcept;
-    SerialPort& operator=(SerialPort&& other) noexcept;
-
-    void Open(std::string_view portName);
-    void Close() noexcept;
-
-    [[nodiscard]] bool IsOpen() const noexcept;
-    [[nodiscard]] const std::string& PortName() const noexcept;
-
-    void DiscardInput();
-    void WriteAll(std::span<const std::uint8_t> data);
-    [[nodiscard]] std::size_t ReadSome(std::span<std::uint8_t> buffer);
-
-    [[nodiscard]] static std::string NormalizePortName(std::string_view portName);
-
-private:
-#ifdef _WIN32
-    void* handle_ = reinterpret_cast<void*>(-1);
-#else
-    int handle_ = -1;
-#endif
-    std::string portName_;
 };
 
 enum class TransactionStatus {

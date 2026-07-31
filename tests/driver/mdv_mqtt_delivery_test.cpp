@@ -1,4 +1,6 @@
+#include "mdv_driver.h"
 #include "mdv_mosquitto.h"
+
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -48,46 +50,80 @@ void TestDisconnectedTransportQueuesOnlyRetainedState()
             "independent retained state was not queued");
 }
 
-void TestFactualControlsComeOnlyFromC0()
+void TestSemanticStateComesOnlyFromConfirmedRead()
 {
+    mdv::DeviceRuntime incomplete(1);
+    mdv::DeviceState incompleteState;
+    incompleteState.command = mdv::Command::Read;
+    incompleteState.address = 1;
+    incompleteState.power = false;
+    incompleteState.mode = std::nullopt;
+    incompleteState.fanSpeed = std::nullopt;
+    incompleteState.setTemperature = 0;
+    incompleteState.roomTemperature = std::nullopt;
+
+    incomplete.device.SynchronizeReadState(incompleteState);
+    incomplete.online = true;
+
+    const auto incompleteSemantic = incomplete.SemanticState();
+    Require(incompleteSemantic.hasState,
+            "verified C0 state was not exposed through the driver boundary");
+    Require(!incompleteSemantic.mode.has_value(),
+            "missing C0 Mode became a factual semantic value");
+    Require(!incompleteSemantic.fanSpeed.has_value(),
+            "missing C0 Speed became a factual semantic value");
+    Require(!incompleteSemantic.setTemperature.has_value(),
+            "invalid C0 SetTemp became a factual semantic value");
+    Require(!incompleteSemantic.roomTemperature.has_value(),
+            "unavailable C0 T1 became a factual semantic value");
+
+    mdv::DeviceRuntime runtime(2);
     mdv::DeviceState state;
     state.command = mdv::Command::Read;
-    state.mode = std::nullopt;
-    state.fanSpeed = std::nullopt;
-    state.setTemperature = 0;
-    state.roomTemperature = std::nullopt;
-
-    auto values = mdv::mqtt_detail::ConfirmedStateValuesFromC0(state);
-    Require(!values.mode.has_value(),
-            "missing C0 Mode became a factual MQTT value");
-    Require(!values.speed.has_value(),
-            "missing C0 Speed became a factual MQTT value");
-    Require(!values.setTemperature.has_value(),
-            "invalid C0 SetTemp became a factual MQTT value");
-    Require(!values.roomTemperature.has_value(),
-            "unavailable C0 T1 became a factual MQTT value");
-
-    state.command = mdv::Command::Set;
+    state.address = 2;
+    state.power = true;
     state.mode = mdv::Mode::Heat;
+    state.activeMode = mdv::Mode::Heat;
     state.fanSpeed = mdv::FanSpeed::High;
+    state.activeFanSpeed = mdv::FanSpeed::High;
     state.setTemperature = 25;
     state.roomTemperature = 24.0;
-    values = mdv::mqtt_detail::ConfirmedStateValuesFromC0(state);
-    Require(!values.mode.has_value() && !values.speed.has_value() &&
-                !values.setTemperature.has_value() &&
-                !values.roomTemperature.has_value(),
-            "C3 response values were accepted as factual MQTT state");
 
-    state.command = mdv::Command::Read;
-    values = mdv::mqtt_detail::ConfirmedStateValuesFromC0(state);
-    Require(values.mode == mdv::Mode::Heat,
-            "verified C0 Mode was not selected for MQTT");
-    Require(values.speed == mdv::FanSpeed::High,
-            "verified C0 Speed was not selected for MQTT");
-    Require(values.setTemperature == 25,
-            "verified C0 SetTemp was not selected for MQTT");
-    Require(values.roomTemperature == 24.0,
-            "verified C0 T1 was not selected for MQTT");
+    runtime.device.SynchronizeReadState(state);
+    runtime.online = true;
+
+    auto semantic = runtime.SemanticState();
+    Require(semantic.mode == mdv::HvacMode::Heat,
+            "verified C0 Mode was not mapped to semantic state");
+    Require(semantic.fanSpeed == mdv::HvacFanSpeed::High,
+            "verified C0 Speed was not mapped to semantic state");
+    Require(semantic.setTemperature == 25.0,
+            "verified C0 SetTemp was not mapped to semantic state");
+    Require(semantic.roomTemperature == 24.0,
+            "verified C0 T1 was not mapped to semantic state");
+
+    state.command = mdv::Command::Set;
+    state.mode = mdv::Mode::Cool;
+    state.fanSpeed = mdv::FanSpeed::Low;
+    state.setTemperature = 19;
+    state.roomTemperature = 18.5;
+
+    bool c3Rejected = false;
+    try {
+        runtime.device.SynchronizeReadState(state);
+    }
+    catch (const std::invalid_argument&) {
+        c3Rejected = true;
+    }
+    Require(c3Rejected,
+            "non-C0 state was accepted as confirmed device state");
+
+    semantic = runtime.SemanticState();
+    Require(semantic.mode == mdv::HvacMode::Heat &&
+                semantic.fanSpeed == mdv::HvacFanSpeed::High &&
+                semantic.setTemperature == 25.0 &&
+                semantic.roomTemperature == 24.0,
+            "rejected non-C0 state changed factual semantic values");
 }
 
 void TestUnavailableTemperatureClearsRetainedStateOnce()
@@ -115,7 +151,7 @@ int main()
 {
     try {
         TestDisconnectedTransportQueuesOnlyRetainedState();
-        TestFactualControlsComeOnlyFromC0();
+        TestSemanticStateComesOnlyFromConfirmedRead();
         TestUnavailableTemperatureClearsRetainedStateOnce();
         std::cout << "MDVWB MQTT delivery tests: OK\n";
         return 0;

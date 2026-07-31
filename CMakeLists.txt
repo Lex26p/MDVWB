@@ -40,7 +40,16 @@ target_include_directories(MDVWB PRIVATE ${MDVWB_DRIVER_DIR})
 option(MDVWB_REQUIRE_MOSQUITTO "Fail configuration when libmosquitto is unavailable" OFF)
 
 find_package(Threads REQUIRED)
-target_link_libraries(MDVWB PRIVATE Threads::Threads)
+
+add_library(mdvwb_serial_port STATIC
+    ${MDVWB_DRIVER_DIR}/serial_port.cpp
+    ${MDVWB_DRIVER_DIR}/serial_port.h
+)
+target_compile_features(mdvwb_serial_port PUBLIC cxx_std_20)
+target_include_directories(mdvwb_serial_port PUBLIC ${MDVWB_DRIVER_DIR})
+target_link_libraries(mdvwb_serial_port PUBLIC Threads::Threads)
+
+target_link_libraries(MDVWB PRIVATE Threads::Threads mdvwb_serial_port)
 
 # libmosquitto is optional for local protocol work. When available, the same
 # executable gains a real asynchronous MQTT client without changing sources.
@@ -75,9 +84,12 @@ endif()
 add_library(mdvwb_modbus_rtu STATIC
     ${MDVWB_DRIVER_DIR}/modbus_rtu.cpp
     ${MDVWB_DRIVER_DIR}/modbus_rtu.h
+    ${MDVWB_DRIVER_DIR}/modbus_rtu_serial.cpp
+    ${MDVWB_DRIVER_DIR}/modbus_rtu_serial.h
 )
 target_compile_features(mdvwb_modbus_rtu PUBLIC cxx_std_20)
 target_include_directories(mdvwb_modbus_rtu PUBLIC ${MDVWB_DRIVER_DIR})
+target_link_libraries(mdvwb_modbus_rtu PUBLIC mdvwb_serial_port)
 
 add_executable(mdvwb-offline
     ${MDVWB_DRIVER_DIR}/mdv_offline.cpp
@@ -174,6 +186,8 @@ target_link_libraries(mdvwb-scheduler PRIVATE mdvwb_scheduler)
 
 add_executable(mdvwb_mqtt_delivery_test
     ${MDVWB_DRIVER_TEST_DIR}/mdv_mqtt_delivery_test.cpp
+    ${MDVWB_DRIVER_DIR}/mdv_protocol.cpp
+    ${MDVWB_DRIVER_DIR}/mdv_device.cpp
 )
 target_link_libraries(mdvwb_mqtt_delivery_test PRIVATE mdvwb_mosquitto_transport)
 
@@ -190,6 +204,11 @@ add_executable(mdvwb_modbus_rtu_test
     ${MDVWB_DRIVER_TEST_DIR}/modbus_rtu_test.cpp
 )
 target_link_libraries(mdvwb_modbus_rtu_test PRIVATE mdvwb_modbus_rtu)
+
+add_executable(mdvwb_modbus_rtu_serial_test
+    ${MDVWB_DRIVER_TEST_DIR}/modbus_rtu_serial_test.cpp
+)
+target_link_libraries(mdvwb_modbus_rtu_serial_test PRIVATE mdvwb_modbus_rtu)
 
 add_executable(mdvwb_buses_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_buses_config_test.cpp
@@ -275,11 +294,13 @@ target_link_libraries(mdvwb_mqtt_command_delivery_test
 set(MDVWB_PROJECT_TARGETS
     MDVWB
     mdvwb_mosquitto_transport
+    mdvwb_serial_port
     mdvwb_modbus_rtu
     mdvwb-offline
     mdvwb_mqtt_delivery_test
     mdvwb_driver_fairness_test
     mdvwb_modbus_rtu_test
+    mdvwb_modbus_rtu_serial_test
     mdvwb_buses_config
     mdvwb_dashboard_config
     mdvwb_schedules_config
@@ -327,6 +348,7 @@ add_test(NAME mdvwb_offline_publisher_test COMMAND mdvwb-offline --self-test)
 add_test(NAME mdvwb_mqtt_delivery_test COMMAND mdvwb_mqtt_delivery_test)
 add_test(NAME mdvwb_driver_fairness_test COMMAND mdvwb_driver_fairness_test)
 add_test(NAME mdvwb_modbus_rtu_test COMMAND mdvwb_modbus_rtu_test)
+add_test(NAME mdvwb_modbus_rtu_serial_test COMMAND mdvwb_modbus_rtu_serial_test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
 add_test(NAME mdvwb_dashboard_config_test COMMAND mdvwb_dashboard_config_test)
 add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)

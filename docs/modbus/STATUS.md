@@ -8,17 +8,17 @@
 
 ## Current stage
 
-**Milestone 1 complete after successful build/CTest: protocol-independent driver boundary.**
+**Milestone 2 complete after successful build/CTest: Modbus RTU transport core.**
 
-Modbus RTU wire/profiles are still **not implemented**.
+Modbus RTU framing, CRC and serial transport are implemented. Equipment profiles and register mappings are still **not implemented**.
 
-The existing MDV driver now exposes a protocol-independent command/state boundary, and MQTT consumes that boundary instead of MDV-specific command/state types.
+The existing MDV driver remains behind the protocol-independent boundary. A reusable Modbus RTU codec and configurable serial transport now exist for future profile-driven Modbus drivers.
 
 ## Current overall status
 
 ```text
 Documentation / design     PREPARED
-Runtime implementation     MILESTONE 1
+Runtime implementation     MILESTONE 2
 Hardware validation        NOT STARTED
 Production release         NOT STARTED
 ```
@@ -43,10 +43,10 @@ The documentation baseline was committed and verified before runtime refactoring
 ## Implementation status
 
 - [x] Protocol-independent driver boundary
-- [ ] Modbus RTU transport core
-- [ ] Modbus CRC implementation/tests
-- [ ] Modbus request/response handling
-- [ ] Modbus exception handling
+- [x] Modbus RTU transport core
+- [x] Modbus CRC implementation/tests
+- [x] Modbus request/response handling
+- [x] Modbus exception handling
 - [ ] Profile loader
 - [ ] Profile validation
 - [ ] Numeric scaling and inverse write conversion
@@ -236,6 +236,24 @@ Milestone 1 is considered complete only when the change is built locally and the
 
 The refactor is designed to preserve current MQTT topics, values and MDV retry/poll behavior.
 
+
+## Modbus RTU transport implemented
+
+Milestone 2 now provides:
+
+- Modbus CRC16 calculation and validation;
+- FC03 Read Holding Registers request/response handling;
+- FC10 Write Multiple Registers request/response handling;
+- Modbus exception-response handling;
+- variable-length RTU response collection;
+- configurable shared serial-port settings;
+- Modbus RTU serial transport with response timeout and t3.5 inter-frame delay;
+- transport tests that do not require physical hardware.
+
+The existing MDV serial transport still opens the port explicitly as 4800 8N1, preserving current MDV behavior.
+
+No manufacturer register map, JSON profile, Modbus bus configuration, scan logic or UI is included in this milestone.
+
 ## Open design items
 
 These items are not yet final and should not be treated as implemented facts:
@@ -297,9 +315,9 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-Begin **Milestone 2: Modbus RTU transport core** from `ROADMAP.md`.
+Begin **Milestone 3: profile loader and validation** from `ROADMAP.md`.
 
-The next task should introduce only reusable Modbus RTU framing/CRC/transaction primitives and tests. It must not yet add manufacturer register mappings, manager/web configuration or a production equipment profile.
+The next task should define/load the smallest JSON profile schema needed for the first real Modbus equipment, validate it deterministically, and keep manufacturer-specific register knowledge out of the common transport core. It must not yet add manager/web configuration or live hardware control.
 
 ## Status update rules
 
