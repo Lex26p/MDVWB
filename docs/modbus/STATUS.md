@@ -8,17 +8,17 @@
 
 ## Current stage
 
-**Documentation baseline complete, awaiting one documentation commit.**
+**Milestone 1 complete after successful build/CTest: protocol-independent driver boundary.**
 
-Runtime implementation of Modbus support has **not started**.
+Modbus RTU wire/profiles are still **not implemented**.
 
-The documentation set is now prepared. After it is committed and verified, the next development stage is the protocol-independent driver boundary.
+The existing MDV driver now exposes a protocol-independent command/state boundary, and MQTT consumes that boundary instead of MDV-specific command/state types.
 
 ## Current overall status
 
 ```text
 Documentation / design     PREPARED
-Runtime implementation     NOT STARTED
+Runtime implementation     MILESTONE 1
 Hardware validation        NOT STARTED
 Production release         NOT STARTED
 ```
@@ -38,11 +38,11 @@ Also prepared in this documentation batch:
 - [x] `docs/README.md`
 - [x] `docs/protocols/MDV_V2_RESEARCH.md`
 
-The documentation batch is prepared and should now be reviewed/committed together in one Git commit.
+The documentation baseline was committed and verified before runtime refactoring began.
 
 ## Implementation status
 
-- [ ] Protocol-independent driver boundary
+- [x] Protocol-independent driver boundary
 - [ ] Modbus RTU transport core
 - [ ] Modbus CRC implementation/tests
 - [ ] Modbus request/response handling
@@ -216,30 +216,25 @@ The exact register mapping has not yet been promoted to a production profile.
 
 It must first be documented separately from the generic profile specification.
 
-## No runtime changes yet
+## Runtime boundary implemented
 
 At this status point:
 
-- no C++ production code has been changed for Modbus;
+- `IDeviceDriver` defines protocol-independent command and state access;
+- `MdvDriver` implements that interface while preserving existing MDV behavior;
+- MQTT command routing uses semantic `DriverCommand` values;
+- MQTT state publication consumes `DriverDeviceState` rather than `DeviceContext`/raw MDV fields;
+- no Modbus RTU framing/register/profile code exists yet;
 - no manager configuration schema has been changed for Modbus;
 - no web UI has been changed for Modbus;
-- no MQTT behavior has been changed for Modbus;
 - no Modbus service has been enabled;
 - no installation/deployment files have been changed for Modbus.
 
-This is intentional.
-
 ## Verification status
 
-Documentation files are being prepared and reviewed locally before a single documentation commit.
+Milestone 1 is considered complete only when the change is built locally and the full CTest suite passes before commit.
 
-No build or runtime tests are required for the documentation-only preparation steps.
-
-Once the complete documentation batch is committed, the commit should be verified for:
-
-- expected documentation files only;
-- correct repository paths;
-- no accidental production-code changes.
+The refactor is designed to preserve current MQTT topics, values and MDV retry/poll behavior.
 
 ## Open design items
 
@@ -302,16 +297,9 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-After the documentation commit is accepted and verified, begin **Milestone 1: protocol-independent driver boundary** from `ROADMAP.md`.
+Begin **Milestone 2: Modbus RTU transport core** from `ROADMAP.md`.
 
-The first code step should:
-
-- introduce the smallest clean driver boundary needed for future Modbus support;
-- route the existing MDV implementation through it without changing MDV behavior;
-- keep MQTT, scheduler and web semantics unchanged;
-- add/adjust tests proving that the refactor is behavior-preserving.
-
-Do not implement Modbus register logic in that first code step.
+The next task should introduce only reusable Modbus RTU framing/CRC/transaction primitives and tests. It must not yet add manufacturer register mappings, manager/web configuration or a production equipment profile.
 
 ## Status update rules
 

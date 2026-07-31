@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mdv_driver.h"
+#include "device_driver.h"
 #include "mdv_bounded_queue.h"
 
 #include <array>
@@ -43,32 +43,6 @@ struct MqttPublication {
 };
 
 namespace mqtt_detail {
-
-// Values eligible for factual MQTT publication. The function deliberately
-// accepts only C0 data and never consults the cached C3 command frame.
-struct ConfirmedStateValues {
-    std::optional<Mode> mode;
-    std::optional<FanSpeed> speed;
-    std::optional<std::uint8_t> setTemperature;
-    std::optional<double> roomTemperature;
-};
-
-[[nodiscard]] inline ConfirmedStateValues ConfirmedStateValuesFromC0(
-    const DeviceState& state) noexcept
-{
-    if (state.command != Command::Read) {
-        return {};
-    }
-
-    ConfirmedStateValues values;
-    values.mode = state.mode;
-    values.speed = state.fanSpeed;
-    if (state.setTemperature >= 16 && state.setTemperature <= 32) {
-        values.setTemperature = state.setTemperature;
-    }
-    values.roomTemperature = state.roomTemperature;
-    return values;
-}
 
 // NaN is used only inside PublishedState to distinguish an already-cleared
 // retained numeric topic from a value that has never been processed.
@@ -114,8 +88,8 @@ enum class MqttPublishStatus {
     return "unknown MQTT publication status";
 }
 
-// The network callback only pushes messages here. RS-485 state is changed later
-// by the driver thread, so MQTT and serial code never access DeviceContext at
+// The network callback only pushes messages here. Driver state is changed later
+// by the driver thread, so MQTT and serial code never mutate the same device at
 // the same time.
 class MqttCommandInbox {
 public:
@@ -175,7 +149,7 @@ struct MqttCommandResult {
 
 class MqttCommandRouter {
 public:
-    MqttCommandRouter(int busNumber, MdvDriver& driver);
+    MqttCommandRouter(int busNumber, IDeviceDriver& driver);
 
     [[nodiscard]] static std::string_view SubscriptionTopic() noexcept;
     [[nodiscard]] MqttCommandResult Handle(const MqttMessage& message);
@@ -187,7 +161,7 @@ private:
         int value);
 
     int busNumber_ = 0;
-    MdvDriver& driver_;
+    IDeviceDriver& driver_;
 };
 
 class MqttCommandService {
@@ -205,17 +179,14 @@ private:
     bool started_ = false;
 };
 
-// Publishes confirmed fan-coil values to the main Wiren Board control topics
-// with MQTT retain enabled. One previous value is stored per control, therefore
-// an unchanged C0 response produces no MQTT traffic. C3/CC/CD replies are never
-// published because they may contain stale data; only a verified C0 updates
-// retained state topics.
+// Publishes confirmed semantic driver values to the existing Wiren Board MQTT
+// controls. Protocol-specific wire frames are deliberately invisible here.
 class MqttStatePublisher {
 public:
     MqttStatePublisher(int busNumber, IMqttClient& client);
 
-    void PublishAfter(const MdvDriver& driver, const DriverResult& result);
-    void PublishDevice(const DeviceRuntime& runtime, bool force = false);
+    void PublishAfter(const IDeviceDriver& driver, const DriverResult& result);
+    void PublishDevice(const DriverDeviceState& state, bool force = false);
     void Reset() noexcept;
 
 private:
@@ -223,7 +194,7 @@ private:
         std::optional<int> power;
         std::optional<int> mode;
         std::optional<int> speed;
-        std::optional<int> setTemperature;
+        std::optional<double> setTemperature;
         std::optional<double> roomTemperature;
         std::optional<int> blinds;
         std::optional<int> blocked;
@@ -251,7 +222,7 @@ private:
 
     int busNumber_ = 0;
     IMqttClient& client_;
-    std::array<PublishedState, kMaxDeviceAddress + 1> published_{};
+    std::array<PublishedState, kMaxLogicalDeviceAddress + 1> published_{};
 };
 
 // Publishes the separate system device used by the existing Wiren Board

@@ -1,13 +1,17 @@
 #pragma once
 
-#include "mdv_protocol.h"
-
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <variant>
 
 namespace mdv {
+
+// Existing MDV installations can use address 0, therefore the common boundary
+// preserves 0..63. A future Modbus bus applies its stricter project rule 1..63
+// in the Modbus resolver/configuration layer.
+inline constexpr std::uint8_t kMaxLogicalDeviceAddress = 0x3F;
 
 // Protocol-neutral operation/result vocabulary used by the application layer.
 // The concrete MDV driver and future Modbus driver expose the same lifecycle.
@@ -71,16 +75,37 @@ struct DriverCommand {
     DriverCommandValue value = false;
 };
 
-// Small protocol-independent boundary used by the application loop and command
-// sources. State publication is deliberately not included yet: the current MDV
-// runtime exposes protocol-specific DeviceContext internals, and that part will
-// be separated in the next step instead of leaking it into this interface.
+// State exposed to protocol-independent consumers such as MQTT. Values are
+// optional where a protocol/device may not support or confirm the property.
+struct DriverDeviceState {
+    std::uint8_t address = 0;
+    bool online = false;
+    bool hasState = false;
+
+    bool power = false;
+    std::optional<HvacMode> mode;
+    std::optional<HvacMode> activeMode;
+    std::optional<HvacFanSpeed> fanSpeed;
+    std::optional<HvacFanSpeed> activeFanSpeed;
+    std::optional<double> setTemperature;
+    std::optional<double> roomTemperature;
+
+    std::optional<bool> blinds;
+    std::optional<bool> blocked;
+    int alarmCode = 0;
+};
+
+// Small protocol-independent boundary used by the application loop, MQTT and
+// future protocol implementations.
 class IDeviceDriver {
 public:
     virtual ~IDeviceDriver() = default;
 
     [[nodiscard]] virtual DriverResult ProcessNext() = 0;
     virtual void ApplyCommand(const DriverCommand& command) = 0;
+
+    [[nodiscard]] virtual DriverDeviceState DeviceStateByAddress(
+        std::uint8_t address) const = 0;
 
     [[nodiscard]] virtual bool HasQueuedWork() const noexcept = 0;
     [[nodiscard]] virtual std::size_t DeviceCount() const noexcept = 0;

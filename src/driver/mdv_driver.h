@@ -14,6 +14,56 @@
 #include <vector>
 
 namespace mdv {
+namespace driver_detail {
+
+[[nodiscard]] inline HvacMode ToHvacMode(Mode mode)
+{
+    switch (mode) {
+    case Mode::Cool:
+        return HvacMode::Cool;
+    case Mode::Heat:
+        return HvacMode::Heat;
+    case Mode::Dry:
+        return HvacMode::Dry;
+    case Mode::Fan:
+        return HvacMode::Fan;
+    case Mode::Auto:
+        return HvacMode::Auto;
+    }
+    throw std::invalid_argument("unknown MDV mode");
+}
+
+[[nodiscard]] inline HvacFanSpeed ToHvacFanSpeed(FanSpeed speed)
+{
+    switch (speed) {
+    case FanSpeed::Low:
+        return HvacFanSpeed::Low;
+    case FanSpeed::Medium:
+        return HvacFanSpeed::Medium;
+    case FanSpeed::High:
+        return HvacFanSpeed::High;
+    case FanSpeed::Auto:
+        return HvacFanSpeed::Auto;
+    }
+    throw std::invalid_argument("unknown MDV fan speed");
+}
+
+[[nodiscard]] inline int FirstAlarmCode(const DeviceState& state) noexcept
+{
+    for (int bit = 0; bit < 8; ++bit) {
+        if ((state.errorsE0E7 & (1U << bit)) != 0) {
+            return bit + 1;
+        }
+    }
+    for (int bit = 0; bit < 8; ++bit) {
+        if ((state.errorsE8EF & (1U << bit)) != 0) {
+            return bit + 9;
+        }
+    }
+    return 0;
+}
+
+} // namespace driver_detail
 
 inline constexpr std::uint32_t kMaxSetCommandAttempts = 3;
 inline constexpr std::uint32_t kMaxBlockCommandAttempts = 3;
@@ -23,6 +73,53 @@ struct DeviceRuntime {
     explicit DeviceRuntime(std::uint8_t address, std::uint8_t masterId = 0)
         : device(address, masterId)
     {
+    }
+
+    [[nodiscard]] DriverDeviceState SemanticState() const
+    {
+        DriverDeviceState result;
+        result.address = device.Address();
+        result.online = online;
+
+        if (!device.HasActualState()) {
+            return result;
+        }
+
+        const auto& actual = device.ActualState();
+        result.hasState = true;
+        result.power = actual.power;
+
+        if (actual.mode.has_value()) {
+            result.mode = driver_detail::ToHvacMode(*actual.mode);
+        }
+        if (actual.activeMode.has_value()) {
+            result.activeMode = driver_detail::ToHvacMode(*actual.activeMode);
+        }
+        if (actual.fanSpeed.has_value()) {
+            result.fanSpeed = driver_detail::ToHvacFanSpeed(*actual.fanSpeed);
+        }
+        if (actual.activeFanSpeed.has_value()) {
+            result.activeFanSpeed =
+                driver_detail::ToHvacFanSpeed(*actual.activeFanSpeed);
+        }
+
+        // Preserve the existing MQTT safety rule: invalid/unconfirmed C0
+        // setpoints are not published as factual state.
+        if (actual.setTemperature >= 16 && actual.setTemperature <= 32) {
+            result.setTemperature = static_cast<double>(actual.setTemperature);
+        }
+        result.roomTemperature = actual.roomTemperature;
+        result.blinds = actual.blinds;
+        result.blocked = actual.modeLocked;
+        result.alarmCode = driver_detail::FirstAlarmCode(actual);
+        return result;
+    }
+
+    // Compatibility conversion keeps existing application snapshot code source
+    // compatible while MqttStatePublisher itself becomes protocol-independent.
+    [[nodiscard]] operator DriverDeviceState() const
+    {
+        return SemanticState();
     }
 
     DeviceContext device;
@@ -165,6 +262,12 @@ public:
         }
 
         throw std::invalid_argument("unknown driver control");
+    }
+
+    [[nodiscard]] DriverDeviceState DeviceStateByAddress(
+        std::uint8_t address) const override
+    {
+        return DeviceByAddress(address).SemanticState();
     }
 
     void SetPower(std::uint8_t address, bool power);

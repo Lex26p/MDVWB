@@ -3,7 +3,6 @@
 #include <charconv>
 #include <cmath>
 #include <iomanip>
-#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -100,114 +99,98 @@ struct ParsedDeviceName {
         return std::nullopt;
     }
 
-    if (bus < 0 || address < 0 || address > kMaxDeviceAddress) {
+    if (bus < 0 || address < 0 || address > kMaxLogicalDeviceAddress) {
         return std::nullopt;
     }
     return ParsedDeviceName{bus, address};
 }
 
-[[nodiscard]] Mode ModeFromMqtt(int value)
+[[nodiscard]] HvacMode ModeFromMqtt(int value)
 {
     switch (value) {
     case 0:
-        return Mode::Cool;
+        return HvacMode::Cool;
     case 1:
-        return Mode::Heat;
+        return HvacMode::Heat;
     case 2:
-        return Mode::Dry;
+        return HvacMode::Dry;
     case 3:
-        return Mode::Fan;
+        return HvacMode::Fan;
     case 4:
-        return Mode::Auto;
+        return HvacMode::Auto;
     default:
         throw std::invalid_argument("Mode must be in range 0..4");
     }
 }
 
-[[nodiscard]] FanSpeed SpeedFromMqtt(int value)
+[[nodiscard]] HvacFanSpeed SpeedFromMqtt(int value)
 {
     switch (value) {
     case 1:
-        return FanSpeed::Low;
+        return HvacFanSpeed::Low;
     case 2:
-        return FanSpeed::Medium;
+        return HvacFanSpeed::Medium;
     case 3:
-        return FanSpeed::High;
+        return HvacFanSpeed::High;
     case 4:
-        return FanSpeed::Auto;
+        return HvacFanSpeed::Auto;
     default:
         throw std::invalid_argument("Speed must be in range 1..4");
     }
 }
 
-
-[[nodiscard]] int ModeToMqtt(Mode mode)
+[[nodiscard]] int ModeToMqtt(HvacMode mode)
 {
     switch (mode) {
-    case Mode::Cool:
+    case HvacMode::Cool:
         return 0;
-    case Mode::Heat:
+    case HvacMode::Heat:
         return 1;
-    case Mode::Dry:
+    case HvacMode::Dry:
         return 2;
-    case Mode::Fan:
+    case HvacMode::Fan:
         return 3;
-    case Mode::Auto:
+    case HvacMode::Auto:
         return 4;
     }
-    throw std::invalid_argument("unknown MDV mode");
+    throw std::invalid_argument("unknown HVAC mode");
 }
 
-[[nodiscard]] int SpeedToMqtt(FanSpeed speed)
+[[nodiscard]] int SpeedToMqtt(HvacFanSpeed speed)
 {
     switch (speed) {
-    case FanSpeed::Low:
+    case HvacFanSpeed::Low:
         return 1;
-    case FanSpeed::Medium:
+    case HvacFanSpeed::Medium:
         return 2;
-    case FanSpeed::High:
+    case HvacFanSpeed::High:
         return 3;
-    case FanSpeed::Auto:
+    case HvacFanSpeed::Auto:
         return 4;
     }
-    throw std::invalid_argument("unknown MDV fan speed");
+    throw std::invalid_argument("unknown HVAC fan speed");
 }
 
-[[nodiscard]] int FirstAlarmCode(const DeviceState& state) noexcept
+[[nodiscard]] int DeviceStatus(const DriverDeviceState& state)
 {
-    for (int bit = 0; bit < 8; ++bit) {
-        if ((state.errorsE0E7 & (1U << bit)) != 0) {
-            return bit + 1;
-        }
-    }
-    for (int bit = 0; bit < 8; ++bit) {
-        if ((state.errorsE8EF & (1U << bit)) != 0) {
-            return bit + 9;
-        }
-    }
-    return 0;
-}
-
-[[nodiscard]] int DeviceStatus(const DeviceState& state)
-{
-    if (FirstAlarmCode(state) != 0) {
+    if (state.alarmCode != 0) {
         return 6;
     }
     if (!state.power) {
         return 0;
     }
 
-    const auto mode = state.mode.value_or(Mode::Auto);
+    const auto mode = state.mode.value_or(HvacMode::Auto);
     switch (mode) {
-    case Mode::Cool:
+    case HvacMode::Cool:
         return 1;
-    case Mode::Heat:
+    case HvacMode::Heat:
         return 2;
-    case Mode::Dry:
+    case HvacMode::Dry:
         return 3;
-    case Mode::Fan:
+    case HvacMode::Fan:
         return 4;
-    case Mode::Auto:
+    case HvacMode::Auto:
         return 5;
     }
     return 0;
@@ -261,7 +244,7 @@ std::size_t MqttCommandInbox::Size() const
     return messages_.size();
 }
 
-MqttCommandRouter::MqttCommandRouter(int busNumber, MdvDriver& driver)
+MqttCommandRouter::MqttCommandRouter(int busNumber, IDeviceDriver& driver)
     : busNumber_(busNumber), driver_(driver)
 {
     if (busNumber_ < 0) {
@@ -339,26 +322,35 @@ MqttCommandResult MqttCommandRouter::Apply(
     result.control = std::string(control);
 
     try {
+        DriverCommand command;
+        command.address = address;
+
         if (control == "Power") {
-            driver_.SetPower(address, BoolFromMqtt(value, control));
+            command.control = DriverControl::Power;
+            command.value = BoolFromMqtt(value, control);
         }
         else if (control == "Mode") {
-            driver_.SetMode(address, ModeFromMqtt(value));
+            command.control = DriverControl::Mode;
+            command.value = ModeFromMqtt(value);
         }
         else if (control == "Speed") {
-            driver_.SetFanSpeed(address, SpeedFromMqtt(value));
+            command.control = DriverControl::FanSpeed;
+            command.value = SpeedFromMqtt(value);
         }
         else if (control == "SetTemp") {
             if (value < 16 || value > 32) {
                 throw std::invalid_argument("SetTemp must be in range 16..32");
             }
-            driver_.SetTemperature(address, static_cast<std::uint8_t>(value));
+            command.control = DriverControl::SetTemperature;
+            command.value = static_cast<double>(value);
         }
         else if (control == "Blinds") {
-            driver_.SetBlinds(address, BoolFromMqtt(value, control));
+            command.control = DriverControl::Blinds;
+            command.value = BoolFromMqtt(value, control);
         }
         else if (control == "Blok") {
-            driver_.SetBlocked(address, BoolFromMqtt(value, control));
+            command.control = DriverControl::Blocked;
+            command.value = BoolFromMqtt(value, control);
         }
         else {
             result.status = MqttCommandStatus::InvalidTopic;
@@ -366,6 +358,7 @@ MqttCommandResult MqttCommandRouter::Apply(
             return result;
         }
 
+        driver_.ApplyCommand(command);
         result.status = MqttCommandStatus::Applied;
         return result;
     }
@@ -420,7 +413,6 @@ std::size_t MqttCommandService::PendingCount() const
     return inbox_.Size();
 }
 
-
 MqttStatePublisher::MqttStatePublisher(int busNumber, IMqttClient& client)
     : busNumber_(busNumber), client_(client)
 {
@@ -430,7 +422,7 @@ MqttStatePublisher::MqttStatePublisher(int busNumber, IMqttClient& client)
 }
 
 void MqttStatePublisher::PublishAfter(
-    const MdvDriver& driver,
+    const IDeviceDriver& driver,
     const DriverResult& result)
 {
     if (result.operation != DriverOperation::PollRead &&
@@ -438,9 +430,8 @@ void MqttStatePublisher::PublishAfter(
         return;
     }
 
-    const auto& runtime = driver.DeviceByAddress(result.address);
     if (result.outcome == DriverOutcome::Success) {
-        PublishDevice(runtime);
+        PublishDevice(driver.DeviceStateByAddress(result.address));
     }
     else {
         PublishOffline(result.address, false);
@@ -448,39 +439,35 @@ void MqttStatePublisher::PublishAfter(
 }
 
 void MqttStatePublisher::PublishDevice(
-    const DeviceRuntime& runtime,
+    const DriverDeviceState& state,
     bool force)
 {
-    const auto address = runtime.device.Address();
-    if (!runtime.online || !runtime.device.HasActualState()) {
+    const auto address = state.address;
+    if (!state.online || !state.hasState) {
         PublishOffline(address, force);
         return;
     }
 
-    const auto& state = runtime.device.ActualState();
-    const auto confirmed = mqtt_detail::ConfirmedStateValuesFromC0(state);
     auto& previous = published_[address];
-
-    const auto alarmCode = FirstAlarmCode(state);
-    const auto alarm = alarmCode == 0 ? 0 : 1;
+    const auto alarm = state.alarmCode == 0 ? 0 : 1;
 
     PublishInteger(address, "Power", state.power ? 1 : 0, previous.power, force);
-    if (confirmed.mode.has_value()) {
+    if (state.mode.has_value()) {
         PublishInteger(
-            address, "Mode", ModeToMqtt(*confirmed.mode), previous.mode, force);
+            address, "Mode", ModeToMqtt(*state.mode), previous.mode, force);
     }
-    if (confirmed.speed.has_value()) {
+    if (state.fanSpeed.has_value()) {
         PublishInteger(
-            address, "Speed", SpeedToMqtt(*confirmed.speed), previous.speed, force);
+            address, "Speed", SpeedToMqtt(*state.fanSpeed), previous.speed, force);
     }
-    if (confirmed.setTemperature.has_value()) {
-        PublishInteger(
-            address, "SetTemp", static_cast<int>(*confirmed.setTemperature),
+    if (state.setTemperature.has_value()) {
+        PublishNumber(
+            address, "SetTemp", *state.setTemperature,
             previous.setTemperature, force);
     }
-    if (confirmed.roomTemperature.has_value()) {
+    if (state.roomTemperature.has_value()) {
         PublishNumber(
-            address, "Temp", *confirmed.roomTemperature,
+            address, "Temp", *state.roomTemperature,
             previous.roomTemperature, force);
     }
     else if (mqtt_detail::ShouldPublishUnavailableNumber(
@@ -491,10 +478,17 @@ void MqttStatePublisher::PublishDevice(
         client_.Publish(Topic(address, "Temp"), "", true);
         previous.roomTemperature = mqtt_detail::UnavailableNumberMarker();
     }
-    PublishInteger(address, "Blinds", state.blinds ? 1 : 0, previous.blinds, force);
-    PublishInteger(address, "Blok", state.modeLocked ? 1 : 0, previous.blocked, force);
+    if (state.blinds.has_value()) {
+        PublishInteger(
+            address, "Blinds", *state.blinds ? 1 : 0, previous.blinds, force);
+    }
+    if (state.blocked.has_value()) {
+        PublishInteger(
+            address, "Blok", *state.blocked ? 1 : 0, previous.blocked, force);
+    }
     PublishInteger(address, "Alarm", alarm, previous.alarm, force);
-    PublishInteger(address, "AlarmCode", alarmCode, previous.alarmCode, force);
+    PublishInteger(
+        address, "AlarmCode", state.alarmCode, previous.alarmCode, force);
     PublishInteger(address, "Status", DeviceStatus(state), previous.status, force);
 }
 
