@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <set>
+#include <vector>
 #include <utility>
 
 namespace mdv::modbus {
@@ -995,6 +996,150 @@ ModbusProfile LoadProfileFile(const std::filesystem::path& path)
             "cannot load Modbus profile '" + path.string() +
             "': " + error.what());
     }
+}
+
+const ModbusProfile* ProfileCatalog::Find(std::string_view id) const noexcept
+{
+    const auto iterator = profiles.find(id);
+    return iterator == profiles.end() ? nullptr : &iterator->second;
+}
+
+bool ProfileCatalog::HasErrors() const noexcept
+{
+    return !issues.empty();
+}
+
+ProfileCatalog LoadProfileDirectory(
+    const std::filesystem::path& directory)
+{
+    std::error_code error;
+
+    const bool exists = std::filesystem::exists(directory, error);
+    if (error) {
+        throw ProfileError(
+            "cannot inspect Modbus profile directory '" +
+            directory.string() + "': " + error.message());
+    }
+    if (!exists) {
+        throw ProfileError(
+            "Modbus profile directory does not exist: '" +
+            directory.string() + "'");
+    }
+
+    const bool isDirectory = std::filesystem::is_directory(directory, error);
+    if (error) {
+        throw ProfileError(
+            "cannot inspect Modbus profile directory '" +
+            directory.string() + "': " + error.message());
+    }
+    if (!isDirectory) {
+        throw ProfileError(
+            "Modbus profile path is not a directory: '" +
+            directory.string() + "'");
+    }
+
+    std::vector<std::filesystem::path> files;
+    std::filesystem::directory_iterator iterator(directory, error);
+    if (error) {
+        throw ProfileError(
+            "cannot enumerate Modbus profile directory '" +
+            directory.string() + "': " + error.message());
+    }
+
+    const std::filesystem::directory_iterator end;
+    while (iterator != end) {
+        const auto path = iterator->path();
+
+        std::error_code typeError;
+        const bool regular = iterator->is_regular_file(typeError);
+        if (typeError) {
+            throw ProfileError(
+                "cannot inspect Modbus profile candidate '" +
+                path.string() + "': " + typeError.message());
+        }
+
+        if (regular && path.extension() == ".json") {
+            files.push_back(path);
+        }
+
+        iterator.increment(error);
+        if (error) {
+            throw ProfileError(
+                "cannot enumerate Modbus profile directory '" +
+                directory.string() + "': " + error.message());
+        }
+    }
+
+    std::sort(
+        files.begin(),
+        files.end(),
+        [](const auto& left, const auto& right) {
+            return left.generic_string() < right.generic_string();
+        });
+
+    struct Candidate {
+        std::filesystem::path path;
+        ModbusProfile profile;
+    };
+
+    std::vector<Candidate> candidates;
+    ProfileCatalog result;
+
+    for (const auto& path : files) {
+        try {
+            candidates.push_back(
+                Candidate{
+                    .path = path,
+                    .profile = LoadProfileFile(path),
+                });
+        }
+        catch (const ProfileError& profileError) {
+            result.issues.push_back(
+                ProfileLoadIssue{
+                    .path = path,
+                    .error = profileError.what(),
+                });
+        }
+    }
+
+    std::map<std::string, std::vector<std::size_t>, std::less<>> byId;
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        byId[candidates[index].profile.id].push_back(index);
+    }
+
+    for (const auto& [id, indices] : byId) {
+        if (indices.size() == 1U) {
+            auto& candidate = candidates[indices.front()];
+            result.profiles.emplace(
+                candidate.profile.id,
+                std::move(candidate.profile));
+            continue;
+        }
+
+        for (const auto index : indices) {
+            result.issues.push_back(
+                ProfileLoadIssue{
+                    .path = candidates[index].path,
+                    .error =
+                        "duplicate Modbus profile id '" + id +
+                        "'; every profile with this id was rejected",
+                });
+        }
+    }
+
+    std::sort(
+        result.issues.begin(),
+        result.issues.end(),
+        [](const ProfileLoadIssue& left, const ProfileLoadIssue& right) {
+            const auto leftPath = left.path.generic_string();
+            const auto rightPath = right.path.generic_string();
+            if (leftPath != rightPath) {
+                return leftPath < rightPath;
+            }
+            return left.error < right.error;
+        });
+
+    return result;
 }
 
 } // namespace mdv::modbus

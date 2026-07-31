@@ -8,17 +8,17 @@
 
 ## Current stage
 
-**Milestone 2 complete after successful build/CTest: Modbus RTU transport core.**
+**Milestone 3 complete after successful build/CTest: profile loader and validation.**
 
-Modbus RTU framing, CRC and serial transport are implemented. Equipment profiles and register mappings are still **not implemented**.
+Modbus RTU framing/serial transport plus the schema-v1 profile parser, validator and directory catalog are implemented. A production equipment profile and live register-driven Modbus device driver are still **not implemented**.
 
-The existing MDV driver remains behind the protocol-independent boundary. A reusable Modbus RTU codec and configurable serial transport now exist for future profile-driven Modbus drivers.
+The existing MDV driver remains behind the protocol-independent boundary. Modbus now has reusable RTU transport primitives and a deterministic data-driven profile loading boundary.
 
 ## Current overall status
 
 ```text
 Documentation / design     PREPARED
-Runtime implementation     MILESTONE 2
+Runtime implementation     MILESTONE 3
 Hardware validation        NOT STARTED
 Production release         NOT STARTED
 ```
@@ -47,8 +47,8 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] Modbus CRC implementation/tests
 - [x] Modbus request/response handling
 - [x] Modbus exception handling
-- [ ] Profile loader
-- [ ] Profile validation
+- [x] Profile loader
+- [x] Profile validation
 - [ ] Numeric scaling and inverse write conversion
 - [ ] Enum mapping
 - [ ] Capabilities
@@ -224,7 +224,8 @@ At this status point:
 - `MdvDriver` implements that interface while preserving existing MDV behavior;
 - MQTT command routing uses semantic `DriverCommand` values;
 - MQTT state publication consumes `DriverDeviceState` rather than `DeviceContext`/raw MDV fields;
-- no Modbus RTU framing/register/profile code exists yet;
+- Modbus RTU framing/serial transport and profile schema-v1 loading/validation exist;
+- no production equipment profile or live profile-driven Modbus device driver exists yet;
 - no manager configuration schema has been changed for Modbus;
 - no web UI has been changed for Modbus;
 - no Modbus service has been enabled;
@@ -232,9 +233,11 @@ At this status point:
 
 ## Verification status
 
-Milestone 1 is considered complete only when the change is built locally and the full CTest suite passes before commit.
+Milestones 1 through 3 were accepted only after local build and full CTest verification before their commits.
 
-The refactor is designed to preserve current MQTT topics, values and MDV retry/poll behavior.
+Profile-loader tests cover valid schema-v1 profiles, all three current addressing declarations, transport/register/probe validation, numeric and enum declaration validation, file loading, isolated invalid files, deterministic diagnostics and duplicate-ID rejection.
+
+Existing MDV behavior remains protected by the full regression suite.
 
 
 ## Modbus RTU transport implemented
@@ -253,6 +256,28 @@ Milestone 2 now provides:
 The existing MDV serial transport still opens the port explicitly as 4800 8N1, preserving current MDV behavior.
 
 No manufacturer register map, JSON profile, Modbus bus configuration, scan logic or UI is included in this milestone.
+
+## Profile loader and validation implemented
+
+Milestone 3 now provides:
+
+- strict reusable JSON parsing including decimal profile values;
+- schema version `1` validation;
+- stable profile identity and `pdu_zero_based` register-addressing validation;
+- serial transport declaration validation;
+- `direct_slave`, `fixed_slave_stride` and `explicit` addressing declarations;
+- validated read/write register locations and read-only probe declarations;
+- boolean, enum and numeric point declarations;
+- numeric transform/limits/write-rounding declarations;
+- enum `readMap` / `writeMap` declarations;
+- capability-to-point consistency validation;
+- deterministic non-recursive loading of `*.json` profile files from a directory;
+- isolation of malformed/invalid files from unrelated valid profiles;
+- rejection of every member of a duplicate profile-ID group.
+
+No production profile is shipped yet, and no profile field is currently used to perform live semantic conversion or bus I/O.
+
+The exact installed profile directory remains open until the packaging/configuration milestones.
 
 ## Open design items
 
@@ -315,9 +340,11 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-Begin **Milestone 3: profile loader and validation** from `ROADMAP.md`.
+Begin **Milestone 4: semantic value conversion** from `ROADMAP.md`.
 
-The next task should define/load the smallest JSON profile schema needed for the first real Modbus equipment, validate it deterministically, and keep manufacturer-specific register knowledge out of the common transport core. It must not yet add manager/web configuration or live hardware control.
+The next task should turn validated profile declarations into generic raw-to-semantic and semantic-to-raw conversion helpers for boolean, enum and numeric values, including scale/offset, limits, step and exact/declared rounding behavior.
+
+It must still avoid production register mappings, manager/web configuration and live hardware control.
 
 ## Status update rules
 

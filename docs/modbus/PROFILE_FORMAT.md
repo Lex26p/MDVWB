@@ -1,6 +1,6 @@
 # Modbus profile format
 
-> Status: design specification, implementation not started.
+> Status: design specification with the schema-v1 loader/validation baseline implemented; later sections remain planned until their roadmap milestones.
 >
 > Purpose: define a data-driven profile format for Modbus RTU air-conditioners/fan-coils in MDVWB.
 >
@@ -1080,6 +1080,78 @@ The loader:
 4. exposes valid profiles to configuration/UI.
 
 Invalid profile files should produce visible diagnostics and must not break unrelated valid profiles.
+
+### 36.1 Implemented schema-v1 loading baseline
+
+The Milestone 3 implementation now provides a strict schema-v1 parser, validator and non-recursive directory catalog.
+
+Current loader behavior is intentionally deterministic:
+
+- only regular files whose extension is exactly `.json` are considered;
+- files are processed in lexicographic path order;
+- malformed or schema-invalid files are recorded as per-file diagnostics;
+- one invalid file does not prevent unrelated valid profiles from loading;
+- profiles are indexed by stable `id`;
+- if two or more valid files declare the same `id`, **every file in that duplicate group is rejected**;
+- non-JSON files are ignored;
+- an empty existing profile directory is valid;
+- a missing/unreadable profile directory is a top-level load error.
+
+The implemented schema-v1 addressing syntax is currently:
+
+```text
+direct_slave
+    logical address is also the Modbus Slave ID
+    optional constant registerOffset
+
+fixed_slave_stride
+    fixed slaveId
+    firstLogicalAddress
+    registerStride
+
+explicit
+    per-logical-address slaveId + registerOffset
+```
+
+The implemented semantic point types are currently:
+
+```text
+boolean
+enum
+number
+```
+
+The implemented semantic point names are currently:
+
+```text
+power
+mode
+fanSpeed
+setTemperature
+roomTemperature
+alarmCode
+blinds
+blocked
+```
+
+Enum points use separate `readMap` and `writeMap` objects so asymmetric equipment mappings are representable.
+
+Numeric points may declare:
+
+```text
+transform.scale
+transform.offset
+limits.min
+limits.max
+limits.step
+writeConversion.rounding
+```
+
+Parsing those declarations does **not** yet perform semantic raw-value conversion. That belongs to Milestone 4.
+
+Likewise, the catalog does not yet choose an installation path, integrate profiles into bus configuration, scan devices or communicate with live equipment. Those remain later milestones.
+
+`composite_number` is still intentionally not finalized in executable schema v1. The first real VRF profile will drive that extension rather than turning the profile format into a tiny programming language by accident.
 
 ## 37. Example: conventional direct-Slave profile
 

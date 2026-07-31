@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace mdv::modbus {
 
@@ -143,7 +144,26 @@ struct ModbusProfile {
     std::map<std::string, PointDefinition, std::less<>> points;
 };
 
+struct ProfileLoadIssue {
+    std::filesystem::path path;
+    std::string error;
+};
+
+struct ProfileCatalog {
+    std::map<std::string, ModbusProfile, std::less<>> profiles;
+    std::vector<ProfileLoadIssue> issues;
+
+    [[nodiscard]] const ModbusProfile* Find(std::string_view id) const noexcept;
+    [[nodiscard]] bool HasErrors() const noexcept;
+};
+
 [[nodiscard]] ModbusProfile ParseProfile(std::string_view jsonText);
 [[nodiscard]] ModbusProfile LoadProfileFile(const std::filesystem::path& path);
+
+// Loads regular *.json files from one directory, without recursion.
+// Invalid files are isolated in issues. Duplicate IDs reject every file in
+// that duplicate group so profile selection never depends on directory order.
+[[nodiscard]] ProfileCatalog LoadProfileDirectory(
+    const std::filesystem::path& directory);
 
 } // namespace mdv::modbus

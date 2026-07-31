@@ -1,5 +1,6 @@
 #include "modbus_profile.h"
 
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -560,6 +561,169 @@ void TestFileLoading()
     std::filesystem::remove(path, ignored);
 }
 
+
+class TemporaryProfileDirectory final {
+public:
+    TemporaryProfileDirectory()
+    {
+        const auto suffix =
+            std::chrono::steady_clock::now().time_since_epoch().count();
+        path_ =
+            std::filesystem::temp_directory_path() /
+            ("mdvwb-modbus-profile-catalog-" + std::to_string(suffix));
+
+        std::error_code error;
+        if (!std::filesystem::create_directories(path_, error) || error) {
+            throw std::runtime_error(
+                "could not create temporary profile directory");
+        }
+    }
+
+    ~TemporaryProfileDirectory()
+    {
+        std::error_code ignored;
+        std::filesystem::remove_all(path_, ignored);
+    }
+
+    TemporaryProfileDirectory(const TemporaryProfileDirectory&) = delete;
+    TemporaryProfileDirectory& operator=(const TemporaryProfileDirectory&) = delete;
+
+    [[nodiscard]] const std::filesystem::path& Path() const noexcept
+    {
+        return path_;
+    }
+
+    void Write(std::string_view name, std::string_view contents) const
+    {
+        const auto file = path_ / std::string(name);
+        std::ofstream output(file, std::ios::binary | std::ios::trunc);
+        if (!output) {
+            throw std::runtime_error(
+                "could not create profile fixture " + file.string());
+        }
+        output << contents;
+        if (!output) {
+            throw std::runtime_error(
+                "could not write profile fixture " + file.string());
+        }
+    }
+
+private:
+    std::filesystem::path path_;
+};
+
+std::string WithProfileId(std::string_view id)
+{
+    return ReplaceOnce(
+        std::string(kValidProfile),
+        R"json("id": "test_vrf_gateway")json",
+        "\"id\": \"" + std::string(id) + "\"");
+}
+
+void TestProfileDirectoryLoadsValidFilesAndIsolatesInvalidFiles()
+{
+    TemporaryProfileDirectory directory;
+    directory.Write("10-alpha.json", WithProfileId("alpha_profile"));
+    directory.Write("20-broken.json", R"json({"schemaVersion":1,)json");
+    directory.Write(
+        "30-schema.json",
+        ReplaceOnce(
+            WithProfileId("schema_profile"),
+            R"json("schemaVersion": 1)json",
+            R"json("schemaVersion": 9)json"));
+    directory.Write("40-beta.json", WithProfileId("beta_profile"));
+    directory.Write("README.txt", "not a profile");
+
+    const auto catalog =
+        mdv::modbus::LoadProfileDirectory(directory.Path());
+
+    Require(catalog.profiles.size() == 2U,
+            "valid profiles were not isolated from invalid files");
+    Require(catalog.Find("alpha_profile") != nullptr,
+            "first valid profile is missing from the catalog");
+    Require(catalog.Find("beta_profile") != nullptr,
+            "second valid profile is missing from the catalog");
+    Require(catalog.Find("schema_profile") == nullptr,
+            "invalid schema entered the profile catalog");
+    Require(catalog.Find("missing_profile") == nullptr,
+            "unknown profile lookup returned a result");
+    Require(catalog.HasErrors(),
+            "invalid profile files did not produce diagnostics");
+    Require(catalog.issues.size() == 2U,
+            "unexpected number of profile directory diagnostics");
+    Require(
+        catalog.issues[0].path.filename() == "20-broken.json",
+        "profile diagnostics are not deterministic by file path");
+    Require(
+        catalog.issues[1].path.filename() == "30-schema.json",
+        "schema diagnostic is not in deterministic order");
+}
+
+void TestDuplicateIdsRejectWholeDuplicateGroup()
+{
+    TemporaryProfileDirectory directory;
+    directory.Write("10-duplicate-a.json", WithProfileId("duplicate_profile"));
+    directory.Write("20-unrelated.json", WithProfileId("unrelated_profile"));
+    directory.Write("30-duplicate-b.json", WithProfileId("duplicate_profile"));
+
+    const auto catalog =
+        mdv::modbus::LoadProfileDirectory(directory.Path());
+
+    Require(catalog.profiles.size() == 1U,
+            "duplicate profile IDs left an ambiguous catalog entry");
+    Require(catalog.Find("duplicate_profile") == nullptr,
+            "one duplicate profile won based on directory ordering");
+    Require(catalog.Find("unrelated_profile") != nullptr,
+            "duplicate profile IDs broke an unrelated valid profile");
+    Require(catalog.issues.size() == 2U,
+            "duplicate profile group did not diagnose every conflicting file");
+    Require(
+        catalog.issues[0].path.filename() == "10-duplicate-a.json",
+        "first duplicate diagnostic path mismatch");
+    Require(
+        catalog.issues[1].path.filename() == "30-duplicate-b.json",
+        "second duplicate diagnostic path mismatch");
+
+    for (const auto& issue : catalog.issues) {
+        Require(
+            issue.error.find("duplicate Modbus profile id 'duplicate_profile'") !=
+                std::string::npos,
+            "duplicate profile diagnostic does not contain the conflicting id");
+    }
+}
+
+void TestEmptyProfileDirectoryIsValid()
+{
+    TemporaryProfileDirectory directory;
+
+    const auto catalog =
+        mdv::modbus::LoadProfileDirectory(directory.Path());
+
+    Require(catalog.profiles.empty(),
+            "empty profile directory unexpectedly produced profiles");
+    Require(catalog.issues.empty(),
+            "empty profile directory unexpectedly produced diagnostics");
+    Require(!catalog.HasErrors(),
+            "empty profile directory was marked erroneous");
+}
+
+void TestMissingProfileDirectoryFailsClearly()
+{
+    const auto path =
+        std::filesystem::temp_directory_path() /
+        "mdvwb-modbus-profile-directory-that-does-not-exist";
+
+    std::error_code ignored;
+    std::filesystem::remove_all(path, ignored);
+
+    RequireProfileError(
+        [&] {
+            static_cast<void>(
+                mdv::modbus::LoadProfileDirectory(path));
+        },
+        "does not exist");
+}
+
 } // namespace
 
 int main()
@@ -576,6 +740,10 @@ int main()
         TestEnumValidation();
         TestCapabilitiesRequirePoints();
         TestFileLoading();
+        TestProfileDirectoryLoadsValidFilesAndIsolatesInvalidFiles();
+        TestDuplicateIdsRejectWholeDuplicateGroup();
+        TestEmptyProfileDirectoryIsValid();
+        TestMissingProfileDirectoryFailsClearly();
 
         std::cout << "MDVWB Modbus profile tests: OK\n";
         return 0;
