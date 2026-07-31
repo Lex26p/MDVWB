@@ -281,6 +281,13 @@ add_executable(mdvwb_modbus_scan_execute_test
 )
 target_link_libraries(mdvwb_modbus_scan_execute_test PRIVATE mdvwb_modbus_scan)
 
+add_executable(mdvwb_modbus_vrf_reference_test
+    ${MDVWB_DRIVER_TEST_DIR}/modbus_vrf_reference_test.cpp
+)
+target_link_libraries(mdvwb_modbus_vrf_reference_test PRIVATE mdvwb_json)
+target_compile_definitions(mdvwb_modbus_vrf_reference_test
+    PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
 add_executable(mdvwb_buses_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_buses_config_test.cpp
 )
@@ -382,6 +389,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_modbus_resolver_test
     mdvwb_modbus_scan_test
     mdvwb_modbus_scan_execute_test
+    mdvwb_modbus_vrf_reference_test
     mdvwb_buses_config
     mdvwb_dashboard_config
     mdvwb_schedules_config
@@ -437,6 +445,7 @@ add_test(NAME mdvwb_modbus_semantic_test COMMAND mdvwb_modbus_semantic_test)
 add_test(NAME mdvwb_modbus_resolver_test COMMAND mdvwb_modbus_resolver_test)
 add_test(NAME mdvwb_modbus_scan_test COMMAND mdvwb_modbus_scan_test)
 add_test(NAME mdvwb_modbus_scan_execute_test COMMAND mdvwb_modbus_scan_execute_test)
+add_test(NAME mdvwb_modbus_vrf_reference_test COMMAND mdvwb_modbus_vrf_reference_test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
 add_test(NAME mdvwb_dashboard_config_test COMMAND mdvwb_dashboard_config_test)
 add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)

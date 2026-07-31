@@ -21,6 +21,14 @@ The source spreadsheet contains several conventions that must be verified before
 
 Do not silently infer missing behavior.
 
+Milestone 7 step 1 also freezes the first-profile source facts in:
+
+```text
+tests/fixtures/modbus/vrf_add_controller_source.json
+```
+
+That fixture is deliberately **not** a loadable Modbus profile. It preserves manufacturer register references as strings, contains no executable `address` / `pduAddress` / `registerAddressing` fields, and keeps the unresolved production blockers machine-readable. A regression test fails if somebody silently converts those references into wire addresses before the convention is proven.
+
 Use the following labels:
 
 - **CONFIRMED FROM TABLE**: directly stated in the supplied spreadsheet.
@@ -198,6 +206,18 @@ Until a real request frame, vendor clarification, or known-good Modbus client co
 Do **not** subtract `40001`, `1`, or any other offset merely because the number looks like classic Modbus reference notation.
 
 The production profile must store an unambiguous PDU address only after this is verified.
+
+### Milestone 7 production gate
+
+The source fixture intentionally remains non-executable until at least one of the following resolves the convention:
+
+1. a captured known-good FC03/FC10 RTU request showing the two-byte starting address;
+2. a vendor statement that explicitly defines whether the spreadsheet values are literal protocol addresses or 4xxxx references;
+3. a known-good Modbus client configuration together with the exact client address-base convention.
+
+The minimum useful capture is a read of one unambiguous source point such as `4998`, `40026`, or `40028`. The request must include Slave ID, function, two-byte starting address, quantity and CRC.
+
+Until such evidence exists, Milestone 7 may prepare and test source facts, but it must not claim a production profile.
 
 ## 6. Indoor-unit identification points
 

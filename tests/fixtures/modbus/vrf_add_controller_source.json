@@ -1,0 +1,128 @@
+{
+  "fixtureVersion": 1,
+  "kind": "manufacturer_source_reference",
+  "productionProfile": false,
+  "sourceFile": "Data Point Table_VRF-Add Controller lock function(mini modbus&modbus).xlsx",
+  "wireAddressing": {
+    "status": "unverified",
+    "pduAddressingResolved": false,
+    "note": "Source references are preserved verbatim and are not executable PDU addresses."
+  },
+  "transport": {
+    "protocol": "modbus_rtu",
+    "baudRate": 9600,
+    "dataBits": 8,
+    "parity": "none",
+    "stopBits": 1,
+    "defaultSlaveId": 1,
+    "functionCodes": [
+      3,
+      16
+    ]
+  },
+  "controller": {
+    "managementPoints": {
+      "unitCount": {
+        "sourceReference": "4997",
+        "access": "R"
+      },
+      "readyState": {
+        "sourceReference": "4998",
+        "access": "R",
+        "controllableValue": 1
+      },
+      "rediscover": {
+        "sourceReference": "4999",
+        "access": "R/W",
+        "triggerValue": 1
+      }
+    }
+  },
+  "indoorUnitIndex": {
+    "symbol": "Y",
+    "minimum": 0,
+    "maximum": 159,
+    "registerStride": 91,
+    "sorting": [
+      "systemNumber",
+      "indoorUnitAddress"
+    ]
+  },
+  "firstProfilePoints": {
+    "identity": {
+      "systemNumber": {
+        "sourceReference": "40026+(91*Y)",
+        "access": "R"
+      },
+      "indoorUnitAddress": {
+        "sourceReference": "40027+(91*Y)",
+        "access": "R"
+      }
+    },
+    "power": {
+      "read": {
+        "sourceReference": "40028+(91*Y)",
+        "access": "R",
+        "values": {
+          "0": "off",
+          "1": "on"
+        }
+      },
+      "write": {
+        "sourceReference": "40078+(91*Y)",
+        "access": "R/W",
+        "values": {
+          "0": "off",
+          "1": "on"
+        }
+      }
+    },
+    "mode": {
+      "readSourceReference": "40029+(91*Y)",
+      "writeSourceReference": "40079+(91*Y)",
+      "bitPositions": {
+        "auto": 0,
+        "cool": 1,
+        "dry": 2,
+        "fan": 3,
+        "heat": 4
+      }
+    },
+    "fanSpeed": {
+      "readSourceReference": "40030+(91*Y)",
+      "writeSourceReference": "40080+(91*Y)",
+      "bitPositions": {
+        "auto": 0,
+        "high_native_5": 1,
+        "mid_native_4": 2,
+        "low_native_2": 3,
+        "super_high_native_6": 4,
+        "mid_low_native_3": 5,
+        "super_low_native_1": 6
+      }
+    },
+    "setTemperature": {
+      "integerReadSourceReference": "40031+(91*Y)",
+      "halfDegreeReadSourceReference": "40037+(91*Y)",
+      "integerWriteSourceReference": "40081+(91*Y)",
+      "halfDegreeWriteSourceReference": "40085+(91*Y)"
+    },
+    "alarmCode": {
+      "readSourceReference": "40035+(91*Y)",
+      "zeroMeansNoAlarm": true
+    },
+    "roomTemperatureCandidate": {
+      "readSourceReference": "40039+(91*Y)",
+      "manufacturerMeaning": "Inlet air temperature Ti"
+    }
+  },
+  "productionBlockers": [
+    "register_address_notation",
+    "logical_identity_stability",
+    "safe_presence_probe",
+    "mode_one_hot_read_write_behavior",
+    "fan_speed_normalization_and_one_hot_behavior",
+    "set_temperature_composite_behavior",
+    "room_temperature_scale_offset_signedness"
+  ]
+}
