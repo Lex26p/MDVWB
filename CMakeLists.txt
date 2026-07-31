@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.18)
 
 project(MDVWB VERSION 1.3.0 LANGUAGES CXX)
 
+set(MDVWB_COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/common")
+set(MDVWB_COMMON_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/common")
 set(MDVWB_DRIVER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/driver")
 set(MDVWB_DRIVER_TEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/driver")
 set(MDVWB_MANAGER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/manager")
@@ -40,6 +42,13 @@ target_include_directories(MDVWB PRIVATE ${MDVWB_DRIVER_DIR})
 option(MDVWB_REQUIRE_MOSQUITTO "Fail configuration when libmosquitto is unavailable" OFF)
 
 find_package(Threads REQUIRED)
+
+add_library(mdvwb_json STATIC
+    ${MDVWB_COMMON_DIR}/json.cpp
+    ${MDVWB_COMMON_DIR}/json.h
+)
+target_compile_features(mdvwb_json PUBLIC cxx_std_20)
+target_include_directories(mdvwb_json PUBLIC ${MDVWB_COMMON_DIR})
 
 add_library(mdvwb_serial_port STATIC
     ${MDVWB_DRIVER_DIR}/serial_port.cpp
@@ -184,6 +193,11 @@ add_executable(mdvwb-scheduler
 )
 target_link_libraries(mdvwb-scheduler PRIVATE mdvwb_scheduler)
 
+add_executable(mdvwb_json_test
+    ${MDVWB_COMMON_TEST_DIR}/json_test.cpp
+)
+target_link_libraries(mdvwb_json_test PRIVATE mdvwb_json)
+
 add_executable(mdvwb_mqtt_delivery_test
     ${MDVWB_DRIVER_TEST_DIR}/mdv_mqtt_delivery_test.cpp
     ${MDVWB_DRIVER_DIR}/mdv_protocol.cpp
@@ -293,6 +307,8 @@ target_link_libraries(mdvwb_mqtt_command_delivery_test
 
 set(MDVWB_PROJECT_TARGETS
     MDVWB
+    mdvwb_json
+    mdvwb_json_test
     mdvwb_mosquitto_transport
     mdvwb_serial_port
     mdvwb_modbus_rtu
@@ -343,6 +359,7 @@ endif()
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} FILES ${MDVWB_DRIVER_SOURCES})
 
 enable_testing()
+add_test(NAME mdvwb_json_test COMMAND mdvwb_json_test)
 add_test(NAME mdv_protocol_self_test COMMAND MDVWB --self-test)
 add_test(NAME mdvwb_offline_publisher_test COMMAND mdvwb-offline --self-test)
 add_test(NAME mdvwb_mqtt_delivery_test COMMAND mdvwb_mqtt_delivery_test)
