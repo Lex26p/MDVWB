@@ -143,6 +143,16 @@ target_include_directories(mdvwb_buses_config
     PUBLIC ${MDVWB_MANAGER_DIR} ${MDVWB_COMMON_DIR})
 target_link_libraries(mdvwb_buses_config PUBLIC mdvwb_json)
 
+add_library(mdvwb_modbus_bus_config STATIC
+    ${MDVWB_MANAGER_DIR}/mdv_modbus_bus_config.cpp
+    ${MDVWB_MANAGER_DIR}/mdv_modbus_bus_config.h
+)
+target_compile_features(mdvwb_modbus_bus_config PUBLIC cxx_std_20)
+target_include_directories(mdvwb_modbus_bus_config
+    PUBLIC ${MDVWB_MANAGER_DIR} ${MDVWB_DRIVER_DIR})
+target_link_libraries(mdvwb_modbus_bus_config
+    PUBLIC mdvwb_buses_config mdvwb_modbus_profile)
+
 add_library(mdvwb_dashboard_config STATIC
     ${MDVWB_MANAGER_DIR}/mdv_dashboard_config.cpp
     ${MDVWB_MANAGER_DIR}/mdv_dashboard_config.h
@@ -307,6 +317,14 @@ add_executable(mdvwb_modbus_buses_config_test
 )
 target_link_libraries(mdvwb_modbus_buses_config_test PRIVATE mdvwb_buses_config)
 
+add_executable(mdvwb_modbus_bus_profile_test
+    ${MDVWB_MANAGER_TEST_DIR}/mdvwb_modbus_bus_profile_test.cpp
+)
+target_link_libraries(mdvwb_modbus_bus_profile_test
+    PRIVATE mdvwb_modbus_bus_config)
+target_compile_definitions(mdvwb_modbus_bus_profile_test
+    PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
 add_executable(mdvwb_dashboard_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_dashboard_config_test.cpp
 )
@@ -406,6 +424,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_modbus_vrf_reference_test
     mdvwb_modbus_vrf_profile_test
     mdvwb_buses_config
+    mdvwb_modbus_bus_config
     mdvwb_dashboard_config
     mdvwb_schedules_config
     mdvwb_dashboard_upload
@@ -418,6 +437,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb-scheduler
     mdvwb_buses_config_test
     mdvwb_modbus_buses_config_test
+    mdvwb_modbus_bus_profile_test
     mdvwb_dashboard_config_test
     mdvwb_schedules_config_test
     mdvwb_dashboard_upload_test
@@ -465,6 +485,7 @@ add_test(NAME mdvwb_modbus_vrf_reference_test COMMAND mdvwb_modbus_vrf_reference
 add_test(NAME mdvwb_modbus_vrf_profile_test COMMAND mdvwb_modbus_vrf_profile_test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
 add_test(NAME mdvwb_modbus_buses_config_test COMMAND mdvwb_modbus_buses_config_test)
+add_test(NAME mdvwb_modbus_bus_profile_test COMMAND mdvwb_modbus_bus_profile_test)
 add_test(NAME mdvwb_dashboard_config_test COMMAND mdvwb_dashboard_config_test)
 add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)
 add_test(NAME mdvwb_dashboard_upload_test COMMAND mdvwb_dashboard_upload_test)
