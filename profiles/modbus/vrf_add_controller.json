@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "id": "vrf_add_controller",
+  "name": "VRF Add Controller",
+  "registerAddressing": "pdu_zero_based",
+  "transport": {
+    "baudRate": 9600,
+    "dataBits": 8,
+    "parity": "none",
+    "stopBits": 1
+  },
+  "addressing": {
+    "type": "fixed_slave_stride",
+    "logicalMin": 1,
+    "logicalMax": 63,
+    "slaveId": 1,
+    "firstLogicalAddress": 1,
+    "registerStride": 91
+  },
+  "capabilities": {
+    "power": true,
+    "mode": false,
+    "fanSpeed": false,
+    "setTemperature": false,
+    "roomTemperature": false,
+    "alarm": true,
+    "blinds": false,
+    "blocked": false
+  },
+  "probe": {
+    "read": {
+      "space": "holding_register",
+      "address": 40039,
+      "reference": "40039 + 91*Y"
+    },
+    "quantity": 1,
+    "presence": "any_nonzero"
+  },
+  "points": {
+    "power": {
+      "type": "boolean",
+      "read": {
+        "space": "holding_register",
+        "address": 40028,
+        "reference": "40028 + 91*Y"
+      },
+      "write": {
+        "space": "holding_register",
+        "address": 40078,
+        "reference": "40078 + 91*Y"
+      }
+    },
+    "alarmCode": {
+      "type": "number",
+      "rawType": "uint16",
+      "read": {
+        "space": "holding_register",
+        "address": 40035,
+        "reference": "40035 + 91*Y"
+      }
+    }
+  }
+}

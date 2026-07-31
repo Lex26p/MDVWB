@@ -21,6 +21,7 @@ struct ScanProbe {
     RegisterSpace space = RegisterSpace::HoldingRegister;
     std::uint16_t address = 0;
     std::uint16_t quantity = 1;
+    ProbePresence presence = ProbePresence::AnyResponse;
 };
 
 struct ScanCandidate {

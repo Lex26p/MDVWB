@@ -104,6 +104,8 @@ A profile may additionally keep the manufacturer's reference as documentation:
 
 The engine must use `address`, not `reference`.
 
+`pdu_zero_based` means that `address` is already the exact 16-bit starting-address value placed into the Modbus request. Do not mechanically subtract `40001` merely because a manufacturer's source number resembles classic `4xxxx` notation. The first VRF Add Controller profile was verified on a working WirenBoard installation to use source register `40028` directly as request address `40028`.
+
 The profile schema should explicitly declare:
 
 ```json
@@ -921,52 +923,78 @@ The UI should react to capabilities, not to profile IDs.
 
 Every profile intended for normal MDVWB scanning must define a safe read-only probe.
 
-Conceptual example:
+Implemented schema-v1 form:
 
 ```json
 {
   "probe": {
-    "point": "power",
-    "validation": {
-      "responseRequired": true
-    }
+    "read": {
+      "space": "holding_register",
+      "address": 100
+    },
+    "quantity": 1,
+    "presence": "any_response"
   }
 }
 ```
 
 For each logical address `1..63`:
 
-1. Resolve logical address to Slave ID and register offset.
-2. Build the profile-defined read request.
-3. Send it.
-4. Validate normal Modbus response.
-5. If the profile has additional safe validation, apply it.
-6. Mark the logical address online/offline for scan results.
+1. resolve logical address to Slave ID and register offset;
+2. resolve the probe's effective register;
+3. build the read-only request;
+4. validate the Modbus response;
+5. apply the profile presence rule;
+6. report Found/NotFound/Error.
 
 The probe must never perform a write.
 
-## 30. Probe validation
+`quantity` defaults to `1` and must be in `1..125`.
 
-A Modbus response from a Slave ID does not always prove that the expected air-conditioner exists behind a gateway.
+## 30. Probe presence validation
 
-Profiles may therefore optionally validate a returned value.
+Schema v1 implements two conservative presence rules:
 
-Conceptual example:
+```text
+any_response
+any_nonzero
+```
+
+`any_response` is the default. A structurally valid successful read marks the candidate Found.
+
+`any_nonzero` requires at least one returned register to be non-zero:
+
+```text
+successful response + any register != 0 -> Found
+successful response + all registers == 0 -> NotFound
+```
+
+This rule is useful for gateways that return readable zero-filled register blocks for absent downstream devices.
+
+Example from the first production VRF Add Controller profile:
 
 ```json
 {
   "probe": {
-    "point": "status",
-    "validation": {
-      "allowedRawValues": [0, 1, 2, 3, 4]
-    }
+    "read": {
+      "space": "holding_register",
+      "address": 40039,
+      "reference": "40039 + 91*Y"
+    },
+    "quantity": 1,
+    "presence": "any_nonzero"
   }
 }
 ```
 
-Validation should remain conservative.
+Live installation observation for that equipment:
 
-Do not reject a real device merely because an undocumented but valid operational value appears unless the manufacturer's documentation makes the allowed set reliable.
+```text
+absent indoor unit -> inlet-air temperature raw value 0
+non-zero raw value -> unit treated as present
+```
+
+Presence validation belongs to the profile. The common scan engine must not hardcode manufacturer registers or temperature semantics.
 
 ## 31. Unsupported logical candidates
 
@@ -1056,6 +1084,7 @@ Minimum checks:
 - write mapping exists for writable enum commands;
 - probe exists;
 - probe is read-only;
+- probe `presence` is one of `any_response` or `any_nonzero`;
 - all referenced points exist;
 - addressing resolver can handle scan candidates;
 - explicit mappings do not contain duplicate/invalid logical IDs.

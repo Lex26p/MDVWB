@@ -154,13 +154,54 @@ void TestReferenceFixture()
     Require(StringField(
                 wireAddressing,
                 "status",
-                "root.wireAddressing") == "unverified",
-            "wire address status must remain unverified");
-    Require(!BooleanField(
+                "root.wireAddressing") == "verified_live_wirenboard",
+            "wire address status does not record live verification");
+    Require(BooleanField(
                 wireAddressing,
                 "pduAddressingResolved",
                 "root.wireAddressing"),
-            "PDU addressing was marked resolved without evidence");
+            "PDU addressing must be resolved after live WirenBoard verification");
+    Require(StringField(
+                wireAddressing,
+                "convention",
+                "root.wireAddressing") == "literal_source_address",
+            "wire-address convention mismatch");
+
+    const auto& liveVerification = RequireObject(
+        Field(root, "liveVerification", "root"),
+        "root.liveVerification");
+    const auto& liveAddressing = RequireObject(
+        Field(liveVerification, "addressing", "root.liveVerification"),
+        "root.liveVerification.addressing");
+    Require(StringField(
+                liveAddressing,
+                "client",
+                "root.liveVerification.addressing") == "WirenBoard",
+            "live addressing client mismatch");
+    Require(IntegerField(
+                liveAddressing,
+                "verifiedBaseRegister",
+                "root.liveVerification.addressing") == 40028,
+            "live addressing base register mismatch");
+
+    const auto& scanPresence = RequireObject(
+        Field(liveVerification, "scanPresence", "root.liveVerification"),
+        "root.liveVerification.scanPresence");
+    Require(StringField(
+                scanPresence,
+                "sourceReference",
+                "root.liveVerification.scanPresence") == "40039+(91*Y)",
+            "scan presence source reference mismatch");
+    Require(IntegerField(
+                scanPresence,
+                "absentRawValue",
+                "root.liveVerification.scanPresence") == 0,
+            "scan absent raw value mismatch");
+    Require(StringField(
+                scanPresence,
+                "presenceRule",
+                "root.liveVerification.scanPresence") == "any_nonzero",
+            "scan presence rule mismatch");
 
     const auto& transport = RequireObject(
         Field(root, "transport", "root"),
@@ -271,25 +312,25 @@ void TestReferenceFixture()
                 "root.firstProfilePoints.setTemperature") == "40085+(91*Y)",
             "set-temperature half-degree control reference mismatch");
 
-    const auto& blockers = RequireArray(
-        Field(root, "productionBlockers", "root"),
-        "root.productionBlockers");
+    const auto& deferred = RequireArray(
+        Field(root, "deferredItems", "root"),
+        "root.deferredItems");
     RequireStringArrayContains(
-        blockers,
-        "register_address_notation",
-        "root.productionBlockers");
+        deferred,
+        "logical_identity_stability_after_topology_change",
+        "root.deferredItems");
     RequireStringArrayContains(
-        blockers,
-        "safe_presence_probe",
-        "root.productionBlockers");
-    RequireStringArrayContains(
-        blockers,
+        deferred,
         "set_temperature_composite_behavior",
-        "root.productionBlockers");
+        "root.deferredItems");
+    RequireStringArrayContains(
+        deferred,
+        "room_temperature_scale_offset_signedness",
+        "root.deferredItems");
 
-    // A reference fixture is deliberately non-executable. If these fields
-    // appear, somebody has silently turned manufacturer references into wire
-    // addresses without first resolving the documented blocker.
+    // This file remains a source/evidence fixture rather than an executable
+    // profile. The resolved wire convention is promoted only in the dedicated
+    // production profile under profiles/modbus.
     Require(!ContainsKeyRecursively(rootValue, "address"),
             "reference fixture must not contain executable address fields");
     Require(!ContainsKeyRecursively(rootValue, "pduAddress"),

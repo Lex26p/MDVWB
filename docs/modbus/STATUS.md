@@ -8,9 +8,9 @@
 
 ## Current stage
 
-**Milestone 6 complete after successful build/CTest: profile-driven scan `1..63`.**
+**Milestone 7 complete after successful build/CTest: first production Modbus equipment profile.**
 
-Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion and the logical-address resolver are implemented. A production equipment profile and live register-driven Modbus device driver are still **not implemented**.
+Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion, logical-address resolution, profile-driven scan, and the first production equipment profile are implemented. A live register-driven Modbus device driver and bus configuration integration are still **not implemented**.
 
 The existing MDV driver remains behind the protocol-independent boundary. Modbus now has reusable RTU transport primitives and a deterministic data-driven profile loading boundary.
 
@@ -18,8 +18,8 @@ The existing MDV driver remains behind the protocol-independent boundary. Modbus
 
 ```text
 Documentation / design     PREPARED
-Runtime implementation     MILESTONE 6
-Hardware validation        NOT STARTED
+Runtime implementation     MILESTONE 7
+Hardware validation        PARTIAL (profile facts only)
 Production release         NOT STARTED
 ```
 
@@ -54,7 +54,7 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] Capabilities
 - [x] Logical address resolver
 - [x] Scan of logical addresses `1..63`
-- [ ] First production Modbus equipment profile
+- [x] First production Modbus equipment profile
 - [ ] Manager/bus configuration integration
 - [ ] MQTT integration
 - [ ] Web configuration UI
@@ -233,7 +233,7 @@ At this status point:
 
 ## Verification status
 
-Milestones 1 through 6 were accepted only after local build and full CTest verification before their commits.
+Milestones 1 through 7 were accepted only after local build and full CTest verification before their commits.
 
 Profile-loader tests cover valid schema-v1 profiles, all three current addressing declarations, transport/register/probe validation, numeric and enum declaration validation, file loading, isolated invalid files, deterministic diagnostics and duplicate-ID rejection.
 
@@ -333,13 +333,41 @@ Milestone 6 now provides:
 - `Error` for I/O failures, invalid requests, malformed/invalid responses and inconsistent successful transport results;
 - preservation of Modbus exception code and diagnostic text in scan results;
 - tests proving that unsupported candidates and unsupported probe data spaces generate no bus traffic;
-- a full direct-addressing execution test that performs exactly 63 read-only probes.
+- a full direct-addressing execution test that performs exactly 63 read-only probes;
+- profile-declared presence validation with `any_response` and `any_nonzero`;
+- `PresenceMismatch -> NotFound` for valid responses that do not satisfy the profile's presence rule.
 
 The current RTU core implements FC03 and FC10 only. Therefore the scan executor currently performs live probes only when the profile probe uses `holding_register`. `input_register`, `coil` and `discrete_input` probes are reported as unsupported and generate no request until the corresponding standard read functions are added.
 
 The scan layer does not configure serial ports, select bus profiles, persist discovered devices or perform normal polling/control. Those remain later milestones.
 
-No production equipment profile or live Modbus driver is included yet.
+## First production VRF profile implemented
+
+Milestone 7 now includes:
+
+```text
+profiles/modbus/vrf_add_controller.json
+```
+
+Confirmed live-installation facts promoted into the profile:
+
+- 9600 8N1;
+- fixed Modbus Slave ID `1`;
+- manufacturer register numbers are used literally as request addresses, e.g. source `40028` is address `40028`;
+- logical `1..63` maps to `Y = 0..62` with register stride `91`;
+- read-only scan probe at inlet-temperature register `40039 + 91*Y`;
+- absent indoor-unit observation: raw inlet temperature `0`;
+- profile presence rule `any_nonzero`;
+- Power enabled using status `40028 + 91*Y`, control `40078 + 91*Y`, values `0/1`;
+- AlarmCode enabled read-only at `40035 + 91*Y`.
+
+Mode, FanSpeed, SetTemperature and RoomTemperature remain disabled because their runtime interpretation or conversion is not yet sufficiently verified. In particular, the raw inlet-temperature value is trusted only as a non-zero presence signal, not yet as a physical room temperature.
+
+The current logical identity follows the controller's sorted `Y` slot. A topology change may potentially shift which physical indoor unit occupies a logical address.
+
+Milestone 7 tests load the production JSON, verify literal addresses and stride resolution, reject invalid probe presence declarations, and verify the chosen `0 -> NotFound`, non-zero -> `Found` scan behavior through the common transaction boundary.
+
+No manager/bus configuration integration or normal Modbus polling/control driver is included yet.
 
 ## Open design items
 
@@ -348,7 +376,6 @@ These items are not yet final and should not be treated as implemented facts:
 - exact JSON Schema file;
 - exact profile installation paths;
 - exact Modbus library/internal implementation choice;
-- exact function codes required by the first production profile;
 - batching of adjacent register reads;
 - retry/poll timing;
 - local custom profile policy;
@@ -378,7 +405,7 @@ Confusing documentation references such as `40001` with zero-based PDU addresses
 
 Mitigation:
 
-Use explicit profile addressing convention and retain manufacturer references only as metadata.
+Use explicit profile addressing convention and retain manufacturer references as metadata. For the first VRF profile, live WirenBoard verification confirms that source `40028` is used literally as request address `40028`.
 
 ### Manufacturer-specific logic leaking into core
 
@@ -402,11 +429,11 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-Begin **Milestone 7: first real Modbus equipment profile** from `ROADMAP.md`.
+Begin **Milestone 8: bus configuration integration** from `ROADMAP.md`.
 
-The next task should return to the supplied VRF controller data-point table, promote only confirmed register/addressing behavior into a production profile, keep manufacturer references separate from zero-based PDU addresses, and add fixture tests for every enabled semantic capability.
+The next task should extend the existing bus configuration/manager boundary so a bus can explicitly select `protocol = modbus`, serial settings and `profileId = vrf_add_controller` without changing the meaning of existing MDV configurations.
 
-It must still avoid manager/web configuration and should not infer unresolved hardware behavior such as ambiguous register notation or composite half-degree temperature semantics.
+It must still keep Modbus-specific register knowledge inside the profile layer and must not enable the deferred Mode/FanSpeed/SetTemperature/RoomTemperature capabilities merely because the bus can now select the profile.
 
 ## Status update rules
 

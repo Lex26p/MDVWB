@@ -1,61 +1,119 @@
 # VRF Add Controller production-profile verification checklist
 
-> Purpose: define the minimum evidence required before the first reference controller is promoted from source facts to an executable MDVWB Modbus profile.
+> Purpose: record which source-table uncertainties are resolved for the first production profile and which capabilities remain intentionally disabled.
 
 ## Current state
 
-The manufacturer workbook has been re-read and its first-profile facts are frozen in:
+The manufacturer workbook facts remain frozen in:
 
 ```text
 tests/fixtures/modbus/vrf_add_controller_source.json
 ```
 
-That fixture is intentionally non-executable.
-
-## Blocking item 1: wire register-address convention
-
-Required evidence: at least one known-good Modbus RTU request for a workbook point.
-
-Preferred points:
+The executable profile is:
 
 ```text
-4998
-40026 + 91*Y
-40028 + 91*Y
+profiles/modbus/vrf_add_controller.json
 ```
 
-Record:
+The source fixture remains non-executable even after live verification. It records evidence; the production profile contains actual Modbus addresses and capabilities.
+
+## Resolved item 1: wire register-address convention
+
+### Live evidence
+
+A working WirenBoard installation reads the workbook Power status register `40028` using register address `40028` directly.
+
+Production rule:
 
 ```text
-Slave ID
-function code
-starting-address high byte
-starting-address low byte
-quantity
-CRC
-which workbook source reference the request targets
+workbook source 40028 -> Modbus request address 40028
 ```
 
-This decides whether source values such as `40028` are literal PDU addresses or documentation references requiring conversion.
+No `40001` or `1` offset is subtracted.
 
-Do not infer the conversion from the number's appearance.
+This rule is applied consistently to the profile's confirmed addresses.
 
-## Blocking item 2: logical identity and safe probe
+## Resolved item 2: safe read-only presence probe
 
-Confirm whether `Y` remains stable after converter rediscovery/topology changes.
+### Live evidence
 
-For at least one present and one absent candidate, record what the two identity points return:
+For an absent indoor unit, the inlet-air temperature point returns raw `0`.
+
+Source point:
 
 ```text
-40026 + 91*Y   system number
-40027 + 91*Y   indoor-unit address
+40039 + 91*Y
 ```
 
-A production scan probe must be read-only and must distinguish a real unit from an unused register block without relying on undocumented behavior.
+Production scan rule:
 
-## Blocking item 3: Mode
+```text
+raw != 0 -> Found
+raw == 0 -> NotFound
+```
 
-Capture status and a controlled write for at least two modes.
+The profile expresses this using:
+
+```json
+"presence": "any_nonzero"
+```
+
+The scan remains read-only FC03.
+
+### Known limitation
+
+A real indoor unit that legitimately reports raw inlet temperature `0` would be classified as absent. This rule is accepted for the initial profile because it matches the observed installation behavior.
+
+## Initial logical-address policy
+
+The production profile uses:
+
+```text
+logical 1 -> Y = 0
+logical 2 -> Y = 1
+...
+logical 63 -> Y = 62
+```
+
+with:
+
+```text
+Slave ID = 1
+registerStride = 91
+```
+
+The workbook defines `Y` as a sorted index. A topology change may therefore shift physical-unit identity between logical slots. This is documented as a current limitation rather than hidden behind the resolver.
+
+## Enabled production capabilities
+
+### Power
+
+Confirmed from table and address convention:
+
+```text
+read  40028 + 91*Y
+write 40078 + 91*Y
+
+0 -> OFF
+1 -> ON
+```
+
+Enabled.
+
+### AlarmCode
+
+Confirmed from table:
+
+```text
+40035 + 91*Y
+0 -> no alarm
+nonzero -> vendor alarm code
+```
+
+Enabled as an unsigned raw numeric code.
+
+## Deferred capability 1: Mode
 
 Source points:
 
@@ -64,14 +122,15 @@ Source points:
 40079 + 91*Y   control
 ```
 
-Confirm:
+Still confirm:
 
-- whether values are one-hot bit masks;
-- whether exactly one bit is normally set;
-- whether writing a single mask is sufficient;
+- one-hot versus multi-bit runtime behavior;
+- whether one write mask is sufficient;
 - whether unused bits must be preserved.
 
-## Blocking item 4: FanSpeed
+Capability remains disabled.
+
+## Deferred capability 2: FanSpeed
 
 Source points:
 
@@ -80,9 +139,11 @@ Source points:
 40080 + 91*Y   control
 ```
 
-Confirm one-hot behavior and decide the reviewed mapping from six native fixed speeds to MDVWB's current Low/Medium/High semantic model.
+Still confirm one-hot behavior and review the mapping from six native fixed speeds to MDVWB Low/Medium/High.
 
-## Blocking item 5: SetTemperature
+Capability remains disabled.
+
+## Deferred capability 3: SetTemperature
 
 Source points:
 
@@ -93,9 +154,11 @@ Source points:
 40085 + 91*Y   half-degree control flag
 ```
 
-Confirm at minimum `22.0` and `22.5` reads and writes, including whether the two write registers must be sent in one FC10 transaction.
+This requires composite semantic value support plus hardware confirmation of write behavior.
 
-## Blocking item 6: RoomTemperature
+Capability remains disabled.
+
+## Deferred capability 4: RoomTemperature
 
 Source point:
 
@@ -103,8 +166,12 @@ Source point:
 40039 + 91*Y   inlet air temperature Ti
 ```
 
-Confirm scale, offset, signedness and any invalid/sensor-error sentinel values.
+The raw value is already used for scan presence, but scale, offset, signedness and sensor-error sentinel values are still unknown.
 
-## Promotion rule
+Capability remains disabled until physical-unit conversion is verified.
 
-Only facts backed by the workbook plus the verification evidence above may enter the production JSON profile. Unresolved capabilities remain disabled rather than guessed.
+## Promotion rule for future capabilities
+
+A new semantic capability may be enabled only when its raw behavior and conversion are supported by the workbook plus live evidence or equivalent trustworthy documentation.
+
+Unresolved capabilities remain disabled rather than guessed.

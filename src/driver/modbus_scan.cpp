@@ -83,6 +83,7 @@ ScanPlan BuildScanPlan(const ModbusProfile& profile)
                 .space = location->space,
                 .address = location->address,
                 .quantity = profile.probe.quantity,
+                .presence = profile.probe.presence,
             };
         }
         catch (const ResolverError& error) {

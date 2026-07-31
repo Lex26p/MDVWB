@@ -809,12 +809,27 @@ void RejectUnknownFields(
         ".type must be one of direct_slave, fixed_slave_stride, explicit");
 }
 
+[[nodiscard]] ProbePresence ParseProbePresence(
+    std::string_view value,
+    std::string_view path)
+{
+    if (value == "any_response") {
+        return ProbePresence::AnyResponse;
+    }
+    if (value == "any_nonzero") {
+        return ProbePresence::AnyNonZero;
+    }
+    Fail(
+        std::string(path) +
+        " must be one of any_response, any_nonzero");
+}
+
 [[nodiscard]] ProbeDefinition ParseProbe(
     const Value& value,
     std::string_view path)
 {
     const auto& object = RequireObject(value, path);
-    RejectUnknownFields(object, {"read", "quantity"}, path);
+    RejectUnknownFields(object, {"read", "quantity", "presence"}, path);
 
     ProbeDefinition result;
     result.read = ParseLocation(
@@ -831,6 +846,15 @@ void RejectUnknownFields(
             Fail(std::string(path) + ".quantity must be in range 1..125");
         }
         result.quantity = static_cast<std::uint16_t>(quantity);
+    }
+
+    if (const auto iterator = object.find("presence");
+        iterator != object.end()) {
+        result.presence = ParseProbePresence(
+            RequireString(
+                iterator->second,
+                std::string(path) + ".presence"),
+            std::string(path) + ".presence");
     }
 
     const auto lastAddress =

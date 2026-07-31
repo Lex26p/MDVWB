@@ -1,7 +1,7 @@
 # Reference equipment: VRF Add Controller
 
-> Status: source analysis for the first Modbus reference profile.  
-> Production profile: **not implemented**.  
+> Status: source analysis plus live-installation verification for the first Modbus reference profile.  
+> Production profile: `profiles/modbus/vrf_add_controller.json`.  
 > Source: `Data Point Table_VRF-Add Controller lock function(mini modbus&modbus).xlsx`.
 >
 > Purpose: preserve confirmed information from the manufacturer's data-point table, identify the mapping required by MDVWB, and explicitly record what is still unknown.
@@ -17,7 +17,9 @@
 
 This document is a reference, not executable truth.
 
-The source spreadsheet contains several conventions that must be verified before production code/profile creation, especially register address notation and temperature encoding.
+The source spreadsheet contains several conventions that require live verification before they may be promoted into executable profile data.
+
+Milestone 7 now has enough verification for a deliberately limited production profile: literal register addressing, fixed `Y` stride mapping, Power, AlarmCode, and a read-only temperature-based presence probe. Ambiguous Mode/FanSpeed/SetTemperature/RoomTemperature semantics remain disabled.
 
 Do not silently infer missing behavior.
 
@@ -27,7 +29,7 @@ Milestone 7 step 1 also freezes the first-profile source facts in:
 tests/fixtures/modbus/vrf_add_controller_source.json
 ```
 
-That fixture is deliberately **not** a loadable Modbus profile. It preserves manufacturer register references as strings, contains no executable `address` / `pduAddress` / `registerAddressing` fields, and keeps the unresolved production blockers machine-readable. A regression test fails if somebody silently converts those references into wire addresses before the convention is proven.
+That fixture is deliberately **not** a loadable Modbus profile. It preserves manufacturer register references as strings, contains no executable `address` / `pduAddress` / `registerAddressing` fields, and keeps deferred capabilities and known limitations machine-readable. A regression test fails if somebody silently converts those references into wire addresses before the convention is proven.
 
 Use the following labels:
 
@@ -153,9 +155,9 @@ Because `Y` is defined by sorting, a topology change may potentially shift indic
 
 This matters for stable MDVWB logical addressing.
 
-### Candidate MDVWB mapping
+### Initial production MDVWB mapping
 
-The simplest candidate mapping is:
+The first production profile uses:
 
 ```text
 MDVWB logical address 1 -> Y = 0
@@ -164,60 +166,37 @@ MDVWB logical address 2 -> Y = 1
 MDVWB logical address 63 -> Y = 62
 ```
 
-This is **not yet approved as production behavior**.
+This maps directly to the confirmed `base + 91*Y` register layout.
 
-Before implementation, decide whether MDVWB logical identity should be:
+Known limitation: the manufacturer describes `Y` as a sorted index. If equipment is added, removed or rediscovered, the same physical indoor unit may potentially move to another `Y`. Until hardware behavior proves otherwise, MDVWB logical identity for this profile follows the current sorted `Y` slot rather than claiming a stronger stable identity.
 
-- the sorted `Y` index; or
-- a stable mapping based on the reported system number + indoor-unit address.
+## 5. Register-address notation
 
-Do not bury this decision inside register arithmetic.
+### CONFIRMED ON LIVE INSTALLATION
 
-## 5. Register-address notation warning
-
-### CRITICAL OPEN ITEM
-
-The spreadsheet labels values such as:
+A working WirenBoard installation reads the Power status point documented as:
 
 ```text
-40026
-40028
-40078
-4997
-4998
-4999
+40028 + 91*Y
 ```
 
-as `Communication protocol address`.
+using register address `40028` directly for `Y = 0`.
 
-It is **not yet proven** whether, on the wire:
+Therefore this profile uses the manufacturer source number itself as the Modbus request register address:
 
-- `40028` means literal Modbus register address `40028`; or
-- `40028` is conventional `4xxxx` documentation notation corresponding to another zero-based PDU address.
+```text
+source 40028 -> profile/PDU address 40028
+source 40078 -> profile/PDU address 40078
+source 40039 -> profile/PDU address 40039
+```
 
-The existence of controller points such as `4997` makes it unsafe to assume a single convention without verification.
+No `40001`, `1`, or similar offset is subtracted.
 
-### Rule
+The profile still keeps the manufacturer's expression in the optional `reference` field for documentation, while `address` contains the literal register value used by the request.
 
-Until a real request frame, vendor clarification, or known-good Modbus client configuration confirms the convention:
+### Milestone 7 production gate: resolved
 
-> Keep all addresses in this document exactly as written by the manufacturer.
-
-Do **not** subtract `40001`, `1`, or any other offset merely because the number looks like classic Modbus reference notation.
-
-The production profile must store an unambiguous PDU address only after this is verified.
-
-### Milestone 7 production gate
-
-The source fixture intentionally remains non-executable until at least one of the following resolves the convention:
-
-1. a captured known-good FC03/FC10 RTU request showing the two-byte starting address;
-2. a vendor statement that explicitly defines whether the spreadsheet values are literal protocol addresses or 4xxxx references;
-3. a known-good Modbus client configuration together with the exact client address-base convention.
-
-The minimum useful capture is a read of one unambiguous source point such as `4998`, `40026`, or `40028`. The request must include Slave ID, function, two-byte starting address, quantity and CRC.
-
-Until such evidence exists, Milestone 7 may prepare and test source facts, but it must not claim a production profile.
+The required known-good client evidence is now available from the live WirenBoard installation, so register-address notation no longer blocks the first production profile.
 
 ## 6. Indoor-unit identification points
 
@@ -236,11 +215,9 @@ These two points are important candidates for:
 - validating that a register block represents a real unit;
 - providing a stable identity separate from `Y`.
 
-### OPEN / VERIFY
+### Current use
 
-The source does not define the values returned by these registers for an unused/nonexistent `Y`.
-
-Therefore these registers are **candidates** for the generic profile probe, but are not yet proven sufficient for safe presence detection.
+The first production profile does not use these identity registers as the presence probe. They remain useful diagnostic/identity candidates, while presence is determined by the live-tested inlet-temperature rule documented in section 20.
 
 ## 7. Power status and control
 
@@ -271,7 +248,7 @@ Status and control use different source addresses.
 1 -> Power ON
 ```
 
-This field is straightforward once register-address notation is confirmed.
+This field is enabled in the first production profile because both the 0/1 semantics and literal register-address convention are confirmed.
 
 ## 8. Mode status and control
 
@@ -723,67 +700,80 @@ All addresses above are quoted in the manufacturer's notation and include `+ 91*
 
 ### MDVWB DESIGN
 
-The UI/common scan must evaluate logical addresses:
+The common scan evaluates every logical address:
 
 ```text
 1..63
 ```
 
-### OPEN / VERIFY
-
-A production-safe presence rule for this controller is not yet proven.
-
-Potential data sources include:
-
-- system number at `40026 + 91*Y`;
-- indoor-unit address at `40027 + 91*Y`;
-- controller count at `4997`;
-- controller readiness at `4998`.
-
-The source does not state what unused `Y` blocks return.
-
-Therefore do not yet define:
+For logical address `N`, the profile uses:
 
 ```text
-"probe": ...
+Y = N - 1
+Slave ID = 1
+register offset = 91 * Y
 ```
 
-in a production profile.
+### CONFIRMED ON LIVE INSTALLATION
 
-### Recommended hardware test
+When an indoor unit is absent, the inlet-air temperature point returns raw value `0`.
 
-For a controller with fewer than 63 connected units:
+The first production profile therefore probes:
 
-1. Read `4997`.
-2. Read identity points for known populated `Y` values.
-3. Read identity points for several `Y` values beyond the reported count.
-4. Record whether the controller:
-   - times out;
-   - returns Modbus exception;
-   - returns zero;
-   - returns `0xFFFF`;
-   - returns stale/other data.
-5. Repeat after a vendor search/restart.
-6. Confirm whether `Y` ordering remains stable.
+```text
+40039 + 91*Y
+```
 
-This test will determine the safest generic probe rule for this profile.
+with one FC03 holding-register read and applies:
 
-## 21. Required verification before production profile
+```text
+raw value != 0 -> Found
+raw value == 0 -> NotFound
+```
 
-Before the first JSON profile is considered production-ready, confirm:
+The profile encodes this as:
 
-1. Exact register-address convention on the wire.
-2. Whether default Modbus Slave ID is actually `1` in the target installation.
-3. Whether `Y = logicalAddress - 1` is an acceptable stable mapping.
-4. Presence/absence behavior for unused `Y`.
-5. Mode register bitmask behavior.
-6. Fan-speed register bitmask behavior.
-7. Desired six-native-speed to MDVWB Low/Medium/High mapping.
-8. Set-temperature composite read behavior.
-9. Set-temperature composite write behavior.
-10. Inlet-temperature encoding/scaling.
-11. Alarm-code behavior on real faults if possible.
-12. Whether controller readiness at `4998` must be checked before normal polling.
+```json
+{
+  "probe": {
+    "read": {
+      "space": "holding_register",
+      "address": 40039,
+      "reference": "40039 + 91*Y"
+    },
+    "quantity": 1,
+    "presence": "any_nonzero"
+  }
+}
+```
+
+This is a profile-specific presence rule. The common scan engine merely applies the declared rule.
+
+Known limitation: a genuine indoor unit that ever reports raw inlet temperature `0` would be treated as absent. That tradeoff is accepted for the initial profile based on the observed installation behavior and can be revised later if stronger presence evidence becomes available.
+
+## 21. Production-profile scope
+
+Milestone 7 intentionally enables only semantics that are sufficiently confirmed:
+
+```text
+Power       enabled
+AlarmCode   enabled
+Mode        disabled
+FanSpeed    disabled
+SetTemperature disabled
+RoomTemperature disabled
+Blinds      disabled
+Blocked     disabled
+```
+
+Why the remaining HVAC controls stay disabled:
+
+- Mode one-hot/multi-bit behavior is not yet confirmed on live equipment.
+- FanSpeed exposes six native fixed levels plus Auto and has no reviewed Low/Medium/High normalization yet.
+- SetTemperature spans integer and half-degree registers and needs composite read/write support plus hardware confirmation.
+- RoomTemperature uses `40039 + 91*Y`, but its physical scaling/signedness is still unknown. The raw value is used only as a non-zero presence signal.
+
+The production profile is therefore intentionally small rather than confidently wrong.
 
 ## 22. Impact on generic profile format
 
@@ -839,7 +829,7 @@ probe
 
 ## 24. Current conclusion
 
-The supplied table is sufficient to justify this equipment as the first Modbus reference profile, but it is **not yet sufficient for a safe production profile without a few targeted hardware checks**.
+The supplied table plus live WirenBoard verification are sufficient for a deliberately limited first production profile.
 
 The strongest confirmed parts are:
 

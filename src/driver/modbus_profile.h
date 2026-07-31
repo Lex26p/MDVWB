@@ -128,9 +128,15 @@ struct ProfileCapabilities {
     bool blocked = false;
 };
 
+enum class ProbePresence {
+    AnyResponse,
+    AnyNonZero,
+};
+
 struct ProbeDefinition {
     RegisterLocation read;
     std::uint16_t quantity = 1;
+    ProbePresence presence = ProbePresence::AnyResponse;
 };
 
 struct ModbusProfile {

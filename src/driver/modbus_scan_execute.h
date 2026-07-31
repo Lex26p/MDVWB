@@ -24,6 +24,7 @@ enum class ScanReason {
     UnsupportedDataSpace,
     Timeout,
     ExceptionResponse,
+    PresenceMismatch,
     InvalidResponse,
     IoError,
     InvalidRequest,

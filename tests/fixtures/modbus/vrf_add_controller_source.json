@@ -4,9 +4,10 @@
   "productionProfile": false,
   "sourceFile": "Data Point Table_VRF-Add Controller lock function(mini modbus&modbus).xlsx",
   "wireAddressing": {
-    "status": "unverified",
-    "pduAddressingResolved": false,
-    "note": "Source references are preserved verbatim and are not executable PDU addresses."
+    "status": "verified_live_wirenboard",
+    "pduAddressingResolved": true,
+    "convention": "literal_source_address",
+    "note": "A working WirenBoard installation reads source register 40028 using register address 40028 directly; no 40001/1 subtraction is applied."
   },
   "transport": {
     "protocol": "modbus_rtu",
@@ -116,10 +117,23 @@
       "manufacturerMeaning": "Inlet air temperature Ti"
     }
   },
-  "productionBlockers": [
-    "register_address_notation",
-    "logical_identity_stability",
-    "safe_presence_probe",
+  "liveVerification": {
+    "addressing": {
+      "client": "WirenBoard",
+      "sourceReference": "40028+(91*Y)",
+      "verifiedBaseRegister": 40028,
+      "rule": "use source register number directly as the Modbus request register address"
+    },
+    "scanPresence": {
+      "sourceReference": "40039+(91*Y)",
+      "manufacturerMeaning": "Inlet air temperature Ti",
+      "absentRawValue": 0,
+      "presenceRule": "any_nonzero"
+    }
+  },
+  "productionProfilePath": "profiles/modbus/vrf_add_controller.json",
+  "deferredItems": [
+    "logical_identity_stability_after_topology_change",
     "mode_one_hot_read_write_behavior",
     "fan_speed_normalization_and_one_hot_behavior",
     "set_temperature_composite_behavior",

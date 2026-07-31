@@ -2,6 +2,7 @@
 
 #include "modbus_rtu.h"
 
+#include <algorithm>
 #include <exception>
 #include <string>
 #include <utility>
@@ -17,7 +18,9 @@ namespace {
         .disposition = ScanDisposition::Unsupported,
         .reason = ScanReason::UnsupportedCandidate,
         .probe = std::nullopt,
+        .exceptionCode = std::nullopt,
         .diagnostic = "profile does not support this logical candidate",
+        .elapsed = {},
     };
 }
 
@@ -29,8 +32,10 @@ namespace {
         .disposition = ScanDisposition::Unsupported,
         .reason = ScanReason::UnsupportedDataSpace,
         .probe = probe,
+        .exceptionCode = std::nullopt,
         .diagnostic =
             "current Modbus RTU scan executor supports holding_register probes only",
+        .elapsed = {},
     };
 }
 
@@ -45,6 +50,7 @@ namespace {
         .disposition = ScanDisposition::Error,
         .reason = reason,
         .probe = probe,
+        .exceptionCode = std::nullopt,
         .diagnostic = std::move(diagnostic),
         .elapsed = elapsed,
     };
@@ -76,11 +82,34 @@ namespace {
                 transaction.elapsed);
         }
 
+        if (probe.presence == ProbePresence::AnyNonZero) {
+            const bool anyNonZero = std::any_of(
+                response.registers.begin(),
+                response.registers.end(),
+                [](std::uint16_t value) {
+                    return value != 0U;
+                });
+
+            if (!anyNonZero) {
+                return ScanResult{
+                    .logicalAddress = probe.logicalAddress,
+                    .disposition = ScanDisposition::NotFound,
+                    .reason = ScanReason::PresenceMismatch,
+                    .probe = probe,
+                    .exceptionCode = std::nullopt,
+                    .diagnostic =
+                        "probe response did not satisfy profile presence rule",
+                    .elapsed = transaction.elapsed,
+                };
+            }
+        }
+
         return ScanResult{
             .logicalAddress = probe.logicalAddress,
             .disposition = ScanDisposition::Found,
             .reason = ScanReason::Success,
             .probe = probe,
+            .exceptionCode = std::nullopt,
             .diagnostic = {},
             .elapsed = transaction.elapsed,
         };
@@ -92,6 +121,7 @@ namespace {
             .disposition = ScanDisposition::NotFound,
             .reason = ScanReason::ExceptionResponse,
             .probe = probe,
+            .exceptionCode = std::nullopt,
             .diagnostic = transaction.error,
             .elapsed = transaction.elapsed,
         };
@@ -107,6 +137,7 @@ namespace {
             .disposition = ScanDisposition::NotFound,
             .reason = ScanReason::Timeout,
             .probe = probe,
+            .exceptionCode = std::nullopt,
             .diagnostic = transaction.error,
             .elapsed = transaction.elapsed,
         };
