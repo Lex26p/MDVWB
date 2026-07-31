@@ -120,6 +120,7 @@ constexpr std::string_view kValidProfile = R"json(
     },
     "setTemperature": {
       "type": "number",
+      "rawType": "int16",
       "read": {
         "space": "holding_register",
         "address": 30
@@ -226,6 +227,8 @@ void TestValidFixedStrideProfile()
     Require(profile.probe.quantity == 2, "probe quantity mismatch");
 
     const auto& setPoint = profile.points.at("setTemperature");
+    Require(setPoint.rawType == mdv::modbus::RawType::Int16,
+            "number rawType was not loaded");
     Require(setPoint.transform.has_value(), "number transform was not loaded");
     Require(std::abs(setPoint.transform->scale - 0.1) < 1e-12,
             "number scale mismatch");
@@ -532,6 +535,33 @@ void TestCapabilitiesRequirePoints()
         "points.roomTemperature");
 }
 
+
+void TestRawTypeValidation()
+{
+    RequireProfileError(
+        [] {
+            const auto text = ReplaceOnce(
+                std::string(kValidProfile),
+                R"json("rawType": "int16")json",
+                R"json("rawType": "uint32")json");
+            static_cast<void>(mdv::modbus::ParseProfile(text));
+        },
+        "uint16, int16");
+
+    RequireProfileError(
+        [] {
+            auto text = ReplaceOnce(
+                std::string(kValidProfile),
+                R"json("power": {
+      "type": "enum")json",
+                R"json("power": {
+      "type": "enum",
+      "rawType": "int16")json");
+            static_cast<void>(mdv::modbus::ParseProfile(text));
+        },
+        "allowed only for number");
+}
+
 void TestFileLoading()
 {
     const auto path =
@@ -739,6 +769,7 @@ int main()
         TestNumericValidation();
         TestEnumValidation();
         TestCapabilitiesRequirePoints();
+        TestRawTypeValidation();
         TestFileLoading();
         TestProfileDirectoryLoadsValidFilesAndIsolatesInvalidFiles();
         TestDuplicateIdsRejectWholeDuplicateGroup();

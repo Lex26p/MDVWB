@@ -244,6 +244,19 @@ void RejectUnknownFields(
     Fail(std::string(path) + " must be one of exact, nearest, floor, ceil");
 }
 
+[[nodiscard]] RawType ParseRawType(
+    std::string_view value,
+    std::string_view path)
+{
+    if (value == "uint16") {
+        return RawType::UInt16;
+    }
+    if (value == "int16") {
+        return RawType::Int16;
+    }
+    Fail(std::string(path) + " must be one of uint16, int16");
+}
+
 [[nodiscard]] RegisterLocation ParseLocation(
     const Value& value,
     std::string_view path,
@@ -441,6 +454,7 @@ void RejectUnknownFields(
         object,
         {
             "type",
+            "rawType",
             "read",
             "write",
             "transform",
@@ -457,6 +471,20 @@ void RejectUnknownFields(
             RequireField(object, "type", path),
             std::string(path) + ".type"),
         std::string(path) + ".type");
+
+    if (const auto iterator = object.find("rawType");
+        iterator != object.end()) {
+        if (result.type != PointType::Number) {
+            Fail(
+                std::string(path) +
+                ".rawType is allowed only for number points");
+        }
+        result.rawType = ParseRawType(
+            RequireString(
+                iterator->second,
+                std::string(path) + ".rawType"),
+            std::string(path) + ".rawType");
+    }
 
     if (const auto iterator = object.find("read");
         iterator != object.end()) {

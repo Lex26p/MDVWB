@@ -49,6 +49,11 @@ enum class WriteRounding {
     Ceil,
 };
 
+enum class RawType {
+    UInt16,
+    Int16,
+};
+
 struct DirectSlaveAddressing {
     std::uint8_t logicalMin = kMinLogicalAddress;
     std::uint8_t logicalMax = kMaxLogicalAddress;
@@ -103,6 +108,7 @@ struct EnumMappings {
 
 struct PointDefinition {
     PointType type = PointType::Boolean;
+    RawType rawType = RawType::UInt16;
     std::optional<RegisterLocation> read;
     std::optional<RegisterLocation> write;
     std::optional<NumericTransform> transform;
