@@ -1,36 +1,19 @@
 #pragma once
 
+#include "device_driver.h"
 #include "mdv_device.h"
 #include "mdv_serial.h"
+
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <stdexcept>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace mdv {
-
-enum class DriverOperation {
-    PollRead,
-    SetState,
-    Lock,
-    Unlock,
-    ConfirmRead,
-};
-
-enum class DriverOutcome {
-    Success,
-    Timeout,
-    IoError,
-    InvalidResponse,
-};
-
-struct DriverResult {
-    std::uint8_t address = 0;
-    DriverOperation operation = DriverOperation::PollRead;
-    DriverOutcome outcome = DriverOutcome::Timeout;
-    std::string error;
-};
 
 inline constexpr std::uint32_t kMaxSetCommandAttempts = 3;
 inline constexpr std::uint32_t kMaxBlockCommandAttempts = 3;
@@ -73,23 +56,127 @@ struct DeviceRuntime {
 // highest priority, then CC/CD and cached C3. A bounded priority burst is
 // followed by one ordinary round-robin C0 so one unconfirmed device cannot
 // starve all other addresses.
-class MdvDriver {
+class MdvDriver final : public IDeviceDriver {
 public:
     MdvDriver(
         std::vector<std::uint8_t> addresses,
         ITransactionTransport& transport,
         std::uint8_t masterId = 0);
 
-    [[nodiscard]] DriverResult ProcessNext();
+    [[nodiscard]] DriverResult ProcessNext() override;
+
+    // Protocol-neutral command entry point. Existing strongly typed MDV
+    // methods remain available below so this refactor does not alter current
+    // behavior or force protocol details into callers that still use them.
+    void ApplyCommand(const DriverCommand& command) override
+    {
+        switch (command.control) {
+        case DriverControl::Power: {
+            const auto* value = std::get_if<bool>(&command.value);
+            if (value == nullptr) {
+                throw std::invalid_argument("Power command requires a boolean value");
+            }
+            SetPower(command.address, *value);
+            return;
+        }
+
+        case DriverControl::Mode: {
+            const auto* value = std::get_if<HvacMode>(&command.value);
+            if (value == nullptr) {
+                throw std::invalid_argument("Mode command requires an HVAC mode value");
+            }
+
+            switch (*value) {
+            case HvacMode::Cool:
+                SetMode(command.address, Mode::Cool);
+                return;
+            case HvacMode::Heat:
+                SetMode(command.address, Mode::Heat);
+                return;
+            case HvacMode::Dry:
+                SetMode(command.address, Mode::Dry);
+                return;
+            case HvacMode::Fan:
+                SetMode(command.address, Mode::Fan);
+                return;
+            case HvacMode::Auto:
+                SetMode(command.address, Mode::Auto);
+                return;
+            }
+            throw std::invalid_argument("unknown HVAC mode");
+        }
+
+        case DriverControl::FanSpeed: {
+            const auto* value = std::get_if<HvacFanSpeed>(&command.value);
+            if (value == nullptr) {
+                throw std::invalid_argument(
+                    "FanSpeed command requires an HVAC fan-speed value");
+            }
+
+            switch (*value) {
+            case HvacFanSpeed::Low:
+                SetFanSpeed(command.address, FanSpeed::Low);
+                return;
+            case HvacFanSpeed::Medium:
+                SetFanSpeed(command.address, FanSpeed::Medium);
+                return;
+            case HvacFanSpeed::High:
+                SetFanSpeed(command.address, FanSpeed::High);
+                return;
+            case HvacFanSpeed::Auto:
+                SetFanSpeed(command.address, FanSpeed::Auto);
+                return;
+            }
+            throw std::invalid_argument("unknown HVAC fan speed");
+        }
+
+        case DriverControl::SetTemperature: {
+            const auto* value = std::get_if<double>(&command.value);
+            if (value == nullptr) {
+                throw std::invalid_argument(
+                    "SetTemperature command requires a numeric value");
+            }
+            if (!std::isfinite(*value) || std::floor(*value) != *value ||
+                *value < 0.0 || *value > 255.0) {
+                throw std::invalid_argument(
+                    "MDV SetTemperature requires a whole-degree value");
+            }
+            SetTemperature(command.address, static_cast<std::uint8_t>(*value));
+            return;
+        }
+
+        case DriverControl::Blinds: {
+            const auto* value = std::get_if<bool>(&command.value);
+            if (value == nullptr) {
+                throw std::invalid_argument("Blinds command requires a boolean value");
+            }
+            SetBlinds(command.address, *value);
+            return;
+        }
+
+        case DriverControl::Blocked: {
+            const auto* value = std::get_if<bool>(&command.value);
+            if (value == nullptr) {
+                throw std::invalid_argument("Blocked command requires a boolean value");
+            }
+            SetBlocked(command.address, *value);
+            return;
+        }
+        }
+
+        throw std::invalid_argument("unknown driver control");
+    }
+
     void SetPower(std::uint8_t address, bool power);
     void SetMode(std::uint8_t address, Mode mode);
     void SetFanSpeed(std::uint8_t address, FanSpeed speed);
     void SetTemperature(std::uint8_t address, std::uint8_t temperature);
     void SetBlinds(std::uint8_t address, bool enabled);
     void SetBlocked(std::uint8_t address, bool blocked);
-    [[nodiscard]] bool HasQueuedWork() const noexcept;
-    [[nodiscard]] std::size_t DeviceCount() const noexcept;
-    [[nodiscard]] std::uint8_t NextPollAddress() const noexcept;
+
+    [[nodiscard]] bool HasQueuedWork() const noexcept override;
+    [[nodiscard]] std::size_t DeviceCount() const noexcept override;
+    [[nodiscard]] std::uint8_t NextPollAddress() const noexcept override;
 
     [[nodiscard]] DeviceRuntime& DeviceByAddress(std::uint8_t address);
     [[nodiscard]] const DeviceRuntime& DeviceByAddress(std::uint8_t address) const;
