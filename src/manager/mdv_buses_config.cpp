@@ -1,388 +1,87 @@
 #include "mdv_buses_config.h"
 
+#include "json.h"
+
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
-#include <fstream>
 #include <limits>
-#include <map>
 #include <set>
 #include <sstream>
+#include <string>
 #include <utility>
-#include <variant>
 
 namespace mdvwb {
 namespace {
 
-struct JsonValue;
-using JsonArray = std::vector<JsonValue>;
-using JsonObject = std::map<std::string, JsonValue>;
+using mdvwb::json::Array;
+using mdvwb::json::Object;
+using mdvwb::json::Value;
 
-struct JsonValue {
-    using Storage = std::variant<
-        std::nullptr_t,
-        bool,
-        std::int64_t,
-        std::string,
-        JsonArray,
-        JsonObject>;
-    Storage value;
-};
-
-class JsonParser final {
-public:
-    explicit JsonParser(std::string_view text)
-        : text_(text)
-    {
-    }
-
-    JsonValue Parse()
-    {
-        SkipWhitespace();
-        JsonValue result = ParseValue();
-        SkipWhitespace();
-        if (!AtEnd()) {
-            Fail("unexpected characters after the root value");
-        }
-        return result;
-    }
-
-private:
-    JsonValue ParseValue()
-    {
-        if (AtEnd()) {
-            Fail("unexpected end of JSON");
-        }
-        switch (Peek()) {
-        case '{': return JsonValue{ParseObject()};
-        case '[': return JsonValue{ParseArray()};
-        case '"': return JsonValue{ParseString()};
-        case 't':
-            ConsumeLiteral("true");
-            return JsonValue{true};
-        case 'f':
-            ConsumeLiteral("false");
-            return JsonValue{false};
-        case 'n':
-            ConsumeLiteral("null");
-            return JsonValue{nullptr};
-        default:
-            if (Peek() == '-' ||
-                std::isdigit(static_cast<unsigned char>(Peek())) != 0) {
-                return JsonValue{ParseInteger()};
-            }
-            Fail("expected an object, array, string, integer, boolean or null");
-        }
-    }
-
-    JsonObject ParseObject()
-    {
-        Expect('{');
-        SkipWhitespace();
-        JsonObject result;
-        if (TryConsume('}')) {
-            return result;
-        }
-        while (true) {
-            if (AtEnd() || Peek() != '"') {
-                Fail("expected an object key");
-            }
-            const std::string key = ParseString();
-            SkipWhitespace();
-            Expect(':');
-            SkipWhitespace();
-            if (result.contains(key)) {
-                Fail("duplicate object key '" + key + "'");
-            }
-            result.emplace(key, ParseValue());
-            SkipWhitespace();
-            if (TryConsume('}')) {
-                break;
-            }
-            Expect(',');
-            SkipWhitespace();
-        }
-        return result;
-    }
-
-    JsonArray ParseArray()
-    {
-        Expect('[');
-        SkipWhitespace();
-        JsonArray result;
-        if (TryConsume(']')) {
-            return result;
-        }
-        while (true) {
-            result.push_back(ParseValue());
-            SkipWhitespace();
-            if (TryConsume(']')) {
-                break;
-            }
-            Expect(',');
-            SkipWhitespace();
-        }
-        return result;
-    }
-
-    static void AppendUtf8(std::string& output, unsigned int codePoint)
-    {
-        if (codePoint <= 0x7FU) {
-            output.push_back(static_cast<char>(codePoint));
-        }
-        else if (codePoint <= 0x7FFU) {
-            output.push_back(static_cast<char>(0xC0U | (codePoint >> 6U)));
-            output.push_back(static_cast<char>(0x80U | (codePoint & 0x3FU)));
-        }
-        else {
-            output.push_back(static_cast<char>(0xE0U | (codePoint >> 12U)));
-            output.push_back(static_cast<char>(0x80U | ((codePoint >> 6U) & 0x3FU)));
-            output.push_back(static_cast<char>(0x80U | (codePoint & 0x3FU)));
-        }
-    }
-
-    unsigned int ParseUnicodeEscape()
-    {
-        unsigned int result = 0;
-        for (int index = 0; index < 4; ++index) {
-            if (AtEnd()) {
-                Fail("unfinished unicode escape");
-            }
-            const char character = Consume();
-            result <<= 4U;
-            if (character >= '0' && character <= '9') {
-                result += static_cast<unsigned int>(character - '0');
-            }
-            else if (character >= 'a' && character <= 'f') {
-                result += static_cast<unsigned int>(character - 'a' + 10);
-            }
-            else if (character >= 'A' && character <= 'F') {
-                result += static_cast<unsigned int>(character - 'A' + 10);
-            }
-            else {
-                Fail("invalid unicode escape");
-            }
-        }
-        return result;
-    }
-
-    std::string ParseString()
-    {
-        Expect('"');
-        std::string result;
-        while (!AtEnd()) {
-            const char character = Consume();
-            if (character == '"') {
-                return result;
-            }
-            if (static_cast<unsigned char>(character) < 0x20U) {
-                Fail("control character inside a string");
-            }
-            if (character != '\\') {
-                result.push_back(character);
-                continue;
-            }
-            if (AtEnd()) {
-                Fail("unfinished string escape");
-            }
-            switch (Consume()) {
-            case '"': result.push_back('"'); break;
-            case '\\': result.push_back('\\'); break;
-            case '/': result.push_back('/'); break;
-            case 'b': result.push_back('\b'); break;
-            case 'f': result.push_back('\f'); break;
-            case 'n': result.push_back('\n'); break;
-            case 'r': result.push_back('\r'); break;
-            case 't': result.push_back('\t'); break;
-            case 'u': AppendUtf8(result, ParseUnicodeEscape()); break;
-            default: Fail("invalid string escape");
-            }
-        }
-        Fail("unterminated string");
-    }
-
-    std::int64_t ParseInteger()
-    {
-        const std::size_t begin = position_;
-        if (Peek() == '-') {
-            ++position_;
-        }
-        if (AtEnd()) {
-            Fail("unfinished integer");
-        }
-        if (Peek() == '0') {
-            ++position_;
-            if (!AtEnd() &&
-                std::isdigit(static_cast<unsigned char>(Peek())) != 0) {
-                Fail("leading zero in integer");
-            }
-        }
-        else {
-            if (std::isdigit(static_cast<unsigned char>(Peek())) == 0) {
-                Fail("invalid integer");
-            }
-            while (!AtEnd() &&
-                   std::isdigit(static_cast<unsigned char>(Peek())) != 0) {
-                ++position_;
-            }
-        }
-        if (!AtEnd() &&
-            (Peek() == '.' || Peek() == 'e' || Peek() == 'E')) {
-            Fail("only integer numbers are supported in buses.json");
-        }
-        const std::string token(text_.substr(begin, position_ - begin));
-        try {
-            std::size_t consumed = 0;
-            const long long value = std::stoll(token, &consumed, 10);
-            if (consumed != token.size()) {
-                Fail("invalid integer");
-            }
-            return static_cast<std::int64_t>(value);
-        }
-        catch (const std::exception&) {
-            Fail("integer is outside the supported range");
-        }
-    }
-
-    void ConsumeLiteral(std::string_view literal)
-    {
-        for (const char expected : literal) {
-            if (AtEnd() || Consume() != expected) {
-                Fail("invalid literal");
-            }
-        }
-    }
-
-    void SkipWhitespace()
-    {
-        while (!AtEnd()) {
-            const char character = Peek();
-            if (character != ' ' && character != '\t' &&
-                character != '\r' && character != '\n') {
-                break;
-            }
-            ++position_;
-        }
-    }
-
-    void Expect(char expected)
-    {
-        if (AtEnd() || Consume() != expected) {
-            Fail(std::string("expected '") + expected + "'");
-        }
-    }
-
-    bool TryConsume(char expected)
-    {
-        if (!AtEnd() && Peek() == expected) {
-            ++position_;
-            return true;
-        }
-        return false;
-    }
-
-    [[nodiscard]] bool AtEnd() const noexcept
-    {
-        return position_ >= text_.size();
-    }
-
-    [[nodiscard]] char Peek() const
-    {
-        return text_[position_];
-    }
-
-    char Consume()
-    {
-        return text_[position_++];
-    }
-
-    [[noreturn]] void Fail(const std::string& message) const
-    {
-        std::size_t line = 1;
-        std::size_t column = 1;
-        for (std::size_t index = 0;
-             index < position_ && index < text_.size();
-             ++index) {
-            if (text_[index] == '\n') {
-                ++line;
-                column = 1;
-            }
-            else {
-                ++column;
-            }
-        }
-        throw BusesConfigError(
-            "JSON error at line " + std::to_string(line) +
-            ", column " + std::to_string(column) + ": " + message);
-    }
-
-    std::string_view text_;
-    std::size_t position_ = 0;
-};
-
-const JsonObject& RequireObject(
-    const JsonValue& value,
-    std::string_view path)
+[[noreturn]] void Fail(std::string message)
 {
-    const auto* result = std::get_if<JsonObject>(&value.value);
-    if (result == nullptr) {
-        throw BusesConfigError(std::string(path) + " must be an object");
-    }
-    return *result;
+    throw BusesConfigError(std::move(message));
 }
 
-const JsonArray& RequireArray(
-    const JsonValue& value,
+const Object& RequireObject(
+    const Value& value,
     std::string_view path)
 {
-    const auto* result = std::get_if<JsonArray>(&value.value);
-    if (result == nullptr) {
-        throw BusesConfigError(std::string(path) + " must be an array");
+    if (!value.IsObject()) {
+        Fail(std::string(path) + " must be an object");
     }
-    return *result;
+    return value.AsObject();
+}
+
+const Array& RequireArray(
+    const Value& value,
+    std::string_view path)
+{
+    if (!value.IsArray()) {
+        Fail(std::string(path) + " must be an array");
+    }
+    return value.AsArray();
 }
 
 std::int64_t RequireInteger(
-    const JsonValue& value,
+    const Value& value,
     std::string_view path)
 {
-    const auto* result = std::get_if<std::int64_t>(&value.value);
-    if (result == nullptr) {
-        throw BusesConfigError(std::string(path) + " must be an integer");
+    if (!value.IsInteger()) {
+        Fail(std::string(path) + " must be an integer");
     }
-    return *result;
+    return value.AsInteger();
 }
 
 bool RequireBoolean(
-    const JsonValue& value,
+    const Value& value,
     std::string_view path)
 {
-    const auto* result = std::get_if<bool>(&value.value);
-    if (result == nullptr) {
-        throw BusesConfigError(std::string(path) + " must be true or false");
+    if (!value.IsBoolean()) {
+        Fail(std::string(path) + " must be true or false");
     }
-    return *result;
+    return value.AsBoolean();
 }
 
 const std::string& RequireString(
-    const JsonValue& value,
+    const Value& value,
     std::string_view path)
 {
-    const auto* result = std::get_if<std::string>(&value.value);
-    if (result == nullptr) {
-        throw BusesConfigError(std::string(path) + " must be a string");
+    if (!value.IsString()) {
+        Fail(std::string(path) + " must be a string");
     }
-    return *result;
+    return value.AsString();
 }
 
-const JsonValue& RequireField(
-    const JsonObject& object,
+const Value& RequireField(
+    const Object& object,
     std::string_view key,
     std::string_view path)
 {
-    const auto iterator = object.find(std::string(key));
+    const auto iterator = object.find(key);
     if (iterator == object.end()) {
-        throw BusesConfigError(
+        Fail(
             std::string(path) + " is missing required field '" +
             std::string(key) + "'");
     }
@@ -390,15 +89,16 @@ const JsonValue& RequireField(
 }
 
 void RejectUnknownFields(
-    const JsonObject& object,
-    const std::set<std::string>& allowed,
+    const Object& object,
+    std::initializer_list<std::string_view> allowed,
     std::string_view path)
 {
     for (const auto& [key, unused] : object) {
         static_cast<void>(unused);
-        if (!allowed.contains(key)) {
-            throw BusesConfigError(
-                std::string(path) + " contains unknown field '" + key + "'");
+        if (std::find(allowed.begin(), allowed.end(), key) == allowed.end()) {
+            Fail(
+                std::string(path) + " contains unknown field '" +
+                key + "'");
         }
     }
 }
@@ -410,9 +110,10 @@ int CheckedInt(
     std::string_view path)
 {
     if (value < minimum || value > maximum) {
-        throw BusesConfigError(
+        Fail(
             std::string(path) + " must be in range " +
-            std::to_string(minimum) + ".." + std::to_string(maximum));
+            std::to_string(minimum) + ".." +
+            std::to_string(maximum));
     }
     return static_cast<int>(value);
 }
@@ -422,12 +123,256 @@ bool IsValidDevicePath(std::string_view port)
     if (!port.starts_with("/dev/") || port.size() <= 5U) {
         return false;
     }
-    return std::all_of(port.begin(), port.end(), [](char character) {
-        const unsigned char byte = static_cast<unsigned char>(character);
-        return std::isalnum(byte) != 0 || character == '/' ||
-            character == '_' || character == '-' || character == '.' ||
-            character == '+' || character == ':';
-    });
+
+    return std::all_of(
+        port.begin(),
+        port.end(),
+        [](char character) {
+            const unsigned char byte =
+                static_cast<unsigned char>(character);
+            return
+                std::isalnum(byte) != 0 ||
+                character == '/' ||
+                character == '_' ||
+                character == '-' ||
+                character == '.' ||
+                character == '+' ||
+                character == ':';
+        });
+}
+
+bool IsValidProfileId(std::string_view value) noexcept
+{
+    if (value.empty() || value.size() > 64U) {
+        return false;
+    }
+    if (value.front() < 'a' || value.front() > 'z') {
+        return false;
+    }
+
+    return std::all_of(
+        value.begin(),
+        value.end(),
+        [](char character) {
+            return
+                (character >= 'a' && character <= 'z') ||
+                (character >= '0' && character <= '9') ||
+                character == '_';
+        });
+}
+
+bool IsSupportedBaudRate(int baudRate) noexcept
+{
+    constexpr std::array<int, 8> supported{
+        1200,
+        2400,
+        4800,
+        9600,
+        19200,
+        38400,
+        57600,
+        115200,
+    };
+
+    return std::find(
+        supported.begin(),
+        supported.end(),
+        baudRate) != supported.end();
+}
+
+BusProtocol ParseProtocol(
+    std::string_view value,
+    std::string_view path)
+{
+    if (value == "mdv") {
+        return BusProtocol::Mdv;
+    }
+    if (value == "modbus_rtu") {
+        return BusProtocol::ModbusRtu;
+    }
+
+    Fail(
+        std::string(path) +
+        " must be one of mdv, modbus_rtu");
+}
+
+BusParity ParseParity(
+    std::string_view value,
+    std::string_view path)
+{
+    if (value == "none") {
+        return BusParity::None;
+    }
+    if (value == "even") {
+        return BusParity::Even;
+    }
+    if (value == "odd") {
+        return BusParity::Odd;
+    }
+
+    Fail(
+        std::string(path) +
+        " must be one of none, even, odd");
+}
+
+void ValidateModbusSettings(
+    const ModbusBusSettings& settings,
+    std::string_view path)
+{
+    if (!IsValidProfileId(settings.profileId)) {
+        Fail(
+            std::string(path) +
+            ".profileId must start with a-z, contain only a-z, 0-9 and _, and be at most 64 characters");
+    }
+
+    if (!IsSupportedBaudRate(settings.baudRate)) {
+        Fail(
+            std::string(path) +
+            ".baudRate must be one of 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200");
+    }
+
+    if (settings.dataBits != 7 && settings.dataBits != 8) {
+        Fail(
+            std::string(path) +
+            ".dataBits must be 7 or 8");
+    }
+
+    if (settings.stopBits != 1 && settings.stopBits != 2) {
+        Fail(
+            std::string(path) +
+            ".stopBits must be 1 or 2");
+    }
+}
+
+ModbusBusSettings ParseModbusSettings(
+    const Value& value,
+    std::string_view path)
+{
+    const auto& object = RequireObject(value, path);
+    RejectUnknownFields(
+        object,
+        {
+            "profileId",
+            "baudRate",
+            "dataBits",
+            "parity",
+            "stopBits",
+        },
+        path);
+
+    ModbusBusSettings result;
+    result.profileId = RequireString(
+        RequireField(object, "profileId", path),
+        std::string(path) + ".profileId");
+    result.baudRate = CheckedInt(
+        RequireInteger(
+            RequireField(object, "baudRate", path),
+            std::string(path) + ".baudRate"),
+        1,
+        std::numeric_limits<int>::max(),
+        std::string(path) + ".baudRate");
+    result.dataBits = CheckedInt(
+        RequireInteger(
+            RequireField(object, "dataBits", path),
+            std::string(path) + ".dataBits"),
+        1,
+        8,
+        std::string(path) + ".dataBits");
+    result.parity = ParseParity(
+        RequireString(
+            RequireField(object, "parity", path),
+            std::string(path) + ".parity"),
+        std::string(path) + ".parity");
+    result.stopBits = CheckedInt(
+        RequireInteger(
+            RequireField(object, "stopBits", path),
+            std::string(path) + ".stopBits"),
+        1,
+        2,
+        std::string(path) + ".stopBits");
+
+    ValidateModbusSettings(result, path);
+    return result;
+}
+
+int MinimumAddress(BusProtocol protocol) noexcept
+{
+    return protocol == BusProtocol::ModbusRtu ? 1 : 0;
+}
+
+void ValidateBus(
+    BusConfig& bus,
+    std::set<int>& usedIds,
+    std::set<std::string>& usedPorts,
+    std::string_view path)
+{
+    if (bus.id < 1 || bus.id > 999) {
+        Fail(std::string(path) + ".id must be in range 1..999");
+    }
+
+    if (!IsValidDevicePath(bus.port)) {
+        Fail(
+            std::string(path) +
+            ".port must be a safe absolute device path beginning with /dev/");
+    }
+
+    if (!usedIds.insert(bus.id).second) {
+        Fail("duplicate bus id " + std::to_string(bus.id));
+    }
+
+    if (!usedPorts.insert(bus.port).second) {
+        Fail(
+            "device port '" + bus.port +
+            "' is assigned to more than one bus");
+    }
+
+    if (bus.protocol == BusProtocol::Mdv) {
+        if (bus.modbus.has_value()) {
+            Fail(
+                std::string(path) +
+                ".modbus is allowed only when protocol is modbus_rtu");
+        }
+    }
+    else {
+        if (!bus.modbus.has_value()) {
+            Fail(
+                std::string(path) +
+                " uses protocol modbus_rtu but is missing required field 'modbus'");
+        }
+        ValidateModbusSettings(
+            *bus.modbus,
+            std::string(path) + ".modbus");
+    }
+
+    std::sort(bus.addresses.begin(), bus.addresses.end());
+    const auto duplicate =
+        std::adjacent_find(
+            bus.addresses.begin(),
+            bus.addresses.end());
+    if (duplicate != bus.addresses.end()) {
+        Fail(
+            std::string(path) +
+            ".addresses contains duplicate address " +
+            std::to_string(*duplicate));
+    }
+
+    const int minimum = MinimumAddress(bus.protocol);
+    for (const int address : bus.addresses) {
+        if (address < minimum || address > 63) {
+            Fail(
+                std::string(path) +
+                ".addresses address must be in range " +
+                std::to_string(minimum) +
+                "..63 for protocol " +
+                std::string(BusProtocolName(bus.protocol)));
+        }
+    }
+
+    if (bus.enabled && bus.addresses.empty()) {
+        Fail(
+            std::string(path) +
+            " is enabled but has no polling addresses");
+    }
 }
 
 std::string EscapeJson(std::string_view value)
@@ -435,13 +380,27 @@ std::string EscapeJson(std::string_view value)
     std::ostringstream output;
     for (const unsigned char character : value) {
         switch (character) {
-        case '"': output << "\\\""; break;
-        case '\\': output << "\\\\"; break;
-        case '\b': output << "\\b"; break;
-        case '\f': output << "\\f"; break;
-        case '\n': output << "\\n"; break;
-        case '\r': output << "\\r"; break;
-        case '\t': output << "\\t"; break;
+        case '"':
+            output << "\\\"";
+            break;
+        case '\\':
+            output << "\\\\";
+            break;
+        case '\b':
+            output << "\\b";
+            break;
+        case '\f':
+            output << "\\f";
+            break;
+        case '\n':
+            output << "\\n";
+            break;
+        case '\r':
+            output << "\\r";
+            break;
+        case '\t':
+            output << "\\t";
+            break;
         default:
             if (character < 0x20U) {
                 output << '?';
@@ -455,44 +414,66 @@ std::string EscapeJson(std::string_view value)
     return output.str();
 }
 
-BusesConfig ValidateAndConvert(const JsonValue& rootValue)
+BusesConfig ValidateAndConvert(const Value& rootValue)
 {
-    const JsonObject& root = RequireObject(rootValue, "root");
-    RejectUnknownFields(root, {"version", "revision", "buses"}, "root");
+    const auto& root = RequireObject(rootValue, "root");
+    RejectUnknownFields(
+        root,
+        {"version", "revision", "buses"},
+        "root");
 
     BusesConfig result;
     result.version = CheckedInt(
-        RequireInteger(RequireField(root, "version", "root"), "root.version"),
+        RequireInteger(
+            RequireField(root, "version", "root"),
+            "root.version"),
         1,
         1,
         "root.version");
 
-    if (const auto iterator = root.find("revision"); iterator != root.end()) {
+    if (const auto iterator = root.find("revision");
+        iterator != root.end()) {
         result.revision = CheckedInt(
-            RequireInteger(iterator->second, "root.revision"),
+            RequireInteger(
+                iterator->second,
+                "root.revision"),
             0,
             std::numeric_limits<int>::max(),
             "root.revision");
     }
 
-    const JsonArray& buses = RequireArray(
+    const auto& buses = RequireArray(
         RequireField(root, "buses", "root"),
         "root.buses");
+
     std::set<int> usedIds;
     std::set<std::string> usedPorts;
 
-    for (std::size_t index = 0; index < buses.size(); ++index) {
+    for (std::size_t index = 0;
+         index < buses.size();
+         ++index) {
         const std::string path =
             "root.buses[" + std::to_string(index) + "]";
-        const JsonObject& object = RequireObject(buses[index], path);
+        const auto& object =
+            RequireObject(buses[index], path);
+
         RejectUnknownFields(
             object,
-            {"id", "enabled", "port", "addresses"},
+            {
+                "id",
+                "enabled",
+                "protocol",
+                "port",
+                "addresses",
+                "modbus",
+            },
             path);
 
         BusConfig bus;
         bus.id = CheckedInt(
-            RequireInteger(RequireField(object, "id", path), path + ".id"),
+            RequireInteger(
+                RequireField(object, "id", path),
+                path + ".id"),
             1,
             999,
             path + ".id");
@@ -503,48 +484,49 @@ BusesConfig ValidateAndConvert(const JsonValue& rootValue)
             RequireField(object, "port", path),
             path + ".port");
 
-        if (!IsValidDevicePath(bus.port)) {
-            throw BusesConfigError(
-                path + ".port must be a safe absolute device path beginning with /dev/");
-        }
-        if (!usedIds.insert(bus.id).second) {
-            throw BusesConfigError(
-                "duplicate bus id " + std::to_string(bus.id));
-        }
-        if (!usedPorts.insert(bus.port).second) {
-            throw BusesConfigError(
-                "device port '" + bus.port +
-                "' is assigned to more than one bus");
+        // Compatibility contract: protocol omitted means existing MDV.
+        if (const auto iterator = object.find("protocol");
+            iterator != object.end()) {
+            bus.protocol = ParseProtocol(
+                RequireString(
+                    iterator->second,
+                    path + ".protocol"),
+                path + ".protocol");
         }
 
-        const JsonArray& addresses = RequireArray(
+        if (const auto iterator = object.find("modbus");
+            iterator != object.end()) {
+            bus.modbus = ParseModbusSettings(
+                iterator->second,
+                path + ".modbus");
+        }
+
+        const auto& addresses = RequireArray(
             RequireField(object, "addresses", path),
             path + ".addresses");
-        std::set<int> uniqueAddresses;
+
+        bus.addresses.reserve(addresses.size());
         for (std::size_t addressIndex = 0;
              addressIndex < addresses.size();
              ++addressIndex) {
             const std::string addressPath =
-                path + ".addresses[" + std::to_string(addressIndex) + "]";
-            const int address = CheckedInt(
-                RequireInteger(addresses[addressIndex], addressPath),
-                0,
-                63,
-                addressPath);
-            if (!uniqueAddresses.insert(address).second) {
-                throw BusesConfigError(
-                    path + ".addresses contains duplicate address " +
-                    std::to_string(address));
-            }
-            bus.addresses.push_back(address);
+                path + ".addresses[" +
+                std::to_string(addressIndex) + "]";
+            bus.addresses.push_back(
+                CheckedInt(
+                    RequireInteger(
+                        addresses[addressIndex],
+                        addressPath),
+                    0,
+                    63,
+                    addressPath));
         }
 
-        if (bus.enabled && bus.addresses.empty()) {
-            throw BusesConfigError(
-                path + " is enabled but has no polling addresses");
-        }
-
-        std::sort(bus.addresses.begin(), bus.addresses.end());
+        ValidateBus(
+            bus,
+            usedIds,
+            usedPorts,
+            path);
         result.buses.push_back(std::move(bus));
     }
 
@@ -554,37 +536,73 @@ BusesConfig ValidateAndConvert(const JsonValue& rootValue)
         [](const BusConfig& left, const BusConfig& right) {
             return left.id < right.id;
         });
+
     return result;
 }
 
 }  // namespace
 
+std::string_view BusProtocolName(BusProtocol protocol) noexcept
+{
+    switch (protocol) {
+    case BusProtocol::Mdv:
+        return "mdv";
+    case BusProtocol::ModbusRtu:
+        return "modbus_rtu";
+    }
+    return "unknown";
+}
+
+std::string_view BusParityName(BusParity parity) noexcept
+{
+    switch (parity) {
+    case BusParity::None:
+        return "none";
+    case BusParity::Even:
+        return "even";
+    case BusParity::Odd:
+        return "odd";
+    }
+    return "unknown";
+}
+
 BusesConfig ParseBusesConfig(std::string_view jsonText)
 {
-    return ValidateAndConvert(JsonParser(jsonText).Parse());
+    try {
+        return ValidateAndConvert(json::Parse(jsonText));
+    }
+    catch (const json::ParseError& error) {
+        throw BusesConfigError(error.what());
+    }
 }
 
-BusesConfig LoadBusesConfig(const std::filesystem::path& path)
+BusesConfig LoadBusesConfig(
+    const std::filesystem::path& path)
 {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) {
-        throw BusesConfigError(
-            "cannot open buses configuration file: " + path.string());
+    try {
+        return ValidateAndConvert(json::ParseFile(path));
     }
-    std::ostringstream buffer;
-    buffer << input.rdbuf();
-    if (!input.good() && !input.eof()) {
-        throw BusesConfigError(
-            "cannot read buses configuration file: " + path.string());
+    catch (const json::ParseError& error) {
+        throw BusesConfigError(error.what());
     }
-    return ParseBusesConfig(buffer.str());
+    catch (const BusesConfigError&) {
+        throw;
+    }
+    catch (const std::exception& error) {
+        throw BusesConfigError(
+            "cannot load buses configuration '" +
+            path.string() + "': " + error.what());
+    }
 }
 
-std::string SerializeBusesConfig(const BusesConfig& config)
+std::string SerializeBusesConfig(
+    const BusesConfig& config)
 {
     BusesConfig normalized = config;
+
     if (normalized.version != 1) {
-        throw BusesConfigError("configuration version must be 1");
+        throw BusesConfigError(
+            "configuration version must be 1");
     }
     if (normalized.revision < 0) {
         throw BusesConfigError(
@@ -593,45 +611,14 @@ std::string SerializeBusesConfig(const BusesConfig& config)
 
     std::set<int> usedIds;
     std::set<std::string> usedPorts;
-    for (BusConfig& bus : normalized.buses) {
-        if (bus.id < 1 || bus.id > 999) {
-            throw BusesConfigError("bus id must be in range 1..999");
-        }
-        if (!IsValidDevicePath(bus.port)) {
-            throw BusesConfigError(
-                "bus " + std::to_string(bus.id) +
-                " has an invalid device port");
-        }
-        if (!usedIds.insert(bus.id).second) {
-            throw BusesConfigError(
-                "duplicate bus id " + std::to_string(bus.id));
-        }
-        if (!usedPorts.insert(bus.port).second) {
-            throw BusesConfigError(
-                "device port '" + bus.port +
-                "' is assigned to more than one bus");
-        }
-
-        std::sort(bus.addresses.begin(), bus.addresses.end());
-        const auto duplicate =
-            std::adjacent_find(bus.addresses.begin(), bus.addresses.end());
-        if (duplicate != bus.addresses.end()) {
-            throw BusesConfigError(
-                "bus " + std::to_string(bus.id) +
-                " contains duplicate address " + std::to_string(*duplicate));
-        }
-        for (const int address : bus.addresses) {
-            if (address < 0 || address > 63) {
-                throw BusesConfigError(
-                    "bus " + std::to_string(bus.id) +
-                    " address must be in range 0..63");
-            }
-        }
-        if (bus.enabled && bus.addresses.empty()) {
-            throw BusesConfigError(
-                "bus " + std::to_string(bus.id) +
-                " is enabled but has no polling addresses");
-        }
+    for (std::size_t index = 0;
+         index < normalized.buses.size();
+         ++index) {
+        ValidateBus(
+            normalized.buses[index],
+            usedIds,
+            usedPorts,
+            "root.buses[" + std::to_string(index) + "]");
     }
 
     std::sort(
@@ -642,10 +629,13 @@ std::string SerializeBusesConfig(const BusesConfig& config)
         });
 
     std::ostringstream output;
-    output << "{\n"
-           << "  \"version\": 1,\n"
-           << "  \"revision\": " << normalized.revision << ",\n"
-           << "  \"buses\": [";
+    output
+        << "{\n"
+        << "  \"version\": 1,\n"
+        << "  \"revision\": "
+        << normalized.revision << ",\n"
+        << "  \"buses\": [";
+
     if (!normalized.buses.empty()) {
         output << '\n';
     }
@@ -653,13 +643,41 @@ std::string SerializeBusesConfig(const BusesConfig& config)
     for (std::size_t index = 0;
          index < normalized.buses.size();
          ++index) {
-        const BusConfig& bus = normalized.buses[index];
-        output << "    {\n"
-               << "      \"id\": " << bus.id << ",\n"
-               << "      \"enabled\": "
-               << (bus.enabled ? "true" : "false") << ",\n"
-               << "      \"port\": \"" << EscapeJson(bus.port) << "\",\n"
-               << "      \"addresses\": [";
+        const auto& bus = normalized.buses[index];
+
+        output
+            << "    {\n"
+            << "      \"id\": " << bus.id << ",\n"
+            << "      \"enabled\": "
+            << (bus.enabled ? "true" : "false")
+            << ",\n"
+            << "      \"protocol\": \""
+            << BusProtocolName(bus.protocol)
+            << "\",\n"
+            << "      \"port\": \""
+            << EscapeJson(bus.port)
+            << "\",\n";
+
+        if (bus.protocol == BusProtocol::ModbusRtu) {
+            const auto& modbus = *bus.modbus;
+            output
+                << "      \"modbus\": {\n"
+                << "        \"profileId\": \""
+                << EscapeJson(modbus.profileId)
+                << "\",\n"
+                << "        \"baudRate\": "
+                << modbus.baudRate << ",\n"
+                << "        \"dataBits\": "
+                << modbus.dataBits << ",\n"
+                << "        \"parity\": \""
+                << BusParityName(modbus.parity)
+                << "\",\n"
+                << "        \"stopBits\": "
+                << modbus.stopBits << "\n"
+                << "      },\n";
+        }
+
+        output << "      \"addresses\": [";
         for (std::size_t addressIndex = 0;
              addressIndex < bus.addresses.size();
              ++addressIndex) {
@@ -669,6 +687,7 @@ std::string SerializeBusesConfig(const BusesConfig& config)
             output << bus.addresses[addressIndex];
         }
         output << "]\n    }";
+
         if (index + 1U != normalized.buses.size()) {
             output << ',';
         }

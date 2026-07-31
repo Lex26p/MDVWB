@@ -139,7 +139,9 @@ add_library(mdvwb_buses_config STATIC
     ${MDVWB_MANAGER_DIR}/mdv_buses_config.h
 )
 target_compile_features(mdvwb_buses_config PUBLIC cxx_std_20)
-target_include_directories(mdvwb_buses_config PUBLIC ${MDVWB_MANAGER_DIR})
+target_include_directories(mdvwb_buses_config
+    PUBLIC ${MDVWB_MANAGER_DIR} ${MDVWB_COMMON_DIR})
+target_link_libraries(mdvwb_buses_config PUBLIC mdvwb_json)
 
 add_library(mdvwb_dashboard_config STATIC
     ${MDVWB_MANAGER_DIR}/mdv_dashboard_config.cpp
@@ -300,6 +302,11 @@ add_executable(mdvwb_buses_config_test
 )
 target_link_libraries(mdvwb_buses_config_test PRIVATE mdvwb_buses_config)
 
+add_executable(mdvwb_modbus_buses_config_test
+    ${MDVWB_MANAGER_TEST_DIR}/mdvwb_modbus_buses_config_test.cpp
+)
+target_link_libraries(mdvwb_modbus_buses_config_test PRIVATE mdvwb_buses_config)
+
 add_executable(mdvwb_dashboard_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_dashboard_config_test.cpp
 )
@@ -410,6 +417,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_scheduler
     mdvwb-scheduler
     mdvwb_buses_config_test
+    mdvwb_modbus_buses_config_test
     mdvwb_dashboard_config_test
     mdvwb_schedules_config_test
     mdvwb_dashboard_upload_test
@@ -456,6 +464,7 @@ add_test(NAME mdvwb_modbus_scan_execute_test COMMAND mdvwb_modbus_scan_execute_t
 add_test(NAME mdvwb_modbus_vrf_reference_test COMMAND mdvwb_modbus_vrf_reference_test)
 add_test(NAME mdvwb_modbus_vrf_profile_test COMMAND mdvwb_modbus_vrf_profile_test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
+add_test(NAME mdvwb_modbus_buses_config_test COMMAND mdvwb_modbus_buses_config_test)
 add_test(NAME mdvwb_dashboard_config_test COMMAND mdvwb_dashboard_config_test)
 add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)
 add_test(NAME mdvwb_dashboard_upload_test COMMAND mdvwb_dashboard_upload_test)
