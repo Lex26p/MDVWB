@@ -724,11 +724,10 @@ void RejectUnknownFields(
                 std::string(path) + ".registerStride"),
             std::string(path) + ".registerStride");
 
-        if (result.firstLogicalAddress < logicalMin ||
-            result.firstLogicalAddress > logicalMax) {
+        if (result.firstLogicalAddress != logicalMin) {
             Fail(
                 std::string(path) +
-                ".firstLogicalAddress must be inside logicalMin..logicalMax");
+                ".firstLogicalAddress must equal logicalMin in schema v1");
         }
 
         const auto distance =

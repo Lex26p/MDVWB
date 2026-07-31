@@ -8,9 +8,9 @@
 
 ## Current stage
 
-**Milestone 4 complete after successful build/CTest: semantic value conversion.**
+**Milestone 5 complete after successful build/CTest: logical address resolver.**
 
-Modbus RTU framing/serial transport plus the schema-v1 profile parser, validator and directory catalog are implemented. A production equipment profile and live register-driven Modbus device driver are still **not implemented**.
+Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion and the logical-address resolver are implemented. A production equipment profile and live register-driven Modbus device driver are still **not implemented**.
 
 The existing MDV driver remains behind the protocol-independent boundary. Modbus now has reusable RTU transport primitives and a deterministic data-driven profile loading boundary.
 
@@ -18,7 +18,7 @@ The existing MDV driver remains behind the protocol-independent boundary. Modbus
 
 ```text
 Documentation / design     PREPARED
-Runtime implementation     MILESTONE 4
+Runtime implementation     MILESTONE 5
 Hardware validation        NOT STARTED
 Production release         NOT STARTED
 ```
@@ -52,7 +52,7 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] Numeric scaling and inverse write conversion
 - [x] Enum mapping
 - [x] Capabilities
-- [ ] Logical address resolver
+- [x] Logical address resolver
 - [ ] Scan of logical addresses `1..63`
 - [ ] First production Modbus equipment profile
 - [ ] Manager/bus configuration integration
@@ -233,7 +233,7 @@ At this status point:
 
 ## Verification status
 
-Milestones 1 through 3 were accepted only after local build and full CTest verification before their commits.
+Milestones 1 through 5 were accepted only after local build and full CTest verification before their commits.
 
 Profile-loader tests cover valid schema-v1 profiles, all three current addressing declarations, transport/register/probe validation, numeric and enum declaration validation, file loading, isolated invalid files, deterministic diagnostics and duplicate-ID rejection.
 
@@ -300,6 +300,24 @@ Logical address resolution and register-offset application are intentionally sti
 
 No production equipment profile or live Modbus driver is included yet.
 
+## Logical address resolver implemented
+
+Milestone 5 now provides:
+
+- strict rejection of invalid MDVWB logical addresses `0` and `64+`;
+- profile-range handling where valid `1..63` candidates outside the selected profile range are reported as unsupported rather than fabricated;
+- `direct_slave` resolution where logical address becomes Modbus Slave ID;
+- `fixed_slave_stride` resolution where one Slave ID is combined with a deterministic non-negative register stride;
+- schema-v1 validation that `firstLogicalAddress == logicalMin`, avoiding ambiguous negative register offsets;
+- `explicit` per-logical-address Slave ID and register-offset resolution;
+- deterministic handling of missing explicit mappings as unsupported candidates;
+- effective register calculation `base address + registerOffset`;
+- 16-bit effective-register overflow rejection before any bus transaction.
+
+The resolver returns only physical addressing information. It does not send traffic, scan the bus or select configured devices.
+
+No production equipment profile or live Modbus driver is included yet.
+
 ## Open design items
 
 These items are not yet final and should not be treated as implemented facts:
@@ -361,11 +379,11 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-Begin **Milestone 5: logical address resolver** from `ROADMAP.md`.
+Begin **Milestone 6: profile-driven scan `1..63`** from `ROADMAP.md`.
 
-The next task should resolve MDVWB logical addresses `1..63` into Modbus Slave ID plus effective register locations for `direct_slave`, `fixed_slave_stride` and `explicit` profile addressing, with deterministic overflow/range checks.
+The next task should iterate every logical candidate `1..63`, use the selected profile's read-only probe plus the common resolver, perform only safe Modbus reads, and report deterministic found/not-found/unsupported outcomes.
 
-It must still avoid scan orchestration, production equipment mappings, manager/web configuration and live hardware control.
+It must still avoid production equipment mappings, manager/web configuration and normal polling/live control.
 
 ## Status update rules
 

@@ -536,6 +536,20 @@ void TestCapabilitiesRequirePoints()
 }
 
 
+
+void TestFixedStrideAnchorValidation()
+{
+    RequireProfileError(
+        [] {
+            const auto text = ReplaceOnce(
+                std::string(kValidProfile),
+                R"json("firstLogicalAddress": 1)json",
+                R"json("firstLogicalAddress": 2)json");
+            static_cast<void>(mdv::modbus::ParseProfile(text));
+        },
+        "must equal logicalMin");
+}
+
 void TestRawTypeValidation()
 {
     RequireProfileError(
@@ -803,6 +817,7 @@ int main()
         TestSchemaAndIdentityValidation();
         TestTransportValidation();
         TestAddressingValidation();
+        TestFixedStrideAnchorValidation();
         TestProbeAndRegisterValidation();
         TestNumericValidation();
         TestEnumValidation();

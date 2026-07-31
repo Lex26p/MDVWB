@@ -107,6 +107,8 @@ add_library(mdvwb_modbus_profile STATIC
     ${MDVWB_DRIVER_DIR}/modbus_value.h
     ${MDVWB_DRIVER_DIR}/modbus_semantic.cpp
     ${MDVWB_DRIVER_DIR}/modbus_semantic.h
+    ${MDVWB_DRIVER_DIR}/modbus_resolver.cpp
+    ${MDVWB_DRIVER_DIR}/modbus_resolver.h
 )
 target_compile_features(mdvwb_modbus_profile PUBLIC cxx_std_20)
 target_include_directories(mdvwb_modbus_profile
@@ -253,6 +255,11 @@ add_executable(mdvwb_modbus_semantic_test
 )
 target_link_libraries(mdvwb_modbus_semantic_test PRIVATE mdvwb_modbus_profile)
 
+add_executable(mdvwb_modbus_resolver_test
+    ${MDVWB_DRIVER_TEST_DIR}/modbus_resolver_test.cpp
+)
+target_link_libraries(mdvwb_modbus_resolver_test PRIVATE mdvwb_modbus_profile)
+
 add_executable(mdvwb_buses_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_buses_config_test.cpp
 )
@@ -350,6 +357,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_modbus_profile_test
     mdvwb_modbus_value_test
     mdvwb_modbus_semantic_test
+    mdvwb_modbus_resolver_test
     mdvwb_buses_config
     mdvwb_dashboard_config
     mdvwb_schedules_config
@@ -402,6 +410,7 @@ add_test(NAME mdvwb_modbus_rtu_serial_test COMMAND mdvwb_modbus_rtu_serial_test)
 add_test(NAME mdvwb_modbus_profile_test COMMAND mdvwb_modbus_profile_test)
 add_test(NAME mdvwb_modbus_value_test COMMAND mdvwb_modbus_value_test)
 add_test(NAME mdvwb_modbus_semantic_test COMMAND mdvwb_modbus_semantic_test)
+add_test(NAME mdvwb_modbus_resolver_test COMMAND mdvwb_modbus_resolver_test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
 add_test(NAME mdvwb_dashboard_config_test COMMAND mdvwb_dashboard_config_test)
 add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)

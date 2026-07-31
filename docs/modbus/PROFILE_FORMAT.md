@@ -190,7 +190,7 @@ The profile provides defaults. The final decision on which fields a bus may over
 
 ## 8. Common physical address resolver
 
-The common engine should resolve a logical MDVWB address into:
+The common engine resolves a logical MDVWB address into:
 
 ```text
 slaveId
@@ -204,6 +204,16 @@ effective register = point address + registerOffset
 ```
 
 This simple model covers the two main equipment types already identified.
+
+Milestone 5 implements this resolver. Invalid MDVWB addresses outside `1..63` are errors. A valid `1..63` candidate that is outside the profile's declared logical range is treated as unsupported, not remapped.
+
+For effective point/probe locations the resolver checks:
+
+```text
+base register + registerOffset <= 65535
+```
+
+and rejects overflow before any Modbus request is built.
 
 ## 9. Addressing type: direct Slave ID
 
@@ -272,6 +282,14 @@ registerOffset =
 
 The main engine performs the generic formula. The number `91` belongs only to the profile.
 
+Schema v1 uses an unsigned, non-negative `registerOffset`. Therefore the implemented validator requires:
+
+```text
+firstLogicalAddress == logicalMin
+```
+
+This keeps the stride formula deterministic and avoids pretending that negative register offsets somehow fit into a `uint16` because C++ was feeling adventurous.
+
 ## 11. Addressing type: explicit map
 
 Some equipment may not have a useful arithmetic relationship between logical address, Slave ID and register block.
@@ -306,7 +324,7 @@ Conceptual example:
 
 For scan purposes an explicit profile should provide mappings for every logical candidate that is valid for that equipment family.
 
-If a logical candidate is intentionally impossible, the profile may mark it unsupported rather than causing a blind Modbus request.
+In the implemented schema-v1 resolver, a valid `1..63` candidate with no explicit device entry is reported as unsupported and causes no fabricated physical location. Milestone 6 will use that result to skip bus traffic for unsupported candidates.
 
 ## 12. Per-device point overrides
 
@@ -1184,7 +1202,9 @@ Boolean profile points may also be used for Power, Blinds and Blocked when the r
 
 Numeric `rawType` currently supports `uint16` and `int16`. Numeric conversion applies scale/offset on reads and validates min/max/step plus declared rounding before writes.
 
-The semantic bridge updates `DriverDeviceState` and converts `DriverCommandValue` into a profile base write location plus raw 16-bit value. Logical-address register offsets are not applied until Milestone 5.
+The semantic bridge updates `DriverDeviceState` and converts `DriverCommandValue` into a profile base write location plus raw 16-bit value.
+
+Milestone 5 now resolves that base location for a logical MDVWB address using the profile's `direct_slave`, `fixed_slave_stride` or `explicit` addressing declaration. The resolver produces the physical Slave ID and effective zero-based PDU register address, with range and overflow checks.
 
 The catalog still does not choose an installation path, integrate profiles into bus configuration, scan devices or communicate with live equipment. Those remain later milestones.
 
