@@ -13,6 +13,7 @@ namespace mdvwb {
 struct ServiceSyncPaths {
     std::filesystem::path defaultDirectory = "/etc/default";
     std::filesystem::path environmentTemplate = "/usr/local/lib/mdvwb/mdvwb.env";
+    std::filesystem::path modbusProfileDirectory = "/usr/local/lib/mdvwb/modbus-profiles";
     std::string systemctlProgram = "systemctl";
 };
 
@@ -72,6 +73,14 @@ void ExecuteBusServiceCommand(
 void WriteTextFileAtomically(const std::filesystem::path& path, std::string_view content);
 
 ServiceSyncPaths ServiceSyncPathsFromEnvironment();
+
+// Performs the profile/catalog validation required before manager-generated
+// runtime configuration can be considered safe. Pure MDV configurations do
+// not require a Modbus profile directory and remain backward-compatible.
+void ValidateBusRuntimeConfiguration(
+    const BusesConfig& config,
+    const ServiceSyncPaths& paths);
+
 ServiceSyncPlan BuildServiceSyncPlan(const BusesConfig& config, const ServiceSyncPaths& paths);
 void PrintServiceSyncPlan(const ServiceSyncPlan& plan, std::ostream& output);
 void ApplyServiceSyncPlan(

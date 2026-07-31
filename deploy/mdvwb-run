@@ -28,6 +28,7 @@ fi
 : "${MDVWB_ADDRESSES:?Set MDVWB_ADDRESSES in $CONFIG_FILE}"
 : "${MDVWB_BUS:?Set MDVWB_BUS in $CONFIG_FILE}"
 
+MDVWB_PROTOCOL=${MDVWB_PROTOCOL:-mdv}
 MDVWB_MASTER_ID=${MDVWB_MASTER_ID:-0}
 MDVWB_PERIOD_MS=${MDVWB_PERIOD_MS:-150}
 MDVWB_RESPONSE_TIMEOUT_MS=${MDVWB_RESPONSE_TIMEOUT_MS:-130}
@@ -37,6 +38,23 @@ MDVWB_MQTT_KEEPALIVE=${MDVWB_MQTT_KEEPALIVE:-60}
 MDVWB_MQTT_RECONNECT=${MDVWB_MQTT_RECONNECT:-1}
 MDVWB_MQTT_RECONNECT_MAX=${MDVWB_MQTT_RECONNECT_MAX:-10}
 MDVWB_PUBLISH_POLL_ADDRESS=${MDVWB_PUBLISH_POLL_ADDRESS:-0}
+
+case "$MDVWB_PROTOCOL" in
+    mdv)
+        ;;
+    modbus_rtu)
+        : "${MDVWB_MODBUS_PROFILE:?Set MDVWB_MODBUS_PROFILE in $CONFIG_FILE}"
+        : "${MDVWB_MODBUS_PROFILE_DIR:?Set MDVWB_MODBUS_PROFILE_DIR in $CONFIG_FILE}"
+        : "${MDVWB_MODBUS_BAUD_RATE:?Set MDVWB_MODBUS_BAUD_RATE in $CONFIG_FILE}"
+        : "${MDVWB_MODBUS_DATA_BITS:?Set MDVWB_MODBUS_DATA_BITS in $CONFIG_FILE}"
+        : "${MDVWB_MODBUS_PARITY:?Set MDVWB_MODBUS_PARITY in $CONFIG_FILE}"
+        : "${MDVWB_MODBUS_STOP_BITS:?Set MDVWB_MODBUS_STOP_BITS in $CONFIG_FILE}"
+        ;;
+    *)
+        echo "Unsupported MDVWB_PROTOCOL '$MDVWB_PROTOCOL' in $CONFIG_FILE" >&2
+        exit 2
+        ;;
+esac
 
 if [ "$MODE" = "offline" ]; then
     if [ ! -x "$OFFLINE_BINARY" ]; then
@@ -53,6 +71,15 @@ if [ "$MODE" = "offline" ]; then
         --mqtt-reconnect-max "$MDVWB_MQTT_RECONNECT_MAX"
 else
     : "${MDVWB_PORT:?Set MDVWB_PORT in $CONFIG_FILE}"
+
+    if [ "$MDVWB_PROTOCOL" = "modbus_rtu" ]; then
+        # Milestone 8 deliberately stops before live Modbus polling/MQTT.
+        # Refuse to fall through to the legacy MDV wire protocol: sending C0
+        # frames to a Modbus RTU bus would be an unsafe compatibility failure.
+        echo "Modbus RTU runtime driver is not enabled yet; configuration/profile validation succeeded but no serial traffic was sent." >&2
+        exit 4
+    fi
+
     if [ ! -x "$BINARY" ]; then
         echo "MDVWB executable is missing or not executable: $BINARY" >&2
         exit 3

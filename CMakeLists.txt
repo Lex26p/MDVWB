@@ -182,7 +182,8 @@ add_library(mdvwb_service_sync STATIC
 )
 target_compile_features(mdvwb_service_sync PUBLIC cxx_std_20)
 target_include_directories(mdvwb_service_sync PUBLIC ${MDVWB_MANAGER_DIR})
-target_link_libraries(mdvwb_service_sync PUBLIC mdvwb_buses_config)
+target_link_libraries(mdvwb_service_sync
+    PUBLIC mdvwb_buses_config mdvwb_modbus_bus_config)
 
 add_library(mdvwb_discovery_runner STATIC
     ${MDVWB_MANAGER_DIR}/mdvwb_discovery_runner.cpp
@@ -350,6 +351,13 @@ add_executable(mdvwb_service_sync_test
 )
 target_link_libraries(mdvwb_service_sync_test PRIVATE mdvwb_service_sync)
 
+add_executable(mdvwb_modbus_service_sync_test
+    ${MDVWB_MANAGER_TEST_DIR}/mdvwb_modbus_service_sync_test.cpp
+)
+target_link_libraries(mdvwb_modbus_service_sync_test PRIVATE mdvwb_service_sync)
+target_compile_definitions(mdvwb_modbus_service_sync_test
+    PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
 add_executable(mdvwb_manager_mqtt_test
     ${MDVWB_MANAGER_TEST_DIR}/mdvwb_manager_mqtt_test.cpp
 )
@@ -443,6 +451,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_dashboard_upload_test
     mdvwb_manager_cli_test
     mdvwb_service_sync_test
+    mdvwb_modbus_service_sync_test
     mdvwb_manager_mqtt_test
     mdvwb_manager_revision_test
     mdvwb_dashboard_concurrency_test
@@ -491,6 +500,7 @@ add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)
 add_test(NAME mdvwb_dashboard_upload_test COMMAND mdvwb_dashboard_upload_test)
 add_test(NAME mdvwb_manager_cli_test COMMAND mdvwb_manager_cli_test)
 add_test(NAME mdvwb_service_sync_test COMMAND mdvwb_service_sync_test)
+add_test(NAME mdvwb_modbus_service_sync_test COMMAND mdvwb_modbus_service_sync_test)
 add_test(NAME mdvwb_manager_mqtt_test COMMAND mdvwb_manager_mqtt_test)
 add_test(NAME mdvwb_manager_revision_test COMMAND mdvwb_manager_revision_test)
 add_test(NAME mdvwb_dashboard_concurrency_test COMMAND mdvwb_dashboard_concurrency_test)
@@ -506,3 +516,6 @@ add_test(NAME mdvwb_mqtt_command_delivery_test COMMAND mdvwb_mqtt_command_delive
 include(GNUInstallDirs)
 install(TARGETS MDVWB mdvwb-offline mdvwb-manager mdvwb-scheduler
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(DIRECTORY profiles/modbus/
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/mdvwb/modbus-profiles
+    FILES_MATCHING PATTERN "*.json")

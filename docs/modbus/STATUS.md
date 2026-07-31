@@ -8,9 +8,9 @@
 
 ## Current stage
 
-**Milestone 7 complete after successful build/CTest: first production Modbus equipment profile.**
+**Milestone 8 complete after successful build/CTest: Modbus bus configuration and managed runtime handoff.**
 
-Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion, logical-address resolution, profile-driven scan, and the first production equipment profile are implemented. A live register-driven Modbus device driver and bus configuration integration are still **not implemented**.
+Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion, logical-address resolution, profile-driven scan, the first production equipment profile, and protocol-aware bus/service configuration are implemented. A live register-driven Modbus device driver and Modbus MQTT state/control loop are still **not implemented**.
 
 The existing MDV driver remains behind the protocol-independent boundary. Modbus now has reusable RTU transport primitives and a deterministic data-driven profile loading boundary.
 
@@ -18,7 +18,7 @@ The existing MDV driver remains behind the protocol-independent boundary. Modbus
 
 ```text
 Documentation / design     PREPARED
-Runtime implementation     MILESTONE 7
+Runtime implementation     MILESTONE 8
 Hardware validation        PARTIAL (profile facts only)
 Production release         NOT STARTED
 ```
@@ -55,7 +55,7 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] Logical address resolver
 - [x] Scan of logical addresses `1..63`
 - [x] First production Modbus equipment profile
-- [ ] Manager/bus configuration integration
+- [x] Manager/bus configuration integration
 - [ ] MQTT integration
 - [ ] Web configuration UI
 - [ ] Real hardware validation
@@ -233,7 +233,7 @@ At this status point:
 
 ## Verification status
 
-Milestones 1 through 7 were accepted only after local build and full CTest verification before their commits.
+Milestones 1 through 8 were accepted only after local build and full CTest verification before their commits.
 
 Profile-loader tests cover valid schema-v1 profiles, all three current addressing declarations, transport/register/probe validation, numeric and enum declaration validation, file loading, isolated invalid files, deterministic diagnostics and duplicate-ID rejection.
 
@@ -367,7 +367,24 @@ The current logical identity follows the controller's sorted `Y` slot. A topolog
 
 Milestone 7 tests load the production JSON, verify literal addresses and stride resolution, reject invalid probe presence declarations, and verify the chosen `0 -> NotFound`, non-zero -> `Found` scan behavior through the common transaction boundary.
 
-No manager/bus configuration integration or normal Modbus polling/control driver is included yet.
+No normal Modbus polling/control driver is included yet.
+
+## Protocol-aware bus/service configuration implemented
+
+Milestone 8 now provides:
+
+- backward-compatible `buses.json` parsing where an omitted `protocol` still means `mdv`;
+- explicit `protocol = modbus_rtu` buses with `profileId`, baud rate, data bits, parity and stop bits;
+- the stricter Modbus logical-address range `1..63` while legacy MDV retains `0..63`;
+- profile-catalog validation before a Modbus service plan is generated, including exact transport compatibility and profile-supported logical addresses;
+- manager-generated per-bus environment fields for protocol, selected profile, profile directory and Modbus serial settings;
+- automatic clearing of stale Modbus environment fields when a bus is MDV;
+- an install rule for shipped JSON profiles under the MDVWB runtime support directory;
+- a deployment-template update carrying the new protocol/runtime fields.
+
+The current `mdvwb-run` helper deliberately refuses `protocol=modbus_rtu` before opening the serial port because the live Modbus polling/MQTT worker is not yet implemented. This guard is intentional: a configured Modbus port must never fall through into the legacy MDV C0/C3 wire protocol. `--publish-offline` remains protocol-independent.
+
+This means Milestone 8 completes the configuration, validation and service handoff boundary without pretending that Milestone 9's live Modbus MQTT driver already exists.
 
 ## Open design items
 
@@ -429,11 +446,11 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-Begin **Milestone 8: bus configuration integration** from `ROADMAP.md`.
+Begin **Milestone 9: MQTT/live Modbus driver integration** from `ROADMAP.md`.
 
-The next task should extend the existing bus configuration/manager boundary so a bus can explicitly select `protocol = modbus`, serial settings and `profileId = vrf_add_controller` without changing the meaning of existing MDV configurations.
+The next task should implement the protocol-specific Modbus `IDeviceDriver` runtime behind the already protocol-independent MQTT boundary, consume the profile/service settings prepared by Milestone 8, publish only confirmed semantic values, and route supported commands through profile-driven Modbus writes.
 
-It must still keep Modbus-specific register knowledge inside the profile layer and must not enable the deferred Mode/FanSpeed/SetTemperature/RoomTemperature capabilities merely because the bus can now select the profile.
+The first production profile currently enables only Power and AlarmCode. Mode, FanSpeed, SetTemperature and RoomTemperature must remain disabled until their hardware behavior/conversion is verified.
 
 ## Status update rules
 

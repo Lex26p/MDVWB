@@ -1,5 +1,8 @@
 #include "mdvwb_service_sync.h"
 
+#include "mdv_modbus_bus_config.h"
+#include "modbus_profile.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
@@ -97,14 +100,65 @@ std::string ReplaceEnvironmentValue(
     return output.str();
 }
 
-std::string RenderBusEnvironment(const std::string& environmentTemplate, const BusConfig& bus) {
+std::string RenderBusEnvironment(
+    const std::string& environmentTemplate,
+    const BusConfig& bus,
+    const ServiceSyncPaths& paths) {
     std::string result(environmentTemplate);
     if (!result.empty() && result.back() != '\n') {
         result.push_back('\n');
     }
+
     result = ReplaceEnvironmentValue(result, "MDVWB_BUS", std::to_string(bus.id));
     result = ReplaceEnvironmentValue(result, "MDVWB_PORT", bus.port);
     result = ReplaceEnvironmentValue(result, "MDVWB_ADDRESSES", JoinAddresses(bus.addresses));
+    result = ReplaceEnvironmentValue(
+        result,
+        "MDVWB_PROTOCOL",
+        BusProtocolName(bus.protocol));
+
+    if (bus.protocol == BusProtocol::ModbusRtu) {
+        if (!bus.modbus.has_value()) {
+            throw BusesConfigError(
+                "bus " + std::to_string(bus.id) +
+                ": protocol modbus_rtu is missing Modbus settings");
+        }
+        const ModbusBusSettings& settings = *bus.modbus;
+        result = ReplaceEnvironmentValue(
+            result,
+            "MDVWB_MODBUS_PROFILE",
+            settings.profileId);
+        result = ReplaceEnvironmentValue(
+            result,
+            "MDVWB_MODBUS_PROFILE_DIR",
+            paths.modbusProfileDirectory.string());
+        result = ReplaceEnvironmentValue(
+            result,
+            "MDVWB_MODBUS_BAUD_RATE",
+            std::to_string(settings.baudRate));
+        result = ReplaceEnvironmentValue(
+            result,
+            "MDVWB_MODBUS_DATA_BITS",
+            std::to_string(settings.dataBits));
+        result = ReplaceEnvironmentValue(
+            result,
+            "MDVWB_MODBUS_PARITY",
+            BusParityName(settings.parity));
+        result = ReplaceEnvironmentValue(
+            result,
+            "MDVWB_MODBUS_STOP_BITS",
+            std::to_string(settings.stopBits));
+    } else {
+        // A common template may already contain Modbus fields. Clear them for
+        // MDV so switching a bus back to MDV cannot leave stale runtime data.
+        result = ReplaceEnvironmentValue(result, "MDVWB_MODBUS_PROFILE", "");
+        result = ReplaceEnvironmentValue(result, "MDVWB_MODBUS_PROFILE_DIR", "");
+        result = ReplaceEnvironmentValue(result, "MDVWB_MODBUS_BAUD_RATE", "");
+        result = ReplaceEnvironmentValue(result, "MDVWB_MODBUS_DATA_BITS", "");
+        result = ReplaceEnvironmentValue(result, "MDVWB_MODBUS_PARITY", "");
+        result = ReplaceEnvironmentValue(result, "MDVWB_MODBUS_STOP_BITS", "");
+    }
+
     return std::string(ManagedMarker) + "\n" + result;
 }
 
@@ -234,6 +288,15 @@ int RunSystemctlCode(
     return runner.Run(command);
 }
 
+bool HasModbusBus(const BusesConfig& config) noexcept {
+    return std::any_of(
+        config.buses.begin(),
+        config.buses.end(),
+        [](const BusConfig& bus) {
+            return bus.protocol == BusProtocol::ModbusRtu;
+        });
+}
+
 }  // namespace
 
 void WriteTextFileAtomically(const std::filesystem::path& path, std::string_view content) {
@@ -248,10 +311,25 @@ ServiceSyncPaths ServiceSyncPathsFromEnvironment() {
     if (const char* value = std::getenv("MDVWB_ENV_TEMPLATE"); value != nullptr && value[0] != '\0') {
         paths.environmentTemplate = value;
     }
+    if (const char* value = std::getenv("MDVWB_MODBUS_PROFILE_DIR"); value != nullptr && value[0] != '\0') {
+        paths.modbusProfileDirectory = value;
+    }
     if (const char* value = std::getenv("MDVWB_SYSTEMCTL"); value != nullptr && value[0] != '\0') {
         paths.systemctlProgram = value;
     }
     return paths;
+}
+
+void ValidateBusRuntimeConfiguration(
+    const BusesConfig& config,
+    const ServiceSyncPaths& paths) {
+    if (!HasModbusBus(config)) {
+        return;
+    }
+
+    const auto catalog =
+        mdv::modbus::LoadProfileDirectory(paths.modbusProfileDirectory);
+    ValidateModbusBusProfiles(config, catalog);
 }
 
 std::string BusServiceName(int busId) {
@@ -295,6 +373,8 @@ BusServiceStatus QueryBusServiceStatus(
 }
 
 ServiceSyncPlan BuildServiceSyncPlan(const BusesConfig& config, const ServiceSyncPaths& paths) {
+    ValidateBusRuntimeConfiguration(config, paths);
+
     const std::string environmentTemplate = ReadFile(paths.environmentTemplate);
     const std::map<int, std::filesystem::path> managed = FindManagedConfigs(paths);
     std::set<int> configuredIds;
@@ -303,7 +383,7 @@ ServiceSyncPlan BuildServiceSyncPlan(const BusesConfig& config, const ServiceSyn
     for (const BusConfig& bus : config.buses) {
         configuredIds.insert(bus.id);
         const std::filesystem::path path = ConfigPath(paths, bus.id);
-        const std::string desired = RenderBusEnvironment(environmentTemplate, bus);
+        const std::string desired = RenderBusEnvironment(environmentTemplate, bus, paths);
         std::string current;
         const bool exists = TryReadFile(path, current);
         const bool changed = !exists || current != desired;
