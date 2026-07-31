@@ -100,6 +100,16 @@ target_compile_features(mdvwb_modbus_rtu PUBLIC cxx_std_20)
 target_include_directories(mdvwb_modbus_rtu PUBLIC ${MDVWB_DRIVER_DIR})
 target_link_libraries(mdvwb_modbus_rtu PUBLIC mdvwb_serial_port)
 
+add_library(mdvwb_modbus_profile STATIC
+    ${MDVWB_DRIVER_DIR}/modbus_profile.cpp
+    ${MDVWB_DRIVER_DIR}/modbus_profile.h
+)
+target_compile_features(mdvwb_modbus_profile PUBLIC cxx_std_20)
+target_include_directories(mdvwb_modbus_profile
+    PUBLIC ${MDVWB_DRIVER_DIR} ${MDVWB_COMMON_DIR})
+target_link_libraries(mdvwb_modbus_profile
+    PUBLIC mdvwb_json mdvwb_serial_port)
+
 add_executable(mdvwb-offline
     ${MDVWB_DRIVER_DIR}/mdv_offline.cpp
 )
@@ -224,6 +234,11 @@ add_executable(mdvwb_modbus_rtu_serial_test
 )
 target_link_libraries(mdvwb_modbus_rtu_serial_test PRIVATE mdvwb_modbus_rtu)
 
+add_executable(mdvwb_modbus_profile_test
+    ${MDVWB_DRIVER_TEST_DIR}/modbus_profile_test.cpp
+)
+target_link_libraries(mdvwb_modbus_profile_test PRIVATE mdvwb_modbus_profile)
+
 add_executable(mdvwb_buses_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_buses_config_test.cpp
 )
@@ -312,11 +327,13 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_mosquitto_transport
     mdvwb_serial_port
     mdvwb_modbus_rtu
+    mdvwb_modbus_profile
     mdvwb-offline
     mdvwb_mqtt_delivery_test
     mdvwb_driver_fairness_test
     mdvwb_modbus_rtu_test
     mdvwb_modbus_rtu_serial_test
+    mdvwb_modbus_profile_test
     mdvwb_buses_config
     mdvwb_dashboard_config
     mdvwb_schedules_config
@@ -366,6 +383,7 @@ add_test(NAME mdvwb_mqtt_delivery_test COMMAND mdvwb_mqtt_delivery_test)
 add_test(NAME mdvwb_driver_fairness_test COMMAND mdvwb_driver_fairness_test)
 add_test(NAME mdvwb_modbus_rtu_test COMMAND mdvwb_modbus_rtu_test)
 add_test(NAME mdvwb_modbus_rtu_serial_test COMMAND mdvwb_modbus_rtu_serial_test)
+add_test(NAME mdvwb_modbus_profile_test COMMAND mdvwb_modbus_profile_test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
 add_test(NAME mdvwb_dashboard_config_test COMMAND mdvwb_dashboard_config_test)
 add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)
