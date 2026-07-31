@@ -602,12 +602,14 @@ Do not implement this equipment by hardcoding those two registers in the common 
 
 Profiles should be able to declare the raw numeric representation when required.
 
-Initial candidates:
+Implemented schema-v1 values:
 
 ```text
 uint16
 int16
 ```
+
+`uint16` is the default when `rawType` is omitted.
 
 Future support may include:
 
@@ -1147,9 +1149,44 @@ limits.step
 writeConversion.rounding
 ```
 
-Parsing those declarations does **not** yet perform semantic raw-value conversion. That belongs to Milestone 4.
+Milestone 4 now performs scalar semantic conversion for those declarations.
 
-Likewise, the catalog does not yet choose an installation path, integrate profiles into bus configuration, scan devices or communicate with live equipment. Those remain later milestones.
+The implemented common semantic vocabulary is:
+
+```text
+Mode:
+cool
+heat
+dry
+fan
+auto
+
+FanSpeed:
+low
+medium
+high
+auto
+
+Power enum:
+off
+on
+
+Blinds enum:
+disabled
+enabled
+
+Blocked enum:
+unblocked
+blocked
+```
+
+Boolean profile points may also be used for Power, Blinds and Blocked when the raw device representation is exactly `0/1`.
+
+Numeric `rawType` currently supports `uint16` and `int16`. Numeric conversion applies scale/offset on reads and validates min/max/step plus declared rounding before writes.
+
+The semantic bridge updates `DriverDeviceState` and converts `DriverCommandValue` into a profile base write location plus raw 16-bit value. Logical-address register offsets are not applied until Milestone 5.
+
+The catalog still does not choose an installation path, integrate profiles into bus configuration, scan devices or communicate with live equipment. Those remain later milestones.
 
 `composite_number` is still intentionally not finalized in executable schema v1. The first real VRF profile will drive that extension rather than turning the profile format into a tiny programming language by accident.
 

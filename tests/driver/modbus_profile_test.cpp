@@ -562,6 +562,44 @@ void TestRawTypeValidation()
         "allowed only for number");
 }
 
+
+void TestSemanticPointVocabularyValidation()
+{
+    RequireProfileError(
+        [] {
+            const auto text = ReplaceOnce(
+                std::string(kValidProfile),
+                R"json("16": "heat")json",
+                R"json("16": "turbo")json");
+            static_cast<void>(mdv::modbus::ParseProfile(text));
+        },
+        "unsupported semantic value 'turbo'");
+
+    RequireProfileError(
+        [] {
+            const auto text = ReplaceOnce(
+                std::string(kValidProfile),
+                R"json("mode": {
+      "type": "enum")json",
+                R"json("mode": {
+      "type": "number")json");
+            static_cast<void>(mdv::modbus::ParseProfile(text));
+        },
+        "readMap/writeMap are allowed only for enum points");
+
+    RequireProfileError(
+        [] {
+            const auto text = ReplaceOnce(
+                std::string(kValidProfile),
+                R"json("roomTemperature": {
+      "type": "number")json",
+                R"json("roomTemperature": {
+      "type": "boolean")json");
+            static_cast<void>(mdv::modbus::ParseProfile(text));
+        },
+        "transform is allowed only for number points");
+}
+
 void TestFileLoading()
 {
     const auto path =
@@ -770,6 +808,7 @@ int main()
         TestEnumValidation();
         TestCapabilitiesRequirePoints();
         TestRawTypeValidation();
+        TestSemanticPointVocabularyValidation();
         TestFileLoading();
         TestProfileDirectoryLoadsValidFilesAndIsolatesInvalidFiles();
         TestDuplicateIdsRejectWholeDuplicateGroup();

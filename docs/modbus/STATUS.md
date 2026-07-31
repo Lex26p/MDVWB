@@ -8,7 +8,7 @@
 
 ## Current stage
 
-**Milestone 3 complete after successful build/CTest: profile loader and validation.**
+**Milestone 4 complete after successful build/CTest: semantic value conversion.**
 
 Modbus RTU framing/serial transport plus the schema-v1 profile parser, validator and directory catalog are implemented. A production equipment profile and live register-driven Modbus device driver are still **not implemented**.
 
@@ -18,7 +18,7 @@ The existing MDV driver remains behind the protocol-independent boundary. Modbus
 
 ```text
 Documentation / design     PREPARED
-Runtime implementation     MILESTONE 3
+Runtime implementation     MILESTONE 4
 Hardware validation        NOT STARTED
 Production release         NOT STARTED
 ```
@@ -49,9 +49,9 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] Modbus exception handling
 - [x] Profile loader
 - [x] Profile validation
-- [ ] Numeric scaling and inverse write conversion
-- [ ] Enum mapping
-- [ ] Capabilities
+- [x] Numeric scaling and inverse write conversion
+- [x] Enum mapping
+- [x] Capabilities
 - [ ] Logical address resolver
 - [ ] Scan of logical addresses `1..63`
 - [ ] First production Modbus equipment profile
@@ -279,6 +279,27 @@ No production profile is shipped yet, and no profile field is currently used to 
 
 The exact installed profile directory remains open until the packaging/configuration milestones.
 
+## Semantic value conversion implemented
+
+Milestone 4 now provides:
+
+- generic scalar conversion for boolean, enum and numeric profile points;
+- `uint16` and signed `int16` raw numeric representations;
+- numeric scale/offset and inverse conversion;
+- physical min/max/step validation before writes;
+- exact/nearest/floor/ceil write rounding;
+- canonical semantic Mode values (`cool`, `heat`, `dry`, `fan`, `auto`);
+- canonical semantic FanSpeed values (`low`, `medium`, `high`, `auto`);
+- binary semantic normalization for Power, Blinds and Blocked;
+- conversion of profile reads into the protocol-independent `DriverDeviceState`;
+- conversion of protocol-independent driver command values into profile-defined base register writes;
+- capability gating so disabled profile capabilities are not exposed through the semantic bridge;
+- rejection of unsupported semantic enum values and incompatible semantic point types during profile validation.
+
+Logical address resolution and register-offset application are intentionally still absent. The semantic write result contains the profile's base write location only; Milestone 5 will resolve it for logical addresses `1..63`.
+
+No production equipment profile or live Modbus driver is included yet.
+
 ## Open design items
 
 These items are not yet final and should not be treated as implemented facts:
@@ -340,11 +361,11 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-Begin **Milestone 4: semantic value conversion** from `ROADMAP.md`.
+Begin **Milestone 5: logical address resolver** from `ROADMAP.md`.
 
-The next task should turn validated profile declarations into generic raw-to-semantic and semantic-to-raw conversion helpers for boolean, enum and numeric values, including scale/offset, limits, step and exact/declared rounding behavior.
+The next task should resolve MDVWB logical addresses `1..63` into Modbus Slave ID plus effective register locations for `direct_slave`, `fixed_slave_stride` and `explicit` profile addressing, with deterministic overflow/range checks.
 
-It must still avoid production register mappings, manager/web configuration and live hardware control.
+It must still avoid scan orchestration, production equipment mappings, manager/web configuration and live hardware control.
 
 ## Status update rules
 

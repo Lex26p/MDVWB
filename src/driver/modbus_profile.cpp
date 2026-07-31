@@ -844,6 +844,100 @@ void RejectUnknownFields(
     return result;
 }
 
+[[nodiscard]] bool IsAllowedSemanticEnumValue(
+    std::string_view pointName,
+    std::string_view value) noexcept
+{
+    if (pointName == "mode") {
+        return
+            value == "cool" ||
+            value == "heat" ||
+            value == "dry" ||
+            value == "fan" ||
+            value == "auto";
+    }
+
+    if (pointName == "fanSpeed") {
+        return
+            value == "low" ||
+            value == "medium" ||
+            value == "high" ||
+            value == "auto";
+    }
+
+    if (pointName == "power") {
+        return value == "off" || value == "on";
+    }
+
+    if (pointName == "blinds") {
+        return value == "disabled" || value == "enabled";
+    }
+
+    if (pointName == "blocked") {
+        return value == "unblocked" || value == "blocked";
+    }
+
+    return false;
+}
+
+void ValidateSemanticPointDefinition(
+    std::string_view name,
+    const PointDefinition& point)
+{
+    const auto requireType = [&](PointType expected, std::string_view typeName) {
+        if (point.type != expected) {
+            Fail(
+                "root.points." + std::string(name) +
+                " must use type '" + std::string(typeName) + "'");
+        }
+    };
+
+    if (name == "mode" || name == "fanSpeed") {
+        requireType(PointType::Enum, "enum");
+    }
+    else if (
+        name == "setTemperature" ||
+        name == "roomTemperature" ||
+        name == "alarmCode") {
+        requireType(PointType::Number, "number");
+    }
+    else if (
+        name == "power" ||
+        name == "blinds" ||
+        name == "blocked") {
+        if (point.type != PointType::Boolean &&
+            point.type != PointType::Enum) {
+            Fail(
+                "root.points." + std::string(name) +
+                " must use type 'boolean' or 'enum'");
+        }
+    }
+
+    if (point.type != PointType::Enum) {
+        return;
+    }
+
+    for (const auto& [raw, semantic] : point.enumMappings.read) {
+        static_cast<void>(raw);
+        if (!IsAllowedSemanticEnumValue(name, semantic)) {
+            Fail(
+                "root.points." + std::string(name) +
+                ".readMap contains unsupported semantic value '" +
+                semantic + "'");
+        }
+    }
+
+    for (const auto& [semantic, raw] : point.enumMappings.write) {
+        static_cast<void>(raw);
+        if (!IsAllowedSemanticEnumValue(name, semantic)) {
+            Fail(
+                "root.points." + std::string(name) +
+                ".writeMap contains unsupported semantic value '" +
+                semantic + "'");
+        }
+    }
+}
+
 void ValidateCapabilityPoints(const ModbusProfile& profile)
 {
     const auto hasPoint = [&](std::string_view name) {
@@ -980,11 +1074,11 @@ void ValidateCapabilityPoints(const ModbusProfile& profile)
         if (!IsKnownPointName(name)) {
             Fail("root.points contains unsupported semantic point '" + name + "'");
         }
-        result.points.emplace(
-            name,
-            ParsePoint(
-                pointValue,
-                "root.points." + name));
+        auto point = ParsePoint(
+            pointValue,
+            "root.points." + name);
+        ValidateSemanticPointDefinition(name, point);
+        result.points.emplace(name, std::move(point));
     }
 
     ValidateCapabilityPoints(result);
