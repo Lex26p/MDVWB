@@ -8,7 +8,7 @@
 
 ## Current stage
 
-**Milestone 5 complete after successful build/CTest: logical address resolver.**
+**Milestone 6 complete after successful build/CTest: profile-driven scan `1..63`.**
 
 Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion and the logical-address resolver are implemented. A production equipment profile and live register-driven Modbus device driver are still **not implemented**.
 
@@ -18,7 +18,7 @@ The existing MDV driver remains behind the protocol-independent boundary. Modbus
 
 ```text
 Documentation / design     PREPARED
-Runtime implementation     MILESTONE 5
+Runtime implementation     MILESTONE 6
 Hardware validation        NOT STARTED
 Production release         NOT STARTED
 ```
@@ -53,7 +53,7 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] Enum mapping
 - [x] Capabilities
 - [x] Logical address resolver
-- [ ] Scan of logical addresses `1..63`
+- [x] Scan of logical addresses `1..63`
 - [ ] First production Modbus equipment profile
 - [ ] Manager/bus configuration integration
 - [ ] MQTT integration
@@ -233,7 +233,7 @@ At this status point:
 
 ## Verification status
 
-Milestones 1 through 5 were accepted only after local build and full CTest verification before their commits.
+Milestones 1 through 6 were accepted only after local build and full CTest verification before their commits.
 
 Profile-loader tests cover valid schema-v1 profiles, all three current addressing declarations, transport/register/probe validation, numeric and enum declaration validation, file loading, isolated invalid files, deterministic diagnostics and duplicate-ID rejection.
 
@@ -296,7 +296,7 @@ Milestone 4 now provides:
 - capability gating so disabled profile capabilities are not exposed through the semantic bridge;
 - rejection of unsupported semantic enum values and incompatible semantic point types during profile validation.
 
-Logical address resolution and register-offset application are intentionally still absent. The semantic write result contains the profile's base write location only; Milestone 5 will resolve it for logical addresses `1..63`.
+Semantic writes still return the profile's base write location; Milestone 5 already provides the common logical-address resolver that can apply the selected device's register offset before a future live write path is introduced.
 
 No production equipment profile or live Modbus driver is included yet.
 
@@ -315,6 +315,29 @@ Milestone 5 now provides:
 - 16-bit effective-register overflow rejection before any bus transaction.
 
 The resolver returns only physical addressing information. It does not send traffic, scan the bus or select configured devices.
+
+No production equipment profile or live Modbus driver is included yet.
+
+## Profile-driven scan implemented
+
+Milestone 6 now provides:
+
+- a deterministic scan plan containing every MDVWB logical candidate `1..63`;
+- profile resolver application for each candidate before any bus request;
+- unsupported logical candidates retained in the report without generating bus traffic;
+- read-only probe execution through the existing `ITransactionTransport` boundary;
+- FC03 holding-register probe requests built from the selected profile's resolved Slave ID, effective register and quantity;
+- `Found` only for a valid successful response matching the planned Slave ID, function and register count;
+- `NotFound` for timeout and Modbus exception probe outcomes;
+- `Unsupported` for profile-unsupported candidates and probe data spaces not yet supported by the RTU core;
+- `Error` for I/O failures, invalid requests, malformed/invalid responses and inconsistent successful transport results;
+- preservation of Modbus exception code and diagnostic text in scan results;
+- tests proving that unsupported candidates and unsupported probe data spaces generate no bus traffic;
+- a full direct-addressing execution test that performs exactly 63 read-only probes.
+
+The current RTU core implements FC03 and FC10 only. Therefore the scan executor currently performs live probes only when the profile probe uses `holding_register`. `input_register`, `coil` and `discrete_input` probes are reported as unsupported and generate no request until the corresponding standard read functions are added.
+
+The scan layer does not configure serial ports, select bus profiles, persist discovered devices or perform normal polling/control. Those remain later milestones.
 
 No production equipment profile or live Modbus driver is included yet.
 
@@ -379,11 +402,11 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-Begin **Milestone 6: profile-driven scan `1..63`** from `ROADMAP.md`.
+Begin **Milestone 7: first real Modbus equipment profile** from `ROADMAP.md`.
 
-The next task should iterate every logical candidate `1..63`, use the selected profile's read-only probe plus the common resolver, perform only safe Modbus reads, and report deterministic found/not-found/unsupported outcomes.
+The next task should return to the supplied VRF controller data-point table, promote only confirmed register/addressing behavior into a production profile, keep manufacturer references separate from zero-based PDU addresses, and add fixture tests for every enabled semantic capability.
 
-It must still avoid production equipment mappings, manager/web configuration and normal polling/live control.
+It must still avoid manager/web configuration and should not infer unresolved hardware behavior such as ambiguous register notation or composite half-degree temperature semantics.
 
 ## Status update rules
 
