@@ -246,17 +246,17 @@ export function computeFitScale(fit, naturalWidth, naturalHeight, viewportWidth,
   const height = Math.max(1, Number(naturalHeight) || 900);
   const availableWidth = Math.max(160, (Number(viewportWidth) || width) - 32);
   const availableHeight = Math.max(120, (Number(viewportHeight) || height) - 32);
+  const configuredScale = clampScale(defaultScale);
 
   switch (fit) {
     case "width":
-      return clampScale(availableWidth / width);
+      return clampScale((availableWidth / width) * configuredScale);
     case "actual":
-      return 1;
     case "custom":
-      return clampScale(defaultScale);
+      return configuredScale;
     case "contain":
     default:
-      return clampScale(Math.min(availableWidth / width, availableHeight / height));
+      return clampScale(Math.min(availableWidth / width, availableHeight / height) * configuredScale);
   }
 }
 

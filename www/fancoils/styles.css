@@ -105,13 +105,13 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .map-sizer { position: relative; min-width: 100%; min-height: 100%; }
 .map-canvas { position: absolute; transform-origin: top left; background: var(--surface); box-shadow: 0 8px 30px rgba(15, 23, 42, .12); }
 .map-background { display: block; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
-.map-background-hidden, .map-placeholder-hidden { display: none; }
 .map-placeholder { display: flex; position: absolute; inset: 0; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background-image: linear-gradient(45deg, color-mix(in srgb, var(--border), transparent 74%) 25%, transparent 25%), linear-gradient(-45deg, color-mix(in srgb, var(--border), transparent 74%) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, color-mix(in srgb, var(--border), transparent 74%) 75%), linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--border), transparent 74%) 75%); background-position: 0 0, 0 12px, 12px -12px, -12px 0; background-size: 24px 24px; color: var(--muted); text-align: center; }
 .map-placeholder svg { width: 42px; height: 42px; }
 .map-placeholder strong { color: var(--text); }
 .map-placeholder span { font-size: .82rem; }
+.map-background-hidden, .map-placeholder-hidden { display: none; }
 .marker-layer { position: absolute; inset: 0; pointer-events: none; }
-.fan-marker { position: absolute; z-index: 3; display: grid; width: 52px; height: 52px; place-items: center; padding: 0; transform: translate(-50%, -50%) scale(var(--marker-scale)) rotate(var(--marker-rotation)); transform-origin: center; border: 3px solid currentColor; border-radius: 50%; background: color-mix(in srgb, currentColor, var(--surface) 84%); box-shadow: var(--shadow-small); color: var(--muted); cursor: pointer; pointer-events: auto; }
+.fan-marker { position: absolute; z-index: 3; display: grid; width: 52px; height: 52px; place-items: center; padding: 0; transform: translate(-50%, -50%) scale(var(--marker-scale, 1)) rotate(var(--marker-rotation, 0deg)); transform-origin: center; border: 3px solid currentColor; border-radius: 50%; background: color-mix(in srgb, currentColor, var(--surface) 84%); box-shadow: var(--shadow-small); color: var(--muted); cursor: pointer; pointer-events: auto; }
 .marker-number { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 50%; background: var(--surface); color: currentColor; font-size: 1.08rem; font-variant-numeric: tabular-nums; font-weight: 900; letter-spacing: -.04em; line-height: 1; }
 .fan-marker-off { color: #738096; }
 .fan-marker-cooling { color: #2476d8; }
