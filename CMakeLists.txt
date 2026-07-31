@@ -72,6 +72,13 @@ if(MOSQUITTO_INCLUDE_DIR AND MOSQUITTO_LIBRARY)
     target_link_libraries(mdvwb_mosquitto_transport PRIVATE ${MOSQUITTO_LIBRARY})
 endif()
 
+add_library(mdvwb_modbus_rtu STATIC
+    ${MDVWB_DRIVER_DIR}/modbus_rtu.cpp
+    ${MDVWB_DRIVER_DIR}/modbus_rtu.h
+)
+target_compile_features(mdvwb_modbus_rtu PUBLIC cxx_std_20)
+target_include_directories(mdvwb_modbus_rtu PUBLIC ${MDVWB_DRIVER_DIR})
+
 add_executable(mdvwb-offline
     ${MDVWB_DRIVER_DIR}/mdv_offline.cpp
 )
@@ -179,6 +186,11 @@ add_executable(mdvwb_driver_fairness_test
 target_compile_features(mdvwb_driver_fairness_test PRIVATE cxx_std_20)
 target_include_directories(mdvwb_driver_fairness_test PRIVATE ${MDVWB_DRIVER_DIR})
 
+add_executable(mdvwb_modbus_rtu_test
+    ${MDVWB_DRIVER_TEST_DIR}/modbus_rtu_test.cpp
+)
+target_link_libraries(mdvwb_modbus_rtu_test PRIVATE mdvwb_modbus_rtu)
+
 add_executable(mdvwb_buses_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_buses_config_test.cpp
 )
@@ -263,9 +275,11 @@ target_link_libraries(mdvwb_mqtt_command_delivery_test
 set(MDVWB_PROJECT_TARGETS
     MDVWB
     mdvwb_mosquitto_transport
+    mdvwb_modbus_rtu
     mdvwb-offline
     mdvwb_mqtt_delivery_test
     mdvwb_driver_fairness_test
+    mdvwb_modbus_rtu_test
     mdvwb_buses_config
     mdvwb_dashboard_config
     mdvwb_schedules_config
@@ -312,6 +326,7 @@ add_test(NAME mdv_protocol_self_test COMMAND MDVWB --self-test)
 add_test(NAME mdvwb_offline_publisher_test COMMAND mdvwb-offline --self-test)
 add_test(NAME mdvwb_mqtt_delivery_test COMMAND mdvwb_mqtt_delivery_test)
 add_test(NAME mdvwb_driver_fairness_test COMMAND mdvwb_driver_fairness_test)
+add_test(NAME mdvwb_modbus_rtu_test COMMAND mdvwb_modbus_rtu_test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
 add_test(NAME mdvwb_dashboard_config_test COMMAND mdvwb_dashboard_config_test)
 add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)
