@@ -243,12 +243,24 @@ target_include_directories(mdvwb_service_sync PUBLIC ${MDVWB_MANAGER_DIR})
 target_link_libraries(mdvwb_service_sync
     PUBLIC mdvwb_buses_config mdvwb_modbus_bus_config)
 
+add_library(mdvwb_modbus_discovery STATIC
+    ${MDVWB_MANAGER_DIR}/mdv_modbus_discovery.cpp
+    ${MDVWB_MANAGER_DIR}/mdv_modbus_discovery.h
+)
+target_compile_features(mdvwb_modbus_discovery PUBLIC cxx_std_20)
+target_include_directories(mdvwb_modbus_discovery
+    PUBLIC ${MDVWB_MANAGER_DIR} ${MDVWB_DRIVER_DIR})
+target_link_libraries(mdvwb_modbus_discovery
+    PUBLIC mdvwb_modbus_scan mdvwb_modbus_rtu)
+
 add_library(mdvwb_discovery_runner STATIC
     ${MDVWB_MANAGER_DIR}/mdvwb_discovery_runner.cpp
     ${MDVWB_MANAGER_DIR}/mdvwb_discovery_runner.h
 )
 target_compile_features(mdvwb_discovery_runner PUBLIC cxx_std_20)
 target_include_directories(mdvwb_discovery_runner PUBLIC ${MDVWB_MANAGER_DIR})
+target_link_libraries(mdvwb_discovery_runner
+    PUBLIC mdvwb_modbus_discovery)
 
 add_library(mdvwb_manager_mqtt STATIC
     ${MDVWB_MANAGER_DIR}/mdvwb_manager_mqtt.cpp
@@ -478,6 +490,14 @@ add_executable(mdvwb_manager_transaction_test
 )
 target_link_libraries(mdvwb_manager_transaction_test PRIVATE mdvwb_manager_mqtt)
 
+add_executable(mdvwb_modbus_discovery_test
+    ${MDVWB_MANAGER_TEST_DIR}/mdvwb_modbus_discovery_test.cpp
+)
+target_link_libraries(mdvwb_modbus_discovery_test
+    PRIVATE mdvwb_modbus_discovery)
+target_compile_definitions(mdvwb_modbus_discovery_test
+    PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
 add_executable(mdvwb_discovery_runner_test
     ${MDVWB_MANAGER_TEST_DIR}/mdvwb_discovery_runner_test.cpp
 )
@@ -545,6 +565,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_schedules_config
     mdvwb_dashboard_upload
     mdvwb_service_sync
+    mdvwb_modbus_discovery
     mdvwb_discovery_runner
     mdvwb_manager_mqtt
     mdvwb_manager_cli
@@ -566,6 +587,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_manager_revision_test
     mdvwb_dashboard_concurrency_test
     mdvwb_manager_transaction_test
+    mdvwb_modbus_discovery_test
     mdvwb_discovery_runner_test
     mdvwb_discovery_async_test
     mdvwb_migration_test
@@ -620,6 +642,7 @@ add_test(NAME mdvwb_manager_mqtt_test COMMAND mdvwb_manager_mqtt_test)
 add_test(NAME mdvwb_manager_revision_test COMMAND mdvwb_manager_revision_test)
 add_test(NAME mdvwb_dashboard_concurrency_test COMMAND mdvwb_dashboard_concurrency_test)
 add_test(NAME mdvwb_manager_transaction_test COMMAND mdvwb_manager_transaction_test)
+add_test(NAME mdvwb_modbus_discovery_test COMMAND mdvwb_modbus_discovery_test)
 add_test(NAME mdvwb_discovery_runner_test COMMAND mdvwb_discovery_runner_test)
 add_test(NAME mdvwb_discovery_async_test COMMAND mdvwb_discovery_async_test)
 set_tests_properties(mdvwb_discovery_async_test PROPERTIES TIMEOUT 10)

@@ -1,6 +1,6 @@
 # Modbus implementation status
 
-> Last updated: 2026-08-01
+> Last updated: 2026-08-02
 >
 > This file records what has actually been completed or prepared for the Modbus work.
 >
@@ -8,9 +8,9 @@
 
 ## Current stage
 
-**Milestone 9 complete after successful build/CTest: live profile-driven Modbus runtime through the existing MQTT semantic boundary.**
+**Milestone 10 complete after successful build/CTest and web checks: capability-aware Modbus bus configuration and safe profile-driven discovery are available in the existing management UI.**
 
-Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion, logical-address resolution, profile-driven scan, the first production equipment profile, protocol-aware bus/service configuration, live polling, confirmed Power writes and MQTT state/control integration are implemented.
+Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion, logical-address resolution, the first production equipment profile, protocol-aware bus/service configuration, live polling, confirmed Power writes, MQTT integration, retained UI profile catalog, web bus editing and safe discovery of logical addresses `1..63` are implemented.
 
 The existing MDV runtime remains unchanged behind the same protocol-independent boundary. The per-bus systemd instance still owns exactly one process and one serial port; `mdvwb-run` now selects the MDV executable or the internal Modbus runtime from the managed protocol setting.
 
@@ -18,7 +18,7 @@ The existing MDV runtime remains unchanged behind the same protocol-independent 
 
 ```text
 Documentation / design     PREPARED
-Runtime implementation     MILESTONE 9
+Runtime implementation     MILESTONE 10
 Hardware validation        PARTIAL (profile facts only)
 Production release         NOT STARTED
 ```
@@ -57,7 +57,7 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] First production Modbus equipment profile
 - [x] Manager/bus configuration integration
 - [x] MQTT integration
-- [ ] Web configuration UI
+- [x] Web configuration UI
 - [ ] Real hardware validation
 - [x] Modbus runtime packaging/deployment handoff
 - [ ] Second independent profile proving architecture reuse
@@ -227,11 +227,27 @@ At this status point:
 - `mdvwb@N.service` still launches one `mdvwb-run` wrapper per physical bus;
 - the wrapper selects `/usr/local/bin/MDVWB` for MDV or the internal `/usr/local/lib/mdvwb/mdvwb-modbus` runtime for Modbus;
 - `mdvwb-offline` remains shared and protocol-independent;
-- the web UI has not yet been changed for Modbus capabilities/configuration.
+- the management web UI selects MDV or Modbus RTU, derives serial settings and capabilities from the selected profile, runs safe profile-driven discovery and copies confirmed found addresses into the configuration draft.
+
+## Web configuration and discovery implemented
+
+Milestone 10 now provides:
+
+- a deterministic, web-safe profile catalog published as retained MQTT state;
+- protocol selection between backward-compatible MDV and Modbus RTU;
+- profile selection without manufacturer-specific branches in JavaScript;
+- serial settings and capability summaries derived from profile metadata;
+- Modbus logical-address validation against both the common `1..63` range and the selected profile range;
+- discovery routing based on the manager-generated per-bus runtime environment;
+- safe read-only Modbus probes for all logical candidates `1..63`;
+- rejection of partial discovery results after factual transport/protocol errors;
+- an explicit UI action that copies confirmed found addresses into the unsaved configuration draft.
+
+The discovery operation stops the selected bus service and does not restart it automatically, preserving the existing operator-visible behavior. No scan performs a write, and no unknown profile is probed.
 
 ## Verification status
 
-Milestones 1 through 9 were accepted only after local build and full CTest verification before their commits.
+Milestones 1 through 10 were accepted only after their required local build/CTest or web-model verification before their commits.
 
 Profile-loader tests cover valid schema-v1 profiles, all three current addressing declarations, transport/register/probe validation, numeric and enum declaration validation, file loading, isolated invalid files, deterministic diagnostics and duplicate-ID rejection.
 
@@ -464,11 +480,11 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-Begin **Milestone 10: web configuration UI and capability-aware presentation** from `ROADMAP.md`.
+Begin **Milestone 11: polling and transaction optimization** from `ROADMAP.md`.
 
-The next task should expose protocol/profile/serial configuration in the engineering UI, preserve existing MDV forms, and make available controls depend on declared profile capabilities rather than manufacturer/profile-name checks.
+The next task should measure the established factual polling path before changing it, then reduce avoidable Modbus traffic without changing profile semantics, confirmation rules or the existing MDV runtime. Candidate work includes caching resolved locations and combining only proven-compatible adjacent reads.
 
-The first production profile currently enables only Power and AlarmCode. Mode, FanSpeed, SetTemperature and physical RoomTemperature must remain hidden or disabled until their hardware behavior/conversion is verified.
+The first production profile still enables only Power and AlarmCode. Mode, FanSpeed, SetTemperature and physical RoomTemperature must remain hidden or disabled until their hardware behavior and conversion are verified.
 
 ## Status update rules
 

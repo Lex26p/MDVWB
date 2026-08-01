@@ -361,6 +361,49 @@ export function cloneConfiguration(value) {
   };
 }
 
+export function configurationWithDiscoveryAddresses(
+  configuration,
+  busId,
+  addresses,
+  profileCatalog = { schemaVersion: 1, profiles: [], issues: [] },
+) {
+  const normalized = normalizeConfiguration(configuration);
+  const id = requireInteger(Number(busId), 1, 999, "Номер шины");
+  const bus = normalized.buses.find((item) => item.id === id);
+  if (!bus) {
+    throw new Error(`Шина ${id} отсутствует в конфигурации`);
+  }
+
+  let minimum = bus.protocol === "modbus_rtu" ? 1 : 0;
+  let maximum = 63;
+  if (bus.protocol === "modbus_rtu") {
+    const profile = findModbusProfile(profileCatalog, bus.modbus.profileId);
+    if (profile) {
+      minimum = profile.logicalAddresses.minimum;
+      maximum = profile.logicalAddresses.maximum;
+    }
+  }
+
+  const selected = normalizeAddresses(addresses, bus.enabled, minimum, maximum);
+  const buses = normalized.buses.map((item) => item.id === id
+    ? {
+      ...item,
+      ...(item.modbus ? { modbus: { ...item.modbus } } : {}),
+      addresses: selected,
+    }
+    : {
+      ...item,
+      ...(item.modbus ? { modbus: { ...item.modbus } } : {}),
+      addresses: [...item.addresses],
+    });
+
+  return normalizeConfiguration({
+    version: 1,
+    revision: normalized.revision,
+    buses,
+  });
+}
+
 export function configurationsEqual(left, right) {
   return configurationToJson(left) === configurationToJson(right);
 }
@@ -435,9 +478,6 @@ export function canRunBusCommand({
     return false;
   }
   if ((command === "start" || command === "restart") && !enabled) {
-    return false;
-  }
-  if (command === "discovery" && protocol === "modbus_rtu") {
     return false;
   }
   return true;

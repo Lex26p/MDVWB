@@ -8,6 +8,7 @@ import {
   cloneConfiguration,
   commandLabel,
   configurationToJson,
+  configurationWithDiscoveryAddresses,
   configurationsEqual,
   discoveryLabel,
   formatAddresses,
@@ -231,6 +232,16 @@ function createBusCard(bus) {
     discoveryResultElement.textContent = "";
   }
 
+  if (discoveryResult.success === true && found.length > 0) {
+    const useFoundButton = document.createElement("button");
+    useFoundButton.type = "button";
+    useFoundButton.className = "button button-secondary button-compact bus-use-discovery";
+    useFoundButton.dataset.busId = String(bus.id);
+    useFoundButton.textContent = "Использовать найденные адреса";
+    useFoundButton.disabled = state.pendingApply || Boolean(pendingCommand);
+    discoveryResultElement.insertAdjacentElement("afterend", useFoundButton);
+  }
+
   const operationElement = fragment.querySelector(".bus-operation-result");
   operationElement.textContent = operationText(result, pendingCommand && pendingCommand !== "discovery" ? pendingCommand : null);
   if (result && result.success === false) {
@@ -324,6 +335,33 @@ function deleteBus(busId) {
   refreshDirtyState();
   hideConfigResult();
   render();
+}
+
+function useDiscoveredAddresses(busId) {
+  const result = state.discoveryResults.get(busId);
+  if (!result || result.success !== true || !Array.isArray(result.addresses) ||
+      result.addresses.length === 0) {
+    showNotice("Для этой шины нет подтверждённых найденных адресов.", true);
+    return;
+  }
+
+  try {
+    state.draft = configurationWithDiscoveryAddresses(
+      state.draft,
+      busId,
+      result.addresses,
+      state.profileCatalog,
+    );
+    refreshDirtyState();
+    hideConfigResult();
+    showNotice(
+      `Адреса ${formatAddresses(result.addresses)} добавлены в черновик шины ${busId}. ` +
+      "Нажмите «Сохранить», чтобы применить конфигурацию.",
+    );
+    render();
+  } catch (error) {
+    showNotice(error.message, true);
+  }
 }
 
 function resetDraft() {
@@ -440,8 +478,12 @@ function sendBusCommand(busId, command) {
   }
 
   if (command === "discovery") {
+    const protocolNotice = bus.protocol === "modbus_rtu"
+      ? "Будут проверены логические адреса 1–63 только безопасным read-only probe выбранного профиля."
+      : "Будет выполнен штатный поиск MDV-адресов 0–63.";
     const confirmed = window.confirm(
       `Запустить поиск на шине ${busId} (${bus.port})?\n\n` +
+      `${protocolNotice}\n` +
       "Сервис этой шины будет остановлен и после поиска автоматически не запустится.",
     );
     if (!confirmed) {
@@ -659,6 +701,12 @@ elements.busEditorForm.addEventListener("submit", (event) => {
 });
 
 elements.busGrid.addEventListener("click", (event) => {
+  const useFoundButton = event.target.closest(".bus-use-discovery");
+  if (useFoundButton) {
+    useDiscoveredAddresses(Number(useFoundButton.dataset.busId));
+    return;
+  }
+
   const commandButton = event.target.closest(".bus-command");
   if (commandButton) {
     sendBusCommand(Number(commandButton.dataset.busId), commandButton.dataset.command);

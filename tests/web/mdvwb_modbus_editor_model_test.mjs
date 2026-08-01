@@ -8,6 +8,7 @@ import {
   canRunBusCommand,
   cloneConfiguration,
   configurationToJson,
+  configurationWithDiscoveryAddresses,
   findModbusProfile,
   normalizeBus,
   normalizeConfiguration,
@@ -252,7 +253,7 @@ function testCatalogValidation() {
 }
 
 
-function testModbusDiscoveryStaysDisabledUntilStepFour() {
+function testProtocolAwareDiscoveryAndAddressSelection() {
   assert.equal(canRunBusCommand({
     command: "discovery",
     enabled: true,
@@ -262,7 +263,7 @@ function testModbusDiscoveryStaysDisabledUntilStepFour() {
     pending: false,
     discoveryRunning: false,
     protocol: "modbus_rtu",
-  }), false);
+  }), true);
   assert.equal(canRunBusCommand({
     command: "discovery",
     enabled: true,
@@ -273,6 +274,43 @@ function testModbusDiscoveryStaysDisabledUntilStepFour() {
     discoveryRunning: false,
     protocol: "mdv",
   }), true);
+
+  const configuration = normalizeConfiguration({
+    version: 1,
+    revision: 3,
+    buses: [{
+      id: 2,
+      enabled: true,
+      protocol: "modbus_rtu",
+      port: "/dev/ttyRS485-2",
+      modbus: {
+        profileId: "vrf_add_controller",
+        baudRate: 9600,
+        dataBits: 8,
+        parity: "none",
+        stopBits: 1,
+      },
+      addresses: [1],
+    }],
+  });
+  const selected = configurationWithDiscoveryAddresses(
+    configuration,
+    2,
+    [18, 1, 5],
+    productionCatalog(),
+  );
+  assert.deepEqual(selected.buses[0].addresses, [1, 5, 18]);
+  assert.deepEqual(configuration.buses[0].addresses, [1]);
+
+  expectThrows(
+    () => configurationWithDiscoveryAddresses(
+      configuration,
+      2,
+      [0],
+      productionCatalog(),
+    ),
+    "1–63",
+  );
 }
 
 function testApplicationWiring() {
@@ -283,6 +321,8 @@ function testApplicationWiring() {
   assert.match(app, /subscribe\("\/mdvwb\/modbus\/profiles"\)/);
   assert.match(app, /topic === "\/mdvwb\/modbus\/profiles"/);
   assert.match(app, /new ModbusBusEditor/);
+  assert.match(app, /bus-use-discovery/);
+  assert.match(app, /configurationWithDiscoveryAddresses/);
   assert.doesNotMatch(app, /if\s*\([^)]*profileId\s*===\s*["']/);
 }
 
@@ -293,7 +333,7 @@ testProfileSpecificAddressRange();
 testCanonicalConfigurationAndClone();
 testCatalogAndCapabilities();
 testCatalogValidation();
-testModbusDiscoveryStaysDisabledUntilStepFour();
+testProtocolAwareDiscoveryAndAddressSelection();
 testApplicationWiring();
 
 console.log("MDVWB Modbus web editor model tests: OK");

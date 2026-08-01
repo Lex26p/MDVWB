@@ -1,5 +1,7 @@
 #include "mdvwb_discovery_runner.h"
 
+#include "mdv_modbus_discovery.h"
+
 #include <algorithm>
 #include <charconv>
 #include <cerrno>
@@ -412,6 +414,26 @@ DiscoveryExecutionResult NativeDiscoveryRunner::Run(
     }
     if (periodMilliseconds <= 0 || responseTimeoutMilliseconds <= 0) {
         throw std::invalid_argument("discovery timing must be positive");
+    }
+
+    const auto runtime = FindDiscoveryRuntimeForPort(
+        DiscoveryDefaultDirectoryFromEnvironment(),
+        port);
+    if (runtime.has_value() &&
+        runtime->protocol == DiscoveryRuntimeProtocol::ModbusRtu) {
+        if (!runtime->modbus.has_value()) {
+            throw std::logic_error(
+                "Modbus discovery selection omitted runtime settings");
+        }
+        const ModbusDiscoveryScanResult scan =
+            RunModbusDiscovery(*runtime->modbus);
+        return DiscoveryExecutionResult{
+            .success = scan.success,
+            .exitCode = scan.success ? 0 : 1,
+            .addresses = scan.addresses,
+            .output = scan.output,
+            .message = scan.message,
+        };
     }
 
 #ifdef _WIN32
