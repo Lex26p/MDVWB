@@ -673,6 +673,32 @@ void TestUnsupportedCommandsGenerateNoTraffic()
     Require(transport.requests.empty(), "rejected commands generated traffic");
 }
 
+
+void TestResolvedPollPlanBaselineIsExposed()
+{
+    auto profile = ProductionProfile();
+    ScriptedReadTransport transport;
+    mdv::modbus::ModbusDriver driver({1U, 2U}, profile, transport);
+
+    const auto& metrics = driver.PollPlanMetrics();
+    Require(metrics.deviceCount == 2U, "driver poll plan lost devices");
+    Require(
+        metrics.probeTransactionsPerCycle == 2U,
+        "driver probe baseline is wrong");
+    Require(
+        metrics.semanticTransactionsPerCycle == 4U,
+        "driver semantic baseline is wrong");
+    Require(
+        metrics.totalTransactionsPerCycle == 6U,
+        "driver total transaction baseline is wrong");
+    Require(
+        metrics.registersRequestedPerCycle == 6U,
+        "driver register baseline is wrong");
+    Require(
+        transport.requests.empty(),
+        "building the resolved poll plan generated Modbus traffic");
+}
+
 void TestInvalidConfiguredAddressesRejected()
 {
     auto profile = ProductionProfile();
@@ -718,6 +744,7 @@ int main()
         TestPriorityWorkCannotStarvePolling();
         TestNewerCommandCancelsStaleWork();
         TestUnsupportedCommandsGenerateNoTraffic();
+        TestResolvedPollPlanBaselineIsExposed();
         TestInvalidConfiguredAddressesRejected();
 
         std::cout << "MDVWB Modbus driver command tests: OK\n";

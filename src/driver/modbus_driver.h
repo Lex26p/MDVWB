@@ -1,6 +1,7 @@
 #pragma once
 
 #include "device_driver.h"
+#include "modbus_poll_plan.h"
 #include "modbus_profile.h"
 #include "modbus_rtu_serial.h"
 #include "modbus_scan_execute.h"
@@ -39,6 +40,7 @@ public:
     [[nodiscard]] bool HasQueuedWork() const noexcept override;
     [[nodiscard]] std::size_t DeviceCount() const noexcept override;
     [[nodiscard]] std::uint8_t NextPollAddress() const noexcept override;
+    [[nodiscard]] const ModbusPollPlanMetrics& PollPlanMetrics() const noexcept;
 
 private:
     struct PendingPower {
@@ -53,7 +55,7 @@ private:
 
     struct DeviceRuntime {
         std::uint8_t logicalAddress = 0;
-        ScanProbe probe;
+        ModbusDevicePollPlan pollPlan;
         DriverDeviceState state;
         std::optional<PendingPower> pendingPower;
     };
@@ -79,8 +81,7 @@ private:
     [[nodiscard]] DriverResult ConfirmPowerWrite(DeviceRuntime& runtime);
 
     [[nodiscard]] RawReadResult ReadSemanticRegister(
-        std::uint8_t logicalAddress,
-        const RegisterLocation& baseLocation);
+        const ResolvedRegisterLocation& location);
 
     [[nodiscard]] DriverResult MarkOffline(
         DeviceRuntime& runtime,
@@ -88,7 +89,6 @@ private:
         DriverOutcome outcome,
         std::string error);
 
-    void ValidateReadablePoints(std::uint8_t logicalAddress) const;
     void EnqueuePowerWrite(const DeviceRuntime& runtime);
     void EnqueuePowerConfirmation(const DeviceRuntime& runtime);
 
@@ -98,6 +98,7 @@ private:
     [[nodiscard]] DriverResult ProcessPoll();
 
     ModbusProfile profile_;
+    ModbusPollPlanMetrics pollPlanMetrics_;
     ITransactionTransport& transport_;
     std::vector<DeviceRuntime> devices_;
     std::deque<WorkItem> powerWriteQueue_;

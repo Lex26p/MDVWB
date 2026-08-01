@@ -127,6 +127,15 @@ target_include_directories(mdvwb_modbus_scan PUBLIC ${MDVWB_DRIVER_DIR})
 target_link_libraries(mdvwb_modbus_scan
     PUBLIC mdvwb_modbus_profile mdvwb_modbus_rtu)
 
+add_library(mdvwb_modbus_poll_plan STATIC
+    ${MDVWB_DRIVER_DIR}/modbus_poll_plan.cpp
+    ${MDVWB_DRIVER_DIR}/modbus_poll_plan.h
+)
+target_compile_features(mdvwb_modbus_poll_plan PUBLIC cxx_std_20)
+target_include_directories(mdvwb_modbus_poll_plan PUBLIC ${MDVWB_DRIVER_DIR})
+target_link_libraries(mdvwb_modbus_poll_plan
+    PUBLIC mdvwb_modbus_profile)
+
 add_library(mdvwb_modbus_driver STATIC
     ${MDVWB_DRIVER_DIR}/modbus_driver.cpp
     ${MDVWB_DRIVER_DIR}/modbus_driver.h
@@ -134,7 +143,8 @@ add_library(mdvwb_modbus_driver STATIC
 target_compile_features(mdvwb_modbus_driver PUBLIC cxx_std_20)
 target_include_directories(mdvwb_modbus_driver PUBLIC ${MDVWB_DRIVER_DIR})
 target_link_libraries(mdvwb_modbus_driver
-    PUBLIC mdvwb_modbus_scan mdvwb_modbus_profile mdvwb_modbus_rtu)
+    PUBLIC mdvwb_modbus_scan mdvwb_modbus_poll_plan
+           mdvwb_modbus_profile mdvwb_modbus_rtu)
 
 add_library(mdvwb_modbus_runtime_config STATIC
     ${MDVWB_DRIVER_DIR}/modbus_runtime_config.cpp
@@ -380,6 +390,14 @@ target_link_libraries(mdvwb_modbus_vrf_profile_test PRIVATE mdvwb_modbus_scan)
 target_compile_definitions(mdvwb_modbus_vrf_profile_test
     PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
+add_executable(mdvwb_modbus_poll_plan_test
+    ${MDVWB_DRIVER_TEST_DIR}/modbus_poll_plan_test.cpp
+)
+target_link_libraries(mdvwb_modbus_poll_plan_test
+    PRIVATE mdvwb_modbus_poll_plan)
+target_compile_definitions(mdvwb_modbus_poll_plan_test
+    PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
 add_executable(mdvwb_modbus_driver_test
     ${MDVWB_DRIVER_TEST_DIR}/modbus_driver_test.cpp
 )
@@ -538,6 +556,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_modbus_rtu
     mdvwb_modbus_profile
     mdvwb_modbus_scan
+    mdvwb_modbus_poll_plan
     mdvwb_modbus_driver
     mdvwb_modbus_runtime_config
     mdvwb-modbus
@@ -552,6 +571,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_modbus_resolver_test
     mdvwb_modbus_scan_test
     mdvwb_modbus_scan_execute_test
+    mdvwb_modbus_poll_plan_test
     mdvwb_modbus_vrf_reference_test
     mdvwb_modbus_vrf_profile_test
     mdvwb_modbus_driver_test
@@ -622,6 +642,7 @@ add_test(NAME mdvwb_modbus_semantic_test COMMAND mdvwb_modbus_semantic_test)
 add_test(NAME mdvwb_modbus_resolver_test COMMAND mdvwb_modbus_resolver_test)
 add_test(NAME mdvwb_modbus_scan_test COMMAND mdvwb_modbus_scan_test)
 add_test(NAME mdvwb_modbus_scan_execute_test COMMAND mdvwb_modbus_scan_execute_test)
+add_test(NAME mdvwb_modbus_poll_plan_test COMMAND mdvwb_modbus_poll_plan_test)
 add_test(NAME mdvwb_modbus_vrf_reference_test COMMAND mdvwb_modbus_vrf_reference_test)
 add_test(NAME mdvwb_modbus_vrf_profile_test COMMAND mdvwb_modbus_vrf_profile_test)
 add_test(NAME mdvwb_modbus_driver_test COMMAND mdvwb_modbus_driver_test)

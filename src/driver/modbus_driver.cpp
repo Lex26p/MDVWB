@@ -19,17 +19,6 @@
 namespace mdv::modbus {
 namespace {
 
-constexpr std::array<std::string_view, 8> kSemanticPointNames{
-    "power",
-    "mode",
-    "fanSpeed",
-    "setTemperature",
-    "roomTemperature",
-    "alarmCode",
-    "blinds",
-    "blocked",
-};
-
 [[nodiscard]] std::string TransactionError(
     const TransactionResult& transaction,
     std::string_view fallback)
@@ -112,53 +101,17 @@ ModbusDriver::ModbusDriver(
     : profile_(profile),
       transport_(transport)
 {
-    if (logicalAddresses.empty()) {
-        throw std::invalid_argument(
-            "Modbus driver requires at least one logical address");
-    }
+    ModbusPollPlan plan = BuildModbusPollPlan(profile_, logicalAddresses);
+    pollPlanMetrics_ = plan.metrics;
+    devices_.reserve(plan.devices.size());
 
-    ScanPlan plan;
-    try {
-        plan = BuildScanPlan(profile_);
-    }
-    catch (const ScanPlanError& error) {
-        throw std::invalid_argument(
-            "cannot build Modbus polling plan for profile '" +
-            profile_.id + "': " + error.what());
-    }
-
-    std::set<std::uint8_t> unique;
-    devices_.reserve(logicalAddresses.size());
-
-    for (const auto logicalAddress : logicalAddresses) {
-        if (logicalAddress < kMinLogicalAddress ||
-            logicalAddress > kMaxLogicalAddress) {
-            throw std::invalid_argument(
-                "Modbus logical address must be in range 1..63");
-        }
-        if (!unique.insert(logicalAddress).second) {
-            throw std::invalid_argument(
-                "duplicate Modbus logical address " +
-                std::to_string(logicalAddress));
-        }
-
-        const auto& candidate =
-            plan[static_cast<std::size_t>(logicalAddress - 1U)];
-        if (!candidate.probe.has_value()) {
-            throw std::invalid_argument(
-                "profile '" + profile_.id +
-                "' does not support configured logical address " +
-                std::to_string(logicalAddress));
-        }
-
-        ValidateReadablePoints(logicalAddress);
-
+    for (auto& devicePlan : plan.devices) {
         DriverDeviceState state;
-        state.address = logicalAddress;
+        state.address = devicePlan.logicalAddress;
 
         devices_.push_back(DeviceRuntime{
-            .logicalAddress = logicalAddress,
-            .probe = *candidate.probe,
+            .logicalAddress = devicePlan.logicalAddress,
+            .pollPlan = std::move(devicePlan),
             .state = state,
             .pendingPower = std::nullopt,
         });
@@ -284,6 +237,11 @@ std::uint8_t ModbusDriver::NextPollAddress() const noexcept
     return devices_[nextPollIndex_].logicalAddress;
 }
 
+const ModbusPollPlanMetrics& ModbusDriver::PollPlanMetrics() const noexcept
+{
+    return pollPlanMetrics_;
+}
+
 ModbusDriver::DeviceRuntime& ModbusDriver::DeviceByAddress(
     std::uint8_t address)
 {
@@ -314,7 +272,7 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
 {
     ScanResult probe;
     try {
-        probe = ExecuteScanProbe(runtime.probe, transport_);
+        probe = ExecuteScanProbe(runtime.pollPlan.probe, transport_);
     }
     catch (const std::exception& error) {
         return MarkOffline(
@@ -335,25 +293,8 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
     DriverDeviceState snapshot;
     snapshot.address = runtime.logicalAddress;
 
-    for (const auto pointName : kSemanticPointNames) {
-        if (!IsSemanticPointEnabled(profile_, pointName)) {
-            continue;
-        }
-
-        const auto iterator = profile_.points.find(pointName);
-        if (iterator == profile_.points.end() ||
-            !iterator->second.read.has_value()) {
-            return MarkOffline(
-                runtime,
-                DriverOperation::PollRead,
-                DriverOutcome::InvalidResponse,
-                "enabled semantic point '" + std::string(pointName) +
-                    "' has no readable profile location");
-        }
-
-        const RawReadResult read = ReadSemanticRegister(
-            runtime.logicalAddress,
-            *iterator->second.read);
+    for (const auto& point : runtime.pollPlan.semanticReads) {
+        const RawReadResult read = ReadSemanticRegister(point.location);
         if (!read.success) {
             return MarkOffline(
                 runtime,
@@ -366,7 +307,7 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
             ApplySemanticRead(
                 snapshot,
                 profile_,
-                pointName,
+                point.pointName,
                 read.value);
         }
         catch (const SemanticConversionError& error) {
@@ -374,7 +315,7 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
                 runtime,
                 DriverOperation::PollRead,
                 DriverOutcome::InvalidResponse,
-                "cannot decode semantic point '" + std::string(pointName) +
+                "cannot decode semantic point '" + point.pointName +
                     "': " + error.what());
         }
     }
@@ -516,8 +457,7 @@ DriverResult ModbusDriver::ConfirmPowerWrite(DeviceRuntime& runtime)
     auto& pending = *runtime.pendingPower;
     ++pending.confirmationAttempts;
 
-    const auto point = profile_.points.find("power");
-    if (point == profile_.points.end() || !point->second.read.has_value()) {
+    if (!runtime.pollPlan.powerRead.has_value()) {
         runtime.pendingPower.reset();
         return DriverResult{
             .address = runtime.logicalAddress,
@@ -528,8 +468,7 @@ DriverResult ModbusDriver::ConfirmPowerWrite(DeviceRuntime& runtime)
     }
 
     const RawReadResult read = ReadSemanticRegister(
-        runtime.logicalAddress,
-        *point->second.read);
+        *runtime.pollPlan.powerRead);
     if (!read.success) {
         runtime.state.online = false;
 
@@ -607,51 +546,13 @@ DriverResult ModbusDriver::ConfirmPowerWrite(DeviceRuntime& runtime)
 }
 
 ModbusDriver::RawReadResult ModbusDriver::ReadSemanticRegister(
-    std::uint8_t logicalAddress,
-    const RegisterLocation& baseLocation)
+    const ResolvedRegisterLocation& location)
 {
-    std::optional<ResolvedRegisterLocation> location;
-    try {
-        location = ResolveRegisterLocation(
-            profile_,
-            logicalAddress,
-            baseLocation);
-    }
-    catch (const ResolverError& error) {
-        return RawReadResult{
-            .outcome = DriverOutcome::InvalidResponse,
-            .success = false,
-            .value = 0,
-            .error = error.what(),
-        };
-    }
-
-    if (!location.has_value()) {
-        return RawReadResult{
-            .outcome = DriverOutcome::InvalidResponse,
-            .success = false,
-            .value = 0,
-            .error =
-                "profile does not resolve a configured logical address",
-        };
-    }
-
-    if (location->space != RegisterSpace::HoldingRegister) {
-        return RawReadResult{
-            .outcome = DriverOutcome::InvalidResponse,
-            .success = false,
-            .value = 0,
-            .error =
-                "current Modbus runtime supports semantic reads from "
-                "holding_register only",
-        };
-    }
-
     RtuAdu request;
     try {
         request = BuildReadHoldingRegistersRequest(
-            location->slaveId,
-            location->address,
+            location.slaveId,
+            location.address,
             1U);
     }
     catch (const std::exception& error) {
@@ -691,7 +592,7 @@ ModbusDriver::RawReadResult ModbusDriver::ReadSemanticRegister(
 
         const auto& response = *transaction.response;
         if (response.status != ResponseStatus::Success ||
-            response.slaveId != location->slaveId ||
+            response.slaveId != location.slaveId ||
             response.function != Function::ReadHoldingRegisters ||
             response.registers.size() != 1U) {
             return RawReadResult{
@@ -783,70 +684,6 @@ DriverResult ModbusDriver::MarkOffline(
         .outcome = outcome,
         .error = std::move(error),
     };
-}
-
-void ModbusDriver::ValidateReadablePoints(
-    std::uint8_t logicalAddress) const
-{
-    std::size_t readableCount = 0;
-
-    for (const auto pointName : kSemanticPointNames) {
-        if (!IsSemanticPointEnabled(profile_, pointName)) {
-            continue;
-        }
-
-        const auto iterator = profile_.points.find(pointName);
-        if (iterator == profile_.points.end()) {
-            throw std::invalid_argument(
-                "profile '" + profile_.id +
-                "' enables missing semantic point '" +
-                std::string(pointName) + "'");
-        }
-        if (!iterator->second.read.has_value()) {
-            throw std::invalid_argument(
-                "profile '" + profile_.id +
-                "' enables semantic point '" + std::string(pointName) +
-                "' without a read location");
-        }
-
-        std::optional<ResolvedRegisterLocation> location;
-        try {
-            location = ResolveRegisterLocation(
-                profile_,
-                logicalAddress,
-                *iterator->second.read);
-        }
-        catch (const ResolverError& error) {
-            throw std::invalid_argument(
-                "profile '" + profile_.id +
-                "' cannot resolve semantic point '" +
-                std::string(pointName) + "' for logical address " +
-                std::to_string(logicalAddress) + ": " + error.what());
-        }
-
-        if (!location.has_value()) {
-            throw std::invalid_argument(
-                "profile '" + profile_.id +
-                "' does not resolve semantic point '" +
-                std::string(pointName) + "' for logical address " +
-                std::to_string(logicalAddress));
-        }
-
-        if (location->space != RegisterSpace::HoldingRegister) {
-            throw std::invalid_argument(
-                "profile '" + profile_.id +
-                "' uses an unsupported read data space for semantic point '" +
-                std::string(pointName) + "'");
-        }
-
-        ++readableCount;
-    }
-
-    if (readableCount == 0U) {
-        throw std::invalid_argument(
-            "profile '" + profile_.id +
-            "' exposes no readable semantic points");
-    }
 }
 
 void ModbusDriver::EnqueuePowerWrite(const DeviceRuntime& runtime)
