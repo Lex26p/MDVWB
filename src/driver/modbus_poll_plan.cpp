@@ -2,11 +2,18 @@
 
 #include "modbus_semantic.h"
 
+#include <algorithm>
 #include <array>
+#include <compare>
+#include <limits>
+#include <map>
+#include <numeric>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace mdv::modbus {
 namespace {
@@ -20,6 +27,13 @@ constexpr std::array<std::string_view, 8> kSemanticPointNames{
     "alarmCode",
     "blinds",
     "blocked",
+};
+
+struct PhysicalReadKey {
+    std::uint8_t slaveId = 1;
+    std::uint16_t address = 0;
+
+    auto operator<=>(const PhysicalReadKey&) const = default;
 };
 
 [[nodiscard]] ResolvedRegisterLocation ResolveReadablePoint(
@@ -56,6 +70,69 @@ constexpr std::array<std::string_view, 8> kSemanticPointNames{
             std::string(pointName) + "'");
     }
     return *location;
+}
+
+void BuildSemanticBatches(ModbusDevicePollPlan& device)
+{
+    std::vector<PhysicalReadKey> uniqueLocations;
+    uniqueLocations.reserve(device.semanticReads.size());
+    for (const auto& read : device.semanticReads) {
+        uniqueLocations.push_back(PhysicalReadKey{
+            .slaveId = read.location.slaveId,
+            .address = read.location.address,
+        });
+    }
+    std::sort(uniqueLocations.begin(), uniqueLocations.end());
+    uniqueLocations.erase(
+        std::unique(uniqueLocations.begin(), uniqueLocations.end()),
+        uniqueLocations.end());
+
+    std::map<PhysicalReadKey, std::pair<std::size_t, std::uint16_t>> placement;
+    for (const auto& location : uniqueLocations) {
+        bool extend = false;
+        if (!device.semanticBatches.empty()) {
+            auto& previous = device.semanticBatches.back();
+            const auto previousLast =
+                static_cast<std::uint32_t>(previous.startAddress) +
+                static_cast<std::uint32_t>(previous.quantity) - 1U;
+            extend = previous.slaveId == location.slaveId &&
+                previousLast < std::numeric_limits<std::uint16_t>::max() &&
+                location.address == previousLast + 1U &&
+                previous.quantity < 125U;
+        }
+
+        if (extend) {
+            auto& batch = device.semanticBatches.back();
+            const std::uint16_t offset = batch.quantity;
+            ++batch.quantity;
+            placement.emplace(
+                location,
+                std::pair{device.semanticBatches.size() - 1U, offset});
+        }
+        else {
+            device.semanticBatches.push_back(ModbusSemanticReadBatch{
+                .slaveId = location.slaveId,
+                .startAddress = location.address,
+                .quantity = 1U,
+            });
+            placement.emplace(
+                location,
+                std::pair{device.semanticBatches.size() - 1U, 0U});
+        }
+    }
+
+    for (auto& read : device.semanticReads) {
+        const auto iterator = placement.find(PhysicalReadKey{
+            .slaveId = read.location.slaveId,
+            .address = read.location.address,
+        });
+        if (iterator == placement.end()) {
+            throw std::logic_error(
+                "internal Modbus poll-plan batch placement is missing");
+        }
+        read.batchIndex = iterator->second.first;
+        read.registerOffset = iterator->second.second;
+    }
 }
 
 } // namespace
@@ -147,6 +224,8 @@ ModbusPollPlan BuildModbusPollPlan(
                 "' exposes no readable semantic points");
         }
 
+        BuildSemanticBatches(device);
+
         ++result.metrics.deviceCount;
         ++result.metrics.probeTransactionsPerCycle;
         result.metrics.semanticTransactionsPerCycle +=
@@ -154,12 +233,36 @@ ModbusPollPlan BuildModbusPollPlan(
         result.metrics.registersRequestedPerCycle +=
             static_cast<std::size_t>(device.probe.quantity) +
             device.semanticReads.size();
+
+        result.metrics.optimizedSemanticTransactionsPerCycle +=
+            device.semanticBatches.size();
+        result.metrics.optimizedRegistersRequestedPerCycle +=
+            static_cast<std::size_t>(device.probe.quantity);
+        for (const auto& batch : device.semanticBatches) {
+            result.metrics.optimizedRegistersRequestedPerCycle += batch.quantity;
+        }
+        result.metrics.reusedSemanticReadsPerCycle +=
+            device.semanticReads.size() -
+            std::accumulate(
+                device.semanticBatches.begin(),
+                device.semanticBatches.end(),
+                std::size_t{0},
+                [](std::size_t total, const ModbusSemanticReadBatch& batch) {
+                    return total + batch.quantity;
+                });
+
         result.devices.push_back(std::move(device));
     }
 
     result.metrics.totalTransactionsPerCycle =
         result.metrics.probeTransactionsPerCycle +
         result.metrics.semanticTransactionsPerCycle;
+    result.metrics.optimizedTotalTransactionsPerCycle =
+        result.metrics.probeTransactionsPerCycle +
+        result.metrics.optimizedSemanticTransactionsPerCycle;
+    result.metrics.savedTransactionsPerCycle =
+        result.metrics.totalTransactionsPerCycle -
+        result.metrics.optimizedTotalTransactionsPerCycle;
     return result;
 }
 

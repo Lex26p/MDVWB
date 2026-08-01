@@ -41,6 +41,30 @@ mdv::modbus::ModbusProfile ProductionProfile()
         "profiles/modbus/vrf_add_controller.json");
 }
 
+mdv::modbus::ModbusProfile AdjacentAndSharedProfile()
+{
+    auto profile = ProductionProfile();
+    profile.capabilities.roomTemperature = true;
+
+    mdv::modbus::PointDefinition room;
+    room.type = mdv::modbus::PointType::Number;
+    room.rawType = mdv::modbus::RawType::UInt16;
+    room.read = mdv::modbus::RegisterLocation{
+        .space = mdv::modbus::RegisterSpace::HoldingRegister,
+        .address = 40029U,
+        .reference = std::nullopt,
+    };
+    room.transform = mdv::modbus::NumericTransform{
+        .scale = 0.1,
+        .offset = 0.0,
+    };
+    profile.points["roomTemperature"] = room;
+
+    profile.points.at("alarmCode").read->address = 40028U;
+    profile.points.at("alarmCode").read->reference.reset();
+    return profile;
+}
+
 void TestProductionBaselineAndResolvedLocations()
 {
     const auto profile = ProductionProfile();
@@ -60,6 +84,15 @@ void TestProductionBaselineAndResolvedLocations()
     Require(
         plan.metrics.registersRequestedPerCycle == 6U,
         "register baseline is wrong");
+    Require(
+        plan.metrics.optimizedSemanticTransactionsPerCycle == 4U &&
+            plan.metrics.optimizedTotalTransactionsPerCycle == 6U,
+        "production profile was unsafely batched across gaps");
+    Require(
+        plan.metrics.optimizedRegistersRequestedPerCycle == 6U &&
+            plan.metrics.reusedSemanticReadsPerCycle == 0U &&
+            plan.metrics.savedTransactionsPerCycle == 0U,
+        "production optimization metrics are wrong");
 
     const auto& first = plan.devices[0];
     Require(first.logicalAddress == 1U, "first logical address changed");
@@ -73,6 +106,13 @@ void TestProductionBaselineAndResolvedLocations()
     Require(
         first.powerRead.has_value() && first.powerRead->address == 40028U,
         "Power confirmation location was not cached");
+    Require(
+        first.semanticBatches.size() == 2U &&
+            first.semanticBatches[0].startAddress == 40028U &&
+            first.semanticBatches[0].quantity == 1U &&
+            first.semanticBatches[1].startAddress == 40035U &&
+            first.semanticBatches[1].quantity == 1U,
+        "non-adjacent production registers were combined");
 
     const auto& second = plan.devices[1];
     Require(second.logicalAddress == 2U, "second logical address changed");
@@ -82,6 +122,51 @@ void TestProductionBaselineAndResolvedLocations()
     Require(
         second.powerRead.has_value() && second.powerRead->address == 40119U,
         "second Power confirmation location was not cached");
+}
+
+void TestAdjacentReadsAreBatchedAndSharedRegistersReused()
+{
+    const auto profile = AdjacentAndSharedProfile();
+    const auto plan = mdv::modbus::BuildModbusPollPlan(profile, {1U});
+
+    Require(plan.devices.size() == 1U, "optimized plan lost its device");
+    const auto& device = plan.devices.front();
+    Require(device.semanticReads.size() == 3U, "semantic points were lost");
+    Require(device.semanticBatches.size() == 1U, "adjacent reads were not batched");
+    Require(
+        device.semanticBatches[0].slaveId == 1U &&
+            device.semanticBatches[0].startAddress == 40028U &&
+            device.semanticBatches[0].quantity == 2U,
+        "optimized FC03 span is wrong");
+
+    Require(
+        device.semanticReads[0].pointName == "power" &&
+            device.semanticReads[0].batchIndex == 0U &&
+            device.semanticReads[0].registerOffset == 0U,
+        "Power batch placement is wrong");
+    Require(
+        device.semanticReads[1].pointName == "roomTemperature" &&
+            device.semanticReads[1].registerOffset == 1U,
+        "adjacent room-temperature placement is wrong");
+    Require(
+        device.semanticReads[2].pointName == "alarmCode" &&
+            device.semanticReads[2].registerOffset == 0U,
+        "shared register was not reused");
+
+    Require(
+        plan.metrics.semanticTransactionsPerCycle == 3U &&
+            plan.metrics.totalTransactionsPerCycle == 4U &&
+            plan.metrics.registersRequestedPerCycle == 4U,
+        "optimized test baseline is wrong");
+    Require(
+        plan.metrics.optimizedSemanticTransactionsPerCycle == 1U &&
+            plan.metrics.optimizedTotalTransactionsPerCycle == 2U &&
+            plan.metrics.optimizedRegistersRequestedPerCycle == 3U,
+        "optimized traffic metrics are wrong");
+    Require(
+        plan.metrics.reusedSemanticReadsPerCycle == 1U &&
+            plan.metrics.savedTransactionsPerCycle == 2U,
+        "optimization savings are wrong");
 }
 
 void TestValidationRemainsTrafficIndependent()
@@ -115,6 +200,7 @@ int main()
 {
     try {
         TestProductionBaselineAndResolvedLocations();
+        TestAdjacentReadsAreBatchedAndSharedRegistersReused();
         TestValidationRemainsTrafficIndependent();
         std::cout << "MDVWB Modbus poll plan tests: OK\n";
         return 0;

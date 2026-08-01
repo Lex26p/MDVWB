@@ -293,14 +293,28 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
     DriverDeviceState snapshot;
     snapshot.address = runtime.logicalAddress;
 
-    for (const auto& point : runtime.pollPlan.semanticReads) {
-        const RawReadResult read = ReadSemanticRegister(point.location);
+    std::vector<std::vector<std::uint16_t>> batchValues;
+    batchValues.reserve(runtime.pollPlan.semanticBatches.size());
+    for (const auto& batch : runtime.pollPlan.semanticBatches) {
+        RawBatchReadResult read = ReadSemanticBatch(batch);
         if (!read.success) {
             return MarkOffline(
                 runtime,
                 DriverOperation::PollRead,
                 read.outcome,
-                read.error);
+                std::move(read.error));
+        }
+        batchValues.push_back(std::move(read.values));
+    }
+
+    for (const auto& point : runtime.pollPlan.semanticReads) {
+        if (point.batchIndex >= batchValues.size() ||
+            point.registerOffset >= batchValues[point.batchIndex].size()) {
+            return MarkOffline(
+                runtime,
+                DriverOperation::PollRead,
+                DriverOutcome::InvalidResponse,
+                "resolved Modbus semantic read is outside its batch");
         }
 
         try {
@@ -308,7 +322,7 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
                 snapshot,
                 profile_,
                 point.pointName,
-                read.value);
+                batchValues[point.batchIndex][point.registerOffset]);
         }
         catch (const SemanticConversionError& error) {
             return MarkOffline(
@@ -545,21 +559,21 @@ DriverResult ModbusDriver::ConfirmPowerWrite(DeviceRuntime& runtime)
     };
 }
 
-ModbusDriver::RawReadResult ModbusDriver::ReadSemanticRegister(
-    const ResolvedRegisterLocation& location)
+ModbusDriver::RawBatchReadResult ModbusDriver::ReadSemanticBatch(
+    const ModbusSemanticReadBatch& batch)
 {
     RtuAdu request;
     try {
         request = BuildReadHoldingRegistersRequest(
-            location.slaveId,
-            location.address,
-            1U);
+            batch.slaveId,
+            batch.startAddress,
+            batch.quantity);
     }
     catch (const std::exception& error) {
-        return RawReadResult{
+        return RawBatchReadResult{
             .outcome = DriverOutcome::InvalidResponse,
             .success = false,
-            .value = 0,
+            .values = {},
             .error = error.what(),
         };
     }
@@ -569,10 +583,10 @@ ModbusDriver::RawReadResult ModbusDriver::ReadSemanticRegister(
         transaction = transport_.Execute(request);
     }
     catch (const std::exception& error) {
-        return RawReadResult{
+        return RawBatchReadResult{
             .outcome = DriverOutcome::IoError,
             .success = false,
-            .value = 0,
+            .values = {},
             .error =
                 std::string("Modbus transport failure: ") + error.what(),
         };
@@ -581,10 +595,10 @@ ModbusDriver::RawReadResult ModbusDriver::ReadSemanticRegister(
     switch (transaction.status) {
     case TransactionStatus::Success: {
         if (!transaction.response.has_value()) {
-            return RawReadResult{
+            return RawBatchReadResult{
                 .outcome = DriverOutcome::InvalidResponse,
                 .success = false,
-                .value = 0,
+                .values = {},
                 .error =
                     "successful Modbus transport result has no parsed response",
             };
@@ -592,82 +606,114 @@ ModbusDriver::RawReadResult ModbusDriver::ReadSemanticRegister(
 
         const auto& response = *transaction.response;
         if (response.status != ResponseStatus::Success ||
-            response.slaveId != location.slaveId ||
+            response.slaveId != batch.slaveId ||
             response.function != Function::ReadHoldingRegisters ||
-            response.registers.size() != 1U) {
-            return RawReadResult{
+            response.registers.size() != batch.quantity) {
+            return RawBatchReadResult{
                 .outcome = DriverOutcome::InvalidResponse,
                 .success = false,
-                .value = 0,
+                .values = {},
                 .error =
-                    "Modbus semantic read response does not match the request",
+                    "Modbus semantic batch response does not match the request",
             };
         }
 
-        return RawReadResult{
+        return RawBatchReadResult{
             .outcome = DriverOutcome::Success,
             .success = true,
-            .value = response.registers.front(),
+            .values = response.registers,
             .error = {},
         };
     }
 
     case TransactionStatus::Timeout:
-        return RawReadResult{
+        return RawBatchReadResult{
             .outcome = DriverOutcome::Timeout,
             .success = false,
-            .value = 0,
+            .values = {},
             .error = TransactionError(
                 transaction,
                 "Modbus semantic read timed out"),
         };
 
     case TransactionStatus::IoError:
-        return RawReadResult{
+        return RawBatchReadResult{
             .outcome = DriverOutcome::IoError,
             .success = false,
-            .value = 0,
+            .values = {},
             .error = TransactionError(
                 transaction,
                 "Modbus semantic read I/O error"),
         };
 
     case TransactionStatus::Exception:
-        return RawReadResult{
+        return RawBatchReadResult{
             .outcome = DriverOutcome::InvalidResponse,
             .success = false,
-            .value = 0,
+            .values = {},
             .error = TransactionError(
                 transaction,
                 "Modbus semantic read returned an exception"),
         };
 
     case TransactionStatus::InvalidRequest:
-        return RawReadResult{
+        return RawBatchReadResult{
             .outcome = DriverOutcome::InvalidResponse,
             .success = false,
-            .value = 0,
+            .values = {},
             .error = TransactionError(
                 transaction,
                 "Modbus semantic read request is invalid"),
         };
 
     case TransactionStatus::InvalidResponse:
-        return RawReadResult{
+        return RawBatchReadResult{
             .outcome = DriverOutcome::InvalidResponse,
             .success = false,
-            .value = 0,
+            .values = {},
             .error = TransactionError(
                 transaction,
                 "Modbus semantic read returned an invalid response"),
         };
     }
 
-    return RawReadResult{
+    return RawBatchReadResult{
         .outcome = DriverOutcome::InvalidResponse,
         .success = false,
-        .value = 0,
+        .values = {},
         .error = "unknown Modbus transaction status",
+    };
+}
+
+ModbusDriver::RawReadResult ModbusDriver::ReadSemanticRegister(
+    const ResolvedRegisterLocation& location)
+{
+    RawBatchReadResult batch = ReadSemanticBatch(ModbusSemanticReadBatch{
+        .slaveId = location.slaveId,
+        .startAddress = location.address,
+        .quantity = 1U,
+    });
+    if (!batch.success) {
+        return RawReadResult{
+            .outcome = batch.outcome,
+            .success = false,
+            .value = 0,
+            .error = std::move(batch.error),
+        };
+    }
+    if (batch.values.size() != 1U) {
+        return RawReadResult{
+            .outcome = DriverOutcome::InvalidResponse,
+            .success = false,
+            .value = 0,
+            .error = "single-register Modbus semantic read returned wrong size",
+        };
+    }
+    return RawReadResult{
+        .outcome = DriverOutcome::Success,
+        .success = true,
+        .value = batch.values.front(),
+        .error = {},
     };
 }
 

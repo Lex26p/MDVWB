@@ -60,18 +60,25 @@ std::uint16_t RequestWriteValue(const mdv::modbus::RtuAdu& request)
 
 mdv::modbus::TransactionResult ReadSuccess(
     const mdv::modbus::RtuAdu& request,
-    std::uint16_t value)
+    std::vector<std::uint16_t> values)
 {
     mdv::modbus::ParsedResponse response;
     response.status = mdv::modbus::ResponseStatus::Success;
     response.slaveId = request[0];
     response.function = mdv::modbus::Function::ReadHoldingRegisters;
-    response.registers = {value};
+    response.registers = std::move(values);
 
     mdv::modbus::TransactionResult result;
     result.status = mdv::modbus::TransactionStatus::Success;
     result.response = std::move(response);
     return result;
+}
+
+mdv::modbus::TransactionResult ReadSuccess(
+    const mdv::modbus::RtuAdu& request,
+    std::uint16_t value)
+{
+    return ReadSuccess(request, std::vector<std::uint16_t>{value});
 }
 
 mdv::modbus::TransactionResult WriteSuccess(
@@ -114,6 +121,34 @@ public:
         }
     }
 
+    std::vector<mdv::modbus::RtuAdu> requests;
+};
+
+class BatchingTransport final
+    : public mdv::modbus::ITransactionTransport {
+public:
+    [[nodiscard]] mdv::modbus::TransactionResult Execute(
+        const mdv::modbus::RtuAdu& request) override
+    {
+        requests.push_back(request);
+        Require(RequestFunction(request) == 0x03U, "batching transport received a write");
+        const auto address = RequestAddress(request);
+        const auto quantity = RequestQuantity(request);
+        if (address == 40039U && quantity == 1U) {
+            return ReadSuccess(request, 24U);
+        }
+        if (address == 40028U && quantity == 2U) {
+            if (malformedBatch) {
+                return ReadSuccess(request, std::vector<std::uint16_t>{0U});
+            }
+            return ReadSuccess(request, std::vector<std::uint16_t>{1U, 235U});
+        }
+        throw std::runtime_error(
+            "unexpected batched test request " + std::to_string(address) +
+            "/" + std::to_string(quantity));
+    }
+
+    bool malformedBatch = false;
     std::vector<mdv::modbus::RtuAdu> requests;
 };
 
@@ -269,6 +304,29 @@ mdv::modbus::ModbusProfile ProductionProfile()
         "profiles/modbus/vrf_add_controller.json");
 }
 
+mdv::modbus::ModbusProfile AdjacentAndSharedProfile()
+{
+    auto profile = ProductionProfile();
+    profile.capabilities.roomTemperature = true;
+
+    mdv::modbus::PointDefinition room;
+    room.type = mdv::modbus::PointType::Number;
+    room.rawType = mdv::modbus::RawType::UInt16;
+    room.read = mdv::modbus::RegisterLocation{
+        .space = mdv::modbus::RegisterSpace::HoldingRegister,
+        .address = 40029U,
+        .reference = std::nullopt,
+    };
+    room.transform = mdv::modbus::NumericTransform{
+        .scale = 0.1,
+        .offset = 0.0,
+    };
+    profile.points["roomTemperature"] = room;
+    profile.points.at("alarmCode").read->address = 40028U;
+    profile.points.at("alarmCode").read->reference.reset();
+    return profile;
+}
+
 void InitializeOne(
     mdv::modbus::ModbusDriver& driver,
     bool expectedPower = true)
@@ -341,6 +399,70 @@ void TestProductionProfileReadOnlyPolling()
         RequestAddress(transport.requests[3]) == 40130U,
         "logical 2 probe did not apply +91 register stride");
     Require(driver.NextPollAddress() == 1U, "round robin did not wrap");
+}
+
+void TestAdjacentReadsAreBatchedAndSharedValuesReused()
+{
+    auto profile = AdjacentAndSharedProfile();
+    BatchingTransport transport;
+    mdv::modbus::ModbusDriver driver({1U}, profile, transport);
+
+    const auto result = driver.ProcessNext();
+    Require(result.outcome == mdv::DriverOutcome::Success, "batched poll failed");
+    Require(transport.requests.size() == 2U, "batched poll used the wrong transaction count");
+    Require(
+        RequestAddress(transport.requests[0]) == 40039U &&
+            RequestQuantity(transport.requests[0]) == 1U,
+        "batched poll did not begin with the profile probe");
+    Require(
+        RequestAddress(transport.requests[1]) == 40028U &&
+            RequestQuantity(transport.requests[1]) == 2U,
+        "adjacent semantic registers were not combined");
+
+    const auto state = driver.DeviceStateByAddress(1U);
+    Require(state.online && state.hasState, "batched snapshot is not factual");
+    Require(state.power, "shared Power register decoded incorrectly");
+    Require(
+        state.roomTemperature.has_value() &&
+            *state.roomTemperature == 23.5,
+        "adjacent room temperature decoded incorrectly");
+    Require(state.alarmCode == 1, "shared raw register was not reused for AlarmCode");
+
+    const auto& metrics = driver.PollPlanMetrics();
+    Require(
+        metrics.totalTransactionsPerCycle == 4U &&
+            metrics.optimizedTotalTransactionsPerCycle == 2U &&
+            metrics.savedTransactionsPerCycle == 2U,
+        "driver optimization metrics do not match executed traffic");
+}
+
+void TestMalformedBatchPreservesPreviousFactualState()
+{
+    auto profile = AdjacentAndSharedProfile();
+    BatchingTransport transport;
+    mdv::modbus::ModbusDriver driver({1U}, profile, transport);
+
+    Require(
+        driver.ProcessNext().outcome == mdv::DriverOutcome::Success,
+        "initial batched snapshot failed");
+    const auto factual = driver.DeviceStateByAddress(1U);
+
+    transport.malformedBatch = true;
+    const auto failed = driver.ProcessNext();
+    Require(
+        failed.outcome == mdv::DriverOutcome::InvalidResponse,
+        "malformed batch was not rejected");
+
+    const auto after = driver.DeviceStateByAddress(1U);
+    Require(!after.online, "malformed batch left the device online");
+    Require(after.hasState, "malformed batch erased the prior factual snapshot");
+    Require(after.power == factual.power, "malformed batch changed factual Power");
+    Require(
+        after.roomTemperature == factual.roomTemperature,
+        "malformed batch changed factual room temperature");
+    Require(
+        after.alarmCode == factual.alarmCode,
+        "malformed batch changed factual AlarmCode");
 }
 
 void TestFailedSnapshotDoesNotPublishPartialValues()
@@ -695,6 +817,13 @@ void TestResolvedPollPlanBaselineIsExposed()
         metrics.registersRequestedPerCycle == 6U,
         "driver register baseline is wrong");
     Require(
+        metrics.optimizedSemanticTransactionsPerCycle == 4U &&
+            metrics.optimizedTotalTransactionsPerCycle == 6U &&
+            metrics.optimizedRegistersRequestedPerCycle == 6U &&
+            metrics.reusedSemanticReadsPerCycle == 0U &&
+            metrics.savedTransactionsPerCycle == 0U,
+        "driver production optimization metrics are wrong");
+    Require(
         transport.requests.empty(),
         "building the resolved poll plan generated Modbus traffic");
 }
@@ -735,6 +864,8 @@ int main()
 {
     try {
         TestProductionProfileReadOnlyPolling();
+        TestAdjacentReadsAreBatchedAndSharedValuesReused();
+        TestMalformedBatchPreservesPreviousFactualState();
         TestFailedSnapshotDoesNotPublishPartialValues();
         TestPowerWriteRequiresFactualState();
         TestPowerWriteAndReadBackConfirmation();

@@ -67,6 +67,13 @@ private:
         std::string error;
     };
 
+    struct RawBatchReadResult {
+        DriverOutcome outcome = DriverOutcome::InvalidResponse;
+        bool success = false;
+        std::vector<std::uint16_t> values;
+        std::string error;
+    };
+
     struct WorkItem {
         std::uint8_t logicalAddress = 0;
         std::uint64_t revision = 0;
@@ -80,6 +87,8 @@ private:
     [[nodiscard]] DriverResult ExecutePowerWrite(DeviceRuntime& runtime);
     [[nodiscard]] DriverResult ConfirmPowerWrite(DeviceRuntime& runtime);
 
+    [[nodiscard]] RawBatchReadResult ReadSemanticBatch(
+        const ModbusSemanticReadBatch& batch);
     [[nodiscard]] RawReadResult ReadSemanticRegister(
         const ResolvedRegisterLocation& location);
 
