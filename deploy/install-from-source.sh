@@ -88,12 +88,15 @@ BUILT_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
 STAGING=${TMPDIR:-/tmp}/mdvwb-source-package.$$
 trap 'rm -rf "$STAGING"' EXIT HUP INT TERM
-mkdir -p "$STAGING/www"
+mkdir -p "$STAGING/www" "$STAGING/modbus-profiles"
 
 install -m 0755 "$BUILD_DIR/MDVWB" "$STAGING/MDVWB"
 install -m 0755 "$BUILD_DIR/mdvwb-offline" "$STAGING/mdvwb-offline"
 install -m 0755 "$BUILD_DIR/mdvwb-manager" "$STAGING/mdvwb-manager"
 install -m 0755 "$BUILD_DIR/mdvwb-scheduler" "$STAGING/mdvwb-scheduler"
+install -m 0755 "$BUILD_DIR/mdvwb-modbus" "$STAGING/mdvwb-modbus"
+install -m 0644 "$SOURCE_DIR/profiles/modbus/vrf_add_controller.json" \
+    "$STAGING/modbus-profiles/vrf_add_controller.json"
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" "$STAGING/mdvwb-run"
 install -m 0755 "$SCRIPT_DIR/mdvwb-setup" "$STAGING/mdvwb-setup"
 install -m 0755 "$SCRIPT_DIR/offline-install.sh" "$STAGING/offline-install.sh"
@@ -129,11 +132,11 @@ sed \
     sha256sum -c SHA256SUMS
 )
 
-set -- "$OPERATION" --package "$STAGING" --method source
+set -- "$OPERATION"
 [ "$FORCE" -eq 0 ] || set -- "$@" --force
 [ "$ALLOW_DOWNGRADE" -eq 0 ] || set -- "$@" --allow-downgrade
 [ "$DRY_RUN" -eq 0 ] || set -- "$@" --dry-run
 [ "$NO_BACKUP" -eq 0 ] || set -- "$@" --no-backup
 [ -z "$BACKUP_DIR" ] || set -- "$@" --backup-dir "$BACKUP_DIR"
 
-sh "$SCRIPT_DIR/mdvwb-setup" "$@"
+MDVWB_INSTALL_METHOD=source sh "$STAGING/offline-install.sh" "$@"

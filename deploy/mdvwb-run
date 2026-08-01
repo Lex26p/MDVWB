@@ -3,6 +3,7 @@ set -eu
 
 CONFIG_FILE=${MDVWB_CONFIG_FILE:-/etc/default/mdvwb}
 BINARY=${MDVWB_BINARY:-/usr/local/bin/MDVWB}
+MODBUS_BINARY=${MDVWB_MODBUS_BINARY:-/usr/local/lib/mdvwb/mdvwb-modbus}
 OFFLINE_BINARY=${MDVWB_OFFLINE_BINARY:-/usr/local/bin/mdvwb-offline}
 MODE=run
 
@@ -32,8 +33,12 @@ MDVWB_PROTOCOL=${MDVWB_PROTOCOL:-mdv}
 MDVWB_MASTER_ID=${MDVWB_MASTER_ID:-0}
 MDVWB_PERIOD_MS=${MDVWB_PERIOD_MS:-150}
 MDVWB_RESPONSE_TIMEOUT_MS=${MDVWB_RESPONSE_TIMEOUT_MS:-130}
+MDVWB_MODBUS_RESPONSE_TIMEOUT_MS=${MDVWB_MODBUS_RESPONSE_TIMEOUT_MS:-200}
 MDVWB_MQTT_HOST=${MDVWB_MQTT_HOST:-127.0.0.1}
 MDVWB_MQTT_PORT=${MDVWB_MQTT_PORT:-1883}
+MDVWB_MQTT_USER=${MDVWB_MQTT_USER:-}
+MDVWB_MQTT_PASSWORD=${MDVWB_MQTT_PASSWORD:-}
+MDVWB_MQTT_CLIENT_ID=${MDVWB_MQTT_CLIENT_ID:-}
 MDVWB_MQTT_KEEPALIVE=${MDVWB_MQTT_KEEPALIVE:-60}
 MDVWB_MQTT_RECONNECT=${MDVWB_MQTT_RECONNECT:-1}
 MDVWB_MQTT_RECONNECT_MAX=${MDVWB_MQTT_RECONNECT_MAX:-10}
@@ -73,11 +78,24 @@ else
     : "${MDVWB_PORT:?Set MDVWB_PORT in $CONFIG_FILE}"
 
     if [ "$MDVWB_PROTOCOL" = "modbus_rtu" ]; then
-        # Milestone 8 deliberately stops before live Modbus polling/MQTT.
-        # Refuse to fall through to the legacy MDV wire protocol: sending C0
-        # frames to a Modbus RTU bus would be an unsafe compatibility failure.
-        echo "Modbus RTU runtime driver is not enabled yet; configuration/profile validation succeeded but no serial traffic was sent." >&2
-        exit 4
+        if [ ! -x "$MODBUS_BINARY" ]; then
+            echo "MDVWB Modbus runtime is missing or not executable: $MODBUS_BINARY" >&2
+            exit 3
+        fi
+
+        # Sourced assignment files do not automatically export their values.
+        # Export the complete, validated protocol handoff for the internal
+        # Modbus runtime, then replace this wrapper process with it.
+        export MDVWB_ADDRESSES MDVWB_PORT MDVWB_BUS
+        export MDVWB_MODBUS_PROFILE MDVWB_MODBUS_PROFILE_DIR
+        export MDVWB_MODBUS_BAUD_RATE MDVWB_MODBUS_DATA_BITS
+        export MDVWB_MODBUS_PARITY MDVWB_MODBUS_STOP_BITS
+        export MDVWB_MODBUS_RESPONSE_TIMEOUT_MS MDVWB_PERIOD_MS
+        export MDVWB_MQTT_HOST MDVWB_MQTT_PORT MDVWB_MQTT_USER
+        export MDVWB_MQTT_PASSWORD MDVWB_MQTT_CLIENT_ID
+        export MDVWB_MQTT_KEEPALIVE MDVWB_MQTT_RECONNECT
+        export MDVWB_MQTT_RECONNECT_MAX MDVWB_PUBLISH_POLL_ADDRESS
+        exec "$MODBUS_BINARY"
     fi
 
     if [ ! -x "$BINARY" ]; then
@@ -98,9 +116,9 @@ else
         --mqtt-reconnect-max "$MDVWB_MQTT_RECONNECT_MAX"
 fi
 
-if [ -n "${MDVWB_MQTT_USER:-}" ]; then
+if [ -n "$MDVWB_MQTT_USER" ]; then
     set -- "$@" --mqtt-user "$MDVWB_MQTT_USER"
-    if [ -n "${MDVWB_MQTT_PASSWORD:-}" ]; then
+    if [ -n "$MDVWB_MQTT_PASSWORD" ]; then
         set -- "$@" --mqtt-password "$MDVWB_MQTT_PASSWORD"
     fi
 fi

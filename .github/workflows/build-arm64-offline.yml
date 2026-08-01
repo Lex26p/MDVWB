@@ -108,6 +108,7 @@ jobs:
               python3 -m json.tool deploy/buses.default.json >/dev/null
               python3 -m json.tool deploy/dashboard.default.json >/dev/null
               python3 -m json.tool deploy/schedules.default.json >/dev/null
+              python3 -m json.tool profiles/modbus/vrf_add_controller.json >/dev/null
 
               rm -rf out/build/arm64-release
               cmake -S . -B out/build/arm64-release \
@@ -123,6 +124,8 @@ jobs:
               ./out/build/arm64-release/MDVWB --version |
                 grep -F "$PROJECT_VERSION"
               ./out/build/arm64-release/MDVWB --self-test
+              ./out/build/arm64-release/mdvwb-modbus --version |
+                grep -F "$PROJECT_VERSION"
               ./out/build/arm64-release/mdvwb-offline --self-test
               ./out/build/arm64-release/mdvwb-manager \
                 validate config/buses.example.json
@@ -136,7 +139,10 @@ jobs:
         run: |
           set -euxo pipefail
           rm -rf dist
-          mkdir -p dist/MDVWB-arm64/www dist/MDVWB-arm64/docs
+          mkdir -p \
+            dist/MDVWB-arm64/www \
+            dist/MDVWB-arm64/docs \
+            dist/MDVWB-arm64/modbus-profiles
 
           install -m 0755 out/build/arm64-release/MDVWB \
             dist/MDVWB-arm64/MDVWB
@@ -146,6 +152,10 @@ jobs:
             dist/MDVWB-arm64/mdvwb-manager
           install -m 0755 out/build/arm64-release/mdvwb-scheduler \
             dist/MDVWB-arm64/mdvwb-scheduler
+          install -m 0755 out/build/arm64-release/mdvwb-modbus \
+            dist/MDVWB-arm64/mdvwb-modbus
+          install -m 0644 profiles/modbus/vrf_add_controller.json \
+            dist/MDVWB-arm64/modbus-profiles/vrf_add_controller.json
 
           install -m 0755 deploy/mdvwb-run \
             dist/MDVWB-arm64/mdvwb-run
@@ -250,6 +260,9 @@ jobs:
               cd "$VERIFY_ROOT/MDVWB-arm64"
 
               sha256sum -c SHA256SUMS
+              test -x ./mdvwb-modbus
+              test -r ./modbus-profiles/vrf_add_controller.json
+              ./mdvwb-modbus --version | grep -F "$PROJECT_VERSION"
               sh ./offline-install.sh verify --package-only
               sh ./offline-install.sh version |
                 grep -F "version=$PROJECT_VERSION"

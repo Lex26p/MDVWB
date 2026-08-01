@@ -136,6 +136,34 @@ target_include_directories(mdvwb_modbus_driver PUBLIC ${MDVWB_DRIVER_DIR})
 target_link_libraries(mdvwb_modbus_driver
     PUBLIC mdvwb_modbus_scan mdvwb_modbus_profile mdvwb_modbus_rtu)
 
+add_library(mdvwb_modbus_runtime_config STATIC
+    ${MDVWB_DRIVER_DIR}/modbus_runtime_config.cpp
+    ${MDVWB_DRIVER_DIR}/modbus_runtime_config.h
+)
+target_compile_features(mdvwb_modbus_runtime_config PUBLIC cxx_std_20)
+target_include_directories(mdvwb_modbus_runtime_config
+    PUBLIC ${MDVWB_DRIVER_DIR})
+target_link_libraries(mdvwb_modbus_runtime_config
+    PUBLIC mdvwb_modbus_profile mdvwb_serial_port)
+
+# Internal protocol-specific runtime selected by deploy/mdvwb-run. It is not a
+# separate public service: mdvwb@N still owns exactly one process/serial port.
+add_executable(mdvwb-modbus
+    ${MDVWB_DRIVER_DIR}/modbus_runtime_main.cpp
+    ${MDVWB_DRIVER_DIR}/mdv_mqtt.cpp
+    ${MDVWB_DRIVER_DIR}/mdv_mqtt.h
+    ${MDVWB_DRIVER_DIR}/mdv_metadata.cpp
+    ${MDVWB_DRIVER_DIR}/mdv_metadata.h
+)
+target_compile_features(mdvwb-modbus PRIVATE cxx_std_20)
+target_compile_definitions(mdvwb-modbus
+    PRIVATE MDVWB_VERSION="${PROJECT_VERSION}")
+target_include_directories(mdvwb-modbus PRIVATE ${MDVWB_DRIVER_DIR})
+target_link_libraries(mdvwb-modbus PRIVATE
+    mdvwb_modbus_runtime_config
+    mdvwb_modbus_driver
+    mdvwb_mosquitto_transport)
+
 add_executable(mdvwb-offline
     ${MDVWB_DRIVER_DIR}/mdv_offline.cpp
 )
@@ -324,6 +352,23 @@ target_link_libraries(mdvwb_modbus_driver_test PRIVATE mdvwb_modbus_driver)
 target_compile_definitions(mdvwb_modbus_driver_test
     PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
+add_executable(mdvwb_modbus_runtime_config_test
+    ${MDVWB_DRIVER_TEST_DIR}/modbus_runtime_config_test.cpp
+)
+target_link_libraries(mdvwb_modbus_runtime_config_test
+    PRIVATE mdvwb_modbus_runtime_config)
+target_compile_definitions(mdvwb_modbus_runtime_config_test
+    PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_executable(mdvwb_modbus_mqtt_integration_test
+    ${MDVWB_DRIVER_TEST_DIR}/modbus_mqtt_integration_test.cpp
+    ${MDVWB_DRIVER_DIR}/mdv_mqtt.cpp
+)
+target_link_libraries(mdvwb_modbus_mqtt_integration_test
+    PRIVATE mdvwb_modbus_driver)
+target_compile_definitions(mdvwb_modbus_mqtt_integration_test
+    PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
 add_executable(mdvwb_buses_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_buses_config_test.cpp
 )
@@ -435,6 +480,8 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_modbus_profile
     mdvwb_modbus_scan
     mdvwb_modbus_driver
+    mdvwb_modbus_runtime_config
+    mdvwb-modbus
     mdvwb-offline
     mdvwb_mqtt_delivery_test
     mdvwb_driver_fairness_test
@@ -449,6 +496,8 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_modbus_vrf_reference_test
     mdvwb_modbus_vrf_profile_test
     mdvwb_modbus_driver_test
+    mdvwb_modbus_runtime_config_test
+    mdvwb_modbus_mqtt_integration_test
     mdvwb_buses_config
     mdvwb_modbus_bus_config
     mdvwb_dashboard_config
@@ -511,6 +560,8 @@ add_test(NAME mdvwb_modbus_scan_execute_test COMMAND mdvwb_modbus_scan_execute_t
 add_test(NAME mdvwb_modbus_vrf_reference_test COMMAND mdvwb_modbus_vrf_reference_test)
 add_test(NAME mdvwb_modbus_vrf_profile_test COMMAND mdvwb_modbus_vrf_profile_test)
 add_test(NAME mdvwb_modbus_driver_test COMMAND mdvwb_modbus_driver_test)
+add_test(NAME mdvwb_modbus_runtime_config_test COMMAND mdvwb_modbus_runtime_config_test)
+add_test(NAME mdvwb_modbus_mqtt_integration_test COMMAND mdvwb_modbus_mqtt_integration_test)
 add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
 add_test(NAME mdvwb_modbus_buses_config_test COMMAND mdvwb_modbus_buses_config_test)
 add_test(NAME mdvwb_modbus_bus_profile_test COMMAND mdvwb_modbus_bus_profile_test)
@@ -535,6 +586,8 @@ add_test(NAME mdvwb_mqtt_command_delivery_test COMMAND mdvwb_mqtt_command_delive
 include(GNUInstallDirs)
 install(TARGETS MDVWB mdvwb-offline mdvwb-manager mdvwb-scheduler
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS mdvwb-modbus
+    RUNTIME DESTINATION ${CMAKE_INSTALL_LIBDIR}/mdvwb)
 install(DIRECTORY profiles/modbus/
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/mdvwb/modbus-profiles
     FILES_MATCHING PATTERN "*.json")

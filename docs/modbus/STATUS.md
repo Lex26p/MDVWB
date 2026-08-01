@@ -1,6 +1,6 @@
 # Modbus implementation status
 
-> Last updated: 2026-07-31
+> Last updated: 2026-08-01
 >
 > This file records what has actually been completed or prepared for the Modbus work.
 >
@@ -8,17 +8,17 @@
 
 ## Current stage
 
-**Milestone 8 complete after successful build/CTest: Modbus bus configuration and managed runtime handoff.**
+**Milestone 9 complete after successful build/CTest: live profile-driven Modbus runtime through the existing MQTT semantic boundary.**
 
-Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion, logical-address resolution, profile-driven scan, the first production equipment profile, and protocol-aware bus/service configuration are implemented. A live register-driven Modbus device driver and Modbus MQTT state/control loop are still **not implemented**.
+Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion, logical-address resolution, profile-driven scan, the first production equipment profile, protocol-aware bus/service configuration, live polling, confirmed Power writes and MQTT state/control integration are implemented.
 
-The existing MDV driver remains behind the protocol-independent boundary. Modbus now has reusable RTU transport primitives and a deterministic data-driven profile loading boundary.
+The existing MDV runtime remains unchanged behind the same protocol-independent boundary. The per-bus systemd instance still owns exactly one process and one serial port; `mdvwb-run` now selects the MDV executable or the internal Modbus runtime from the managed protocol setting.
 
 ## Current overall status
 
 ```text
 Documentation / design     PREPARED
-Runtime implementation     MILESTONE 8
+Runtime implementation     MILESTONE 9
 Hardware validation        PARTIAL (profile facts only)
 Production release         NOT STARTED
 ```
@@ -56,10 +56,10 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] Scan of logical addresses `1..63`
 - [x] First production Modbus equipment profile
 - [x] Manager/bus configuration integration
-- [ ] MQTT integration
+- [x] MQTT integration
 - [ ] Web configuration UI
 - [ ] Real hardware validation
-- [ ] Packaging/deployment updates
+- [x] Modbus runtime packaging/deployment handoff
 - [ ] Second independent profile proving architecture reuse
 
 ## Decisions already agreed
@@ -212,28 +212,26 @@ Known architectural characteristics already identified:
 - status and control registers may differ;
 - the common MDVWB logical address limit remains `1..63`.
 
-The exact register mapping has not yet been promoted to a production profile.
-
-It must first be documented separately from the generic profile specification.
+The confirmed subset is implemented in `profiles/modbus/vrf_add_controller.json`. Power and AlarmCode are enabled; ambiguous Mode, FanSpeed, SetTemperature and physical RoomTemperature semantics remain disabled until hardware evidence is available.
 
 ## Runtime boundary implemented
 
 At this status point:
 
 - `IDeviceDriver` defines protocol-independent command and state access;
-- `MdvDriver` implements that interface while preserving existing MDV behavior;
+- `MdvDriver` and `ModbusDriver` both implement that interface;
 - MQTT command routing uses semantic `DriverCommand` values;
-- MQTT state publication consumes `DriverDeviceState` rather than `DeviceContext`/raw MDV fields;
-- Modbus RTU framing/serial transport and profile schema-v1 loading/validation exist;
-- no production equipment profile or live profile-driven Modbus device driver exists yet;
-- no manager configuration schema has been changed for Modbus;
-- no web UI has been changed for Modbus;
-- no Modbus service has been enabled;
-- no installation/deployment files have been changed for Modbus.
+- MQTT state publication consumes `DriverDeviceState`, not protocol frames or raw registers;
+- the first Modbus runtime performs profile-driven factual polling and confirmed Power writes;
+- manager-generated service configuration selects the protocol and production profile;
+- `mdvwb@N.service` still launches one `mdvwb-run` wrapper per physical bus;
+- the wrapper selects `/usr/local/bin/MDVWB` for MDV or the internal `/usr/local/lib/mdvwb/mdvwb-modbus` runtime for Modbus;
+- `mdvwb-offline` remains shared and protocol-independent;
+- the web UI has not yet been changed for Modbus capabilities/configuration.
 
 ## Verification status
 
-Milestones 1 through 8 were accepted only after local build and full CTest verification before their commits.
+Milestones 1 through 9 were accepted only after local build and full CTest verification before their commits.
 
 Profile-loader tests cover valid schema-v1 profiles, all three current addressing declarations, transport/register/probe validation, numeric and enum declaration validation, file loading, isolated invalid files, deterministic diagnostics and duplicate-ID rejection.
 
@@ -367,7 +365,7 @@ The current logical identity follows the controller's sorted `Y` slot. A topolog
 
 Milestone 7 tests load the production JSON, verify literal addresses and stride resolution, reject invalid probe presence declarations, and verify the chosen `0 -> NotFound`, non-zero -> `Found` scan behavior through the common transaction boundary.
 
-No normal Modbus polling/control driver is included yet.
+Normal profile-driven Modbus polling and confirmed Power control are implemented by `ModbusDriver`.
 
 ## Protocol-aware bus/service configuration implemented
 
@@ -382,20 +380,40 @@ Milestone 8 now provides:
 - an install rule for shipped JSON profiles under the MDVWB runtime support directory;
 - a deployment-template update carrying the new protocol/runtime fields.
 
-The current `mdvwb-run` helper deliberately refuses `protocol=modbus_rtu` before opening the serial port because the live Modbus polling/MQTT worker is not yet implemented. This guard is intentional: a configured Modbus port must never fall through into the legacy MDV C0/C3 wire protocol. `--publish-offline` remains protocol-independent.
+`mdvwb-run` now performs an explicit protocol split. `protocol=mdv` preserves the existing `MDVWB` invocation, while `protocol=modbus_rtu` exports the validated profile/serial/MQTT environment and executes the internal `mdvwb-modbus` runtime. There is no fall-through from Modbus configuration into the legacy MDV C0/C3 wire protocol. `--publish-offline` remains protocol-independent.
 
-This means Milestone 8 completes the configuration, validation and service handoff boundary without pretending that Milestone 9's live Modbus MQTT driver already exists.
+The internal runtime is installed below `/usr/local/lib/mdvwb`; it is an implementation detail of the existing per-bus service, not a fifth public MDVWB application or a second process owning the same port.
+
+## Live Modbus MQTT runtime implemented
+
+Milestone 9 now provides:
+
+- a profile-driven `ModbusDriver` implementing the existing `IDeviceDriver` boundary;
+- atomic factual polling snapshots using the profile presence probe followed by enabled semantic reads;
+- consistent online/offline publication through the existing `Power`, `Alarm`, `AlarmCode` and `Status` topics;
+- existing `/devices/Fan-<bus>_<logical>/controls/<Control>/on1` command routing without manufacturer-specific MQTT topics;
+- profile-driven FC10 Power writes to the control register;
+- FC03 factual read-back before Power state is updated or published;
+- bounded write/confirmation retry and ordinary-poll fairness;
+- rejection of profile-disabled controls before any Modbus write traffic;
+- strict managed-environment parsing and runtime profile/serial revalidation before the port is opened;
+- an internal packaged `mdvwb-modbus` executable selected by `mdvwb-run`;
+- ARM64/source package staging for the internal runtime and the shipped `vrf_add_controller` JSON profile;
+- backward-compatible installer handoff that keeps old package-format fixtures valid, rejects torn Modbus payloads, and preserves the previous runtime/profile inside lifecycle backups;
+- regression tests proving that MDV launch behavior remains unchanged and that Modbus uses the same MQTT semantic contract.
+
+For the first production profile, normal polling reads the safe presence point plus Power and AlarmCode. A zero presence value publishes the ordinary existing offline representation (`Alarm=2`, `Status=7`). A successful FC10 response alone never changes factual Power; only matching FC03 read-back does.
+
+The current Modbus runtime supports only the capabilities enabled by the selected profile. For `vrf_add_controller`, MQTT Power commands are supported; Mode, Speed, SetTemp, Blinds and Blok commands are rejected without wire traffic. Capability-aware metadata and web control visibility belong to Milestone 10.
 
 ## Open design items
 
 These items are not yet final and should not be treated as implemented facts:
 
 - exact JSON Schema file;
-- exact profile installation paths;
-- exact Modbus library/internal implementation choice;
 - batching of adjacent register reads;
-- retry/poll timing;
-- local custom profile policy;
+- hardware-tuned retry/poll timing;
+- deployment and preservation policy for local custom profiles;
 - 32-bit values and word order;
 - specialized adapter API;
 - exact web UI layout for Modbus configuration;
@@ -446,11 +464,11 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-Begin **Milestone 9: MQTT/live Modbus driver integration** from `ROADMAP.md`.
+Begin **Milestone 10: web configuration UI and capability-aware presentation** from `ROADMAP.md`.
 
-The next task should implement the protocol-specific Modbus `IDeviceDriver` runtime behind the already protocol-independent MQTT boundary, consume the profile/service settings prepared by Milestone 8, publish only confirmed semantic values, and route supported commands through profile-driven Modbus writes.
+The next task should expose protocol/profile/serial configuration in the engineering UI, preserve existing MDV forms, and make available controls depend on declared profile capabilities rather than manufacturer/profile-name checks.
 
-The first production profile currently enables only Power and AlarmCode. Mode, FanSpeed, SetTemperature and RoomTemperature must remain disabled until their hardware behavior/conversion is verified.
+The first production profile currently enables only Power and AlarmCode. Mode, FanSpeed, SetTemperature and physical RoomTemperature must remain hidden or disabled until their hardware behavior/conversion is verified.
 
 ## Status update rules
 
