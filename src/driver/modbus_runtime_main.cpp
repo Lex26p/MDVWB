@@ -5,6 +5,7 @@
 #include "mdv_mqtt.h"
 #include "modbus_driver.h"
 #include "modbus_rtu_serial.h"
+#include "modbus_runtime_cadence.h"
 
 #include <algorithm>
 #include <chrono>
@@ -58,13 +59,20 @@ void RequestStop(int) noexcept
 }
 
 [[nodiscard]] std::chrono::milliseconds InitialSnapshotDelay(
-    const mdv::modbus::ModbusRuntimeConfig& config)
+    const mdv::modbus::ModbusRuntimeConfig& config,
+    const mdv::modbus::ModbusPollPlanMetrics& metrics)
 {
-    const auto oneFullPoll = config.transactionPeriod *
+    const auto transactionBudget = config.responseTimeout *
+        static_cast<std::int64_t>(
+            std::max<std::size_t>(
+                1U,
+                metrics.optimizedTotalTransactionsPerCycle));
+    const auto schedulingBudget = config.cadence.pollPeriod *
         static_cast<std::int64_t>(config.addresses.size());
     return std::max(
         std::chrono::milliseconds{3000},
-        oneFullPoll + std::chrono::milliseconds{1000});
+        transactionBudget + schedulingBudget +
+            std::chrono::milliseconds{1000});
 }
 
 int RunModbusRuntime()
@@ -88,7 +96,8 @@ int RunModbusRuntime()
     mdv::modbus::ModbusDriver driver(
         config.addresses,
         profile,
-        transport);
+        transport,
+        config.driverPolicy);
     mdv::MosquittoMqttClient mqtt(MqttOptions(config.mqtt));
     mdv::MqttCommandRouter router(config.busNumber, driver);
     mdv::MqttCommandService commandService(mqtt, router);
@@ -107,6 +116,7 @@ int RunModbusRuntime()
     std::signal(SIGINT, RequestStop);
     std::signal(SIGTERM, RequestStop);
 
+    const auto& metrics = driver.PollPlanMetrics();
     std::cout
         << "MDVWB Modbus runtime started: port=" << config.serialPort
         << ", bus=" << config.busNumber
@@ -123,12 +133,20 @@ int RunModbusRuntime()
         << static_cast<int>(config.serial.dataBits) << '/'
         << static_cast<int>(config.serial.stopBits)
         << ", response-timeout=" << config.responseTimeout.count() << " ms"
+        << ", cadence=" << config.cadence.pollPeriod.count() << '/'
+        << config.cadence.commandPeriod.count() << '/'
+        << config.cadence.retryPeriod.count() << " ms"
+        << ", retries=" << config.driverPolicy.maxWriteAttempts << '/'
+        << config.driverPolicy.maxConfirmationAttempts
+        << ", priority-burst="
+        << config.driverPolicy.maxPriorityOperationsBeforePoll
+        << ", poll-transactions=" << metrics.totalTransactionsPerCycle
+        << "->" << metrics.optimizedTotalTransactionsPerCycle
         << ", MQTT=" << config.mqtt.host << ':' << config.mqtt.port << '\n';
 
     bool mqttWasConnected = false;
     std::optional<std::chrono::steady_clock::time_point> initialSnapshotAt;
-    const auto initialSnapshotDelay = InitialSnapshotDelay(config);
-    auto nextSlot = std::chrono::steady_clock::now();
+    const auto initialSnapshotDelay = InitialSnapshotDelay(config, metrics);
 
     while (gStopRequested == 0) {
         const bool mqttConnected = mqtt.IsConnected();
@@ -154,6 +172,7 @@ int RunModbusRuntime()
             }
         }
 
+        const auto operationStarted = std::chrono::steady_clock::now();
         const auto result = driver.ProcessNext();
         statePublisher.PublishAfter(driver, result);
         systemPublisher.PublishAfter(result);
@@ -171,13 +190,11 @@ int RunModbusRuntime()
             std::cout << "Modbus MQTT initial state snapshot published.\n";
         }
 
-        nextSlot += config.transactionPeriod;
+        const auto nextStart = operationStarted +
+            mdv::modbus::ModbusOperationPeriod(result, config.cadence);
         const auto now = std::chrono::steady_clock::now();
-        if (nextSlot > now) {
-            std::this_thread::sleep_until(nextSlot);
-        }
-        else {
-            nextSlot = now;
+        if (nextStart > now) {
+            std::this_thread::sleep_until(nextStart);
         }
     }
 

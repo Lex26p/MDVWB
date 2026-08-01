@@ -828,6 +828,93 @@ void TestResolvedPollPlanBaselineIsExposed()
         "building the resolved poll plan generated Modbus traffic");
 }
 
+void TestConfiguredRetryAndFairnessPolicy()
+{
+    auto profile = ProductionProfile();
+
+    WriteFailureTransport writeTransport;
+    mdv::modbus::ModbusDriver writeDriver(
+        {1U},
+        profile,
+        writeTransport,
+        mdv::modbus::ModbusDriverPolicy{
+            .maxWriteAttempts = 2U,
+            .maxConfirmationAttempts = 3U,
+            .maxPriorityOperationsBeforePoll = 4U,
+        });
+    InitializeOne(writeDriver);
+    writeTransport.requests.clear();
+    writeDriver.ApplyCommand(mdv::DriverCommand{
+        .address = 1U,
+        .control = mdv::DriverControl::Power,
+        .value = false,
+    });
+    static_cast<void>(writeDriver.ProcessNext());
+    Require(writeDriver.HasQueuedWork(), "custom write retry ended too early");
+    static_cast<void>(writeDriver.ProcessNext());
+    Require(!writeDriver.HasQueuedWork(), "custom write retry exceeded its budget");
+    Require(writeTransport.requests.size() == 2U, "custom write retry count mismatch");
+
+    PowerTransport fairnessTransport;
+    fairnessTransport.applyWrites = false;
+    mdv::modbus::ModbusDriver fairnessDriver(
+        {1U},
+        profile,
+        fairnessTransport,
+        mdv::modbus::ModbusDriverPolicy{
+            .maxWriteAttempts = 3U,
+            .maxConfirmationAttempts = 3U,
+            .maxPriorityOperationsBeforePoll = 1U,
+        });
+    InitializeOne(fairnessDriver);
+    fairnessTransport.requests.clear();
+    fairnessDriver.ApplyCommand(mdv::DriverCommand{
+        .address = 1U,
+        .control = mdv::DriverControl::Power,
+        .value = false,
+    });
+    const auto write = fairnessDriver.ProcessNext();
+    Require(write.operation == mdv::DriverOperation::SetState,
+            "custom priority burst did not start with queued write");
+    const auto poll = fairnessDriver.ProcessNext();
+    Require(poll.operation == mdv::DriverOperation::PollRead,
+            "custom priority burst did not yield to polling");
+}
+
+void TestInvalidDriverPolicyRejected()
+{
+    auto profile = ProductionProfile();
+    ScriptedReadTransport transport;
+
+    for (const auto policy : {
+             mdv::modbus::ModbusDriverPolicy{
+                 .maxWriteAttempts = 0U,
+                 .maxConfirmationAttempts = 3U,
+                 .maxPriorityOperationsBeforePoll = 4U,
+             },
+             mdv::modbus::ModbusDriverPolicy{
+                 .maxWriteAttempts = 3U,
+                 .maxConfirmationAttempts = 11U,
+                 .maxPriorityOperationsBeforePoll = 4U,
+             },
+             mdv::modbus::ModbusDriverPolicy{
+                 .maxWriteAttempts = 3U,
+                 .maxConfirmationAttempts = 3U,
+                 .maxPriorityOperationsBeforePoll = 0U,
+             }}) {
+        bool rejected = false;
+        try {
+            mdv::modbus::ModbusDriver driver({1U}, profile, transport, policy);
+            static_cast<void>(driver);
+        }
+        catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        Require(rejected, "invalid Modbus driver policy was accepted");
+    }
+    Require(transport.requests.empty(), "policy validation generated bus traffic");
+}
+
 void TestInvalidConfiguredAddressesRejected()
 {
     auto profile = ProductionProfile();
@@ -876,6 +963,8 @@ int main()
         TestNewerCommandCancelsStaleWork();
         TestUnsupportedCommandsGenerateNoTraffic();
         TestResolvedPollPlanBaselineIsExposed();
+        TestConfiguredRetryAndFairnessPolicy();
+        TestInvalidDriverPolicyRejected();
         TestInvalidConfiguredAddressesRejected();
 
         std::cout << "MDVWB Modbus driver command tests: OK\n";

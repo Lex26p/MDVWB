@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #ifndef MDVWB_SOURCE_DIR
@@ -69,6 +70,11 @@ Environment ValidEnvironment()
         {"MDVWB_MODBUS_STOP_BITS", "1"},
         {"MDVWB_MODBUS_RESPONSE_TIMEOUT_MS", "230"},
         {"MDVWB_PERIOD_MS", "175"},
+        {"MDVWB_MODBUS_COMMAND_PERIOD_MS", "25"},
+        {"MDVWB_MODBUS_RETRY_PERIOD_MS", "650"},
+        {"MDVWB_MODBUS_WRITE_ATTEMPTS", "4"},
+        {"MDVWB_MODBUS_CONFIRMATION_ATTEMPTS", "5"},
+        {"MDVWB_MODBUS_PRIORITY_BURST", "6"},
         {"MDVWB_MQTT_HOST", "192.0.2.20"},
         {"MDVWB_MQTT_PORT", "1884"},
         {"MDVWB_MQTT_USER", "operator"},
@@ -102,8 +108,23 @@ void TestValidManagedEnvironment()
         config.responseTimeout == std::chrono::milliseconds(230),
         "response timeout mismatch");
     Require(
-        config.transactionPeriod == std::chrono::milliseconds(175),
-        "transaction period mismatch");
+        config.cadence.pollPeriod == std::chrono::milliseconds(175),
+        "poll period mismatch");
+    Require(
+        config.cadence.commandPeriod == std::chrono::milliseconds(25),
+        "command period mismatch");
+    Require(
+        config.cadence.retryPeriod == std::chrono::milliseconds(650),
+        "retry period mismatch");
+    Require(
+        config.driverPolicy.maxWriteAttempts == 4U,
+        "write attempt policy mismatch");
+    Require(
+        config.driverPolicy.maxConfirmationAttempts == 5U,
+        "confirmation attempt policy mismatch");
+    Require(
+        config.driverPolicy.maxPriorityOperationsBeforePoll == 6U,
+        "priority burst policy mismatch");
     Require(config.mqtt.host == "192.0.2.20", "MQTT host mismatch");
     Require(config.mqtt.port == 1884, "MQTT port mismatch");
     Require(config.mqtt.username == "operator", "MQTT username mismatch");
@@ -133,11 +154,47 @@ void TestDefaultsRemainDeterministic()
     Require(config.serial.baudRate == 9600U, "default baud rate mismatch");
     Require(config.responseTimeout == std::chrono::milliseconds(200),
             "default response timeout mismatch");
-    Require(config.transactionPeriod == std::chrono::milliseconds(150),
-            "default transaction period mismatch");
+    Require(config.cadence.pollPeriod == std::chrono::milliseconds(150),
+            "default poll period mismatch");
+    Require(config.cadence.commandPeriod == std::chrono::milliseconds(20),
+            "default command period mismatch");
+    Require(config.cadence.retryPeriod == std::chrono::milliseconds(500),
+            "default retry period mismatch");
+    Require(
+        config.driverPolicy.maxWriteAttempts ==
+            mdv::modbus::kMaxModbusWriteAttempts,
+        "default write attempt policy mismatch");
+    Require(
+        config.driverPolicy.maxConfirmationAttempts ==
+            mdv::modbus::kMaxModbusConfirmationAttempts,
+        "default confirmation attempt policy mismatch");
+    Require(
+        config.driverPolicy.maxPriorityOperationsBeforePoll ==
+            mdv::modbus::kMaxModbusPriorityOperationsBeforePoll,
+        "default priority burst mismatch");
     Require(config.mqtt.host == "127.0.0.1", "default MQTT host mismatch");
     Require(config.mqtt.port == 1883, "default MQTT port mismatch");
     Require(!config.publishPollAddress, "default poll-address flag mismatch");
+}
+
+void TestInvalidTuningRejected()
+{
+    for (const auto& [name, value, expected] : {
+             std::tuple{"MDVWB_PERIOD_MS", "0", "1..60000"},
+             std::tuple{"MDVWB_MODBUS_COMMAND_PERIOD_MS", "60001", "1..60000"},
+             std::tuple{"MDVWB_MODBUS_RETRY_PERIOD_MS", "0", "1..60000"},
+             std::tuple{"MDVWB_MODBUS_WRITE_ATTEMPTS", "11", "1..10"},
+             std::tuple{"MDVWB_MODBUS_CONFIRMATION_ATTEMPTS", "0", "1..10"},
+             std::tuple{"MDVWB_MODBUS_PRIORITY_BURST", "65", "1..64"}}) {
+        auto environment = ValidEnvironment();
+        environment[name] = value;
+        ExpectInvalid(
+            [&] {
+                static_cast<void>(mdv::modbus::ParseModbusRuntimeConfig(
+                    Lookup(environment)));
+            },
+            expected);
+    }
 }
 
 void TestInvalidEnvironmentRejected()
@@ -209,6 +266,7 @@ int main()
     try {
         TestValidManagedEnvironment();
         TestDefaultsRemainDeterministic();
+        TestInvalidTuningRejected();
         TestInvalidEnvironmentRejected();
         TestProfileSelectionAndTransportRevalidated();
         std::cout << "MDVWB Modbus runtime configuration tests: OK\n";

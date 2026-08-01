@@ -1,6 +1,8 @@
 #pragma once
 
+#include "modbus_driver.h"
 #include "modbus_profile.h"
+#include "modbus_runtime_cadence.h"
 #include "serial_port.h"
 
 #include <chrono>
@@ -39,8 +41,9 @@ struct ModbusRuntimeConfig {
         .stopBits = 1,
     };
 
-    std::chrono::milliseconds transactionPeriod{150};
+    ModbusRuntimeCadence cadence;
     std::chrono::milliseconds responseTimeout{200};
+    ModbusDriverPolicy driverPolicy;
     RuntimeMqttSettings mqtt;
     bool publishPollAddress = false;
 };

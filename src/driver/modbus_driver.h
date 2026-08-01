@@ -19,6 +19,13 @@ inline constexpr std::uint32_t kMaxModbusWriteAttempts = 3;
 inline constexpr std::uint32_t kMaxModbusConfirmationAttempts = 3;
 inline constexpr std::size_t kMaxModbusPriorityOperationsBeforePoll = 4;
 
+struct ModbusDriverPolicy {
+    std::uint32_t maxWriteAttempts = kMaxModbusWriteAttempts;
+    std::uint32_t maxConfirmationAttempts = kMaxModbusConfirmationAttempts;
+    std::size_t maxPriorityOperationsBeforePoll =
+        kMaxModbusPriorityOperationsBeforePoll;
+};
+
 // Profile-driven Modbus implementation of the protocol-neutral device boundary.
 //
 // Polling builds atomic factual snapshots. Supported commands are encoded by
@@ -29,7 +36,8 @@ public:
     ModbusDriver(
         std::vector<std::uint8_t> logicalAddresses,
         const ModbusProfile& profile,
-        ITransactionTransport& transport);
+        ITransactionTransport& transport,
+        ModbusDriverPolicy policy = {});
 
     [[nodiscard]] DriverResult ProcessNext() override;
     void ApplyCommand(const DriverCommand& command) override;
@@ -107,6 +115,7 @@ private:
     [[nodiscard]] DriverResult ProcessPoll();
 
     ModbusProfile profile_;
+    ModbusDriverPolicy policy_;
     ModbusPollPlanMetrics pollPlanMetrics_;
     ITransactionTransport& transport_;
     std::vector<DeviceRuntime> devices_;

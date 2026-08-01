@@ -66,6 +66,22 @@ namespace {
         : defaultValue;
 }
 
+[[nodiscard]] int IntegerInRange(
+    const EnvironmentLookup& lookup,
+    std::string_view name,
+    int defaultValue,
+    int minimum,
+    int maximum)
+{
+    const int value = IntegerValue(lookup, name, defaultValue);
+    if (value < minimum || value > maximum) {
+        Fail(
+            std::string(name) + " must be in range " +
+            std::to_string(minimum) + ".." + std::to_string(maximum));
+    }
+    return value;
+}
+
 [[nodiscard]] unsigned int PositiveUnsigned(
     int value,
     std::string_view name)
@@ -247,24 +263,51 @@ ModbusRuntimeConfig ParseModbusRuntimeConfig(
     };
     ValidateSerialSettings(result.serial);
 
-    const int periodMilliseconds = IntegerValue(
-        lookup,
-        "MDVWB_PERIOD_MS",
-        150);
-    const int responseMilliseconds = IntegerValue(
-        lookup,
-        "MDVWB_MODBUS_RESPONSE_TIMEOUT_MS",
-        200);
-    if (periodMilliseconds <= 0) {
-        Fail("MDVWB_PERIOD_MS must be positive");
-    }
-    if (responseMilliseconds <= 0) {
-        Fail("MDVWB_MODBUS_RESPONSE_TIMEOUT_MS must be positive");
-    }
-    result.transactionPeriod =
-        std::chrono::milliseconds(periodMilliseconds);
-    result.responseTimeout =
-        std::chrono::milliseconds(responseMilliseconds);
+    result.cadence.pollPeriod = std::chrono::milliseconds(
+        IntegerInRange(lookup, "MDVWB_PERIOD_MS", 150, 1, 60000));
+    result.cadence.commandPeriod = std::chrono::milliseconds(
+        IntegerInRange(
+            lookup,
+            "MDVWB_MODBUS_COMMAND_PERIOD_MS",
+            20,
+            1,
+            60000));
+    result.cadence.retryPeriod = std::chrono::milliseconds(
+        IntegerInRange(
+            lookup,
+            "MDVWB_MODBUS_RETRY_PERIOD_MS",
+            500,
+            1,
+            60000));
+    result.responseTimeout = std::chrono::milliseconds(
+        IntegerInRange(
+            lookup,
+            "MDVWB_MODBUS_RESPONSE_TIMEOUT_MS",
+            200,
+            1,
+            60000));
+
+    result.driverPolicy.maxWriteAttempts = static_cast<std::uint32_t>(
+        IntegerInRange(
+            lookup,
+            "MDVWB_MODBUS_WRITE_ATTEMPTS",
+            static_cast<int>(kMaxModbusWriteAttempts),
+            1,
+            10));
+    result.driverPolicy.maxConfirmationAttempts =
+        static_cast<std::uint32_t>(IntegerInRange(
+            lookup,
+            "MDVWB_MODBUS_CONFIRMATION_ATTEMPTS",
+            static_cast<int>(kMaxModbusConfirmationAttempts),
+            1,
+            10));
+    result.driverPolicy.maxPriorityOperationsBeforePoll =
+        static_cast<std::size_t>(IntegerInRange(
+            lookup,
+            "MDVWB_MODBUS_PRIORITY_BURST",
+            static_cast<int>(kMaxModbusPriorityOperationsBeforePoll),
+            1,
+            64));
 
     result.mqtt.host = OptionalValue(lookup, "MDVWB_MQTT_HOST")
         .value_or("127.0.0.1");

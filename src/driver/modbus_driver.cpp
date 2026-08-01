@@ -97,10 +97,27 @@ namespace {
 ModbusDriver::ModbusDriver(
     std::vector<std::uint8_t> logicalAddresses,
     const ModbusProfile& profile,
-    ITransactionTransport& transport)
+    ITransactionTransport& transport,
+    ModbusDriverPolicy policy)
     : profile_(profile),
+      policy_(policy),
       transport_(transport)
 {
+    if (policy_.maxWriteAttempts == 0U ||
+        policy_.maxWriteAttempts > 10U) {
+        throw std::invalid_argument(
+            "Modbus write attempts must be in range 1..10");
+    }
+    if (policy_.maxConfirmationAttempts == 0U ||
+        policy_.maxConfirmationAttempts > 10U) {
+        throw std::invalid_argument(
+            "Modbus confirmation attempts must be in range 1..10");
+    }
+    if (policy_.maxPriorityOperationsBeforePoll == 0U ||
+        policy_.maxPriorityOperationsBeforePoll > 64U) {
+        throw std::invalid_argument(
+            "Modbus priority burst must be in range 1..64");
+    }
     ModbusPollPlan plan = BuildModbusPollPlan(profile_, logicalAddresses);
     pollPlanMetrics_ = plan.metrics;
     devices_.reserve(plan.devices.size());
@@ -120,7 +137,7 @@ ModbusDriver::ModbusDriver(
 
 DriverResult ModbusDriver::ProcessNext()
 {
-    if (priorityOperations_ >= kMaxModbusPriorityOperationsBeforePoll) {
+    if (priorityOperations_ >= policy_.maxPriorityOperationsBeforePoll) {
         return ProcessPoll();
     }
 
@@ -442,7 +459,7 @@ DriverResult ModbusDriver::ExecutePowerWrite(DeviceRuntime& runtime)
             ? DriverOutcome::InvalidResponse
             : TransactionOutcome(transaction.status);
 
-    if (pending.writeAttempts < kMaxModbusWriteAttempts) {
+    if (pending.writeAttempts < policy_.maxWriteAttempts) {
         EnqueuePowerWrite(runtime);
     }
     else {
@@ -487,7 +504,7 @@ DriverResult ModbusDriver::ConfirmPowerWrite(DeviceRuntime& runtime)
         runtime.state.online = false;
 
         if (pending.confirmationAttempts <
-            kMaxModbusConfirmationAttempts) {
+            policy_.maxConfirmationAttempts) {
             EnqueuePowerConfirmation(runtime);
         }
         else {
@@ -530,7 +547,7 @@ DriverResult ModbusDriver::ConfirmPowerWrite(DeviceRuntime& runtime)
         // must not publish a false offline state. Retry the write while budget
         // remains and report this as a failed SetState operation.
         runtime.state.online = true;
-        if (pending.writeAttempts < kMaxModbusWriteAttempts) {
+        if (pending.writeAttempts < policy_.maxWriteAttempts) {
             pending.confirmationAttempts = 0;
             EnqueuePowerWrite(runtime);
         }

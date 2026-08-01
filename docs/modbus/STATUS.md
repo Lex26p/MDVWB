@@ -8,9 +8,9 @@
 
 ## Current stage
 
-**Milestone 10 complete after successful build/CTest and web checks: capability-aware Modbus bus configuration and safe profile-driven discovery are available in the existing management UI.**
+**Milestone 11 complete after successful build/CTest: the factual Modbus polling path now uses resolved plans, safe read batching, measured traffic metrics and bounded configurable cadence/retry policy.**
 
-Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion, logical-address resolution, the first production equipment profile, protocol-aware bus/service configuration, live polling, confirmed Power writes, MQTT integration, retained UI profile catalog, web bus editing and safe discovery of logical addresses `1..63` are implemented.
+Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion, logical-address resolution, the first production equipment profile, protocol-aware bus/service configuration, live polling, confirmed Power writes, MQTT integration, retained UI profile catalog, web bus editing, safe discovery of logical addresses `1..63`, resolved poll plans and conservative transaction optimization are implemented.
 
 The existing MDV runtime remains unchanged behind the same protocol-independent boundary. The per-bus systemd instance still owns exactly one process and one serial port; `mdvwb-run` now selects the MDV executable or the internal Modbus runtime from the managed protocol setting.
 
@@ -18,7 +18,7 @@ The existing MDV runtime remains unchanged behind the same protocol-independent 
 
 ```text
 Documentation / design     PREPARED
-Runtime implementation     MILESTONE 10
+Runtime implementation     MILESTONE 11
 Hardware validation        PARTIAL (profile facts only)
 Production release         NOT STARTED
 ```
@@ -58,6 +58,7 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] Manager/bus configuration integration
 - [x] MQTT integration
 - [x] Web configuration UI
+- [x] Polling and transaction optimization
 - [ ] Real hardware validation
 - [x] Modbus runtime packaging/deployment handoff
 - [ ] Second independent profile proving architecture reuse
@@ -245,9 +246,27 @@ Milestone 10 now provides:
 
 The discovery operation stops the selected bus service and does not restart it automatically, preserving the existing operator-visible behavior. No scan performs a write, and no unknown profile is probed.
 
+## Polling and transaction optimization implemented
+
+Milestone 11 now provides:
+
+- one immutable resolved poll plan per runtime instead of resolving every semantic register on every cycle;
+- explicit baseline and optimized transaction/register metrics;
+- conservative FC03 batching only for exact duplicates or directly adjacent holding registers on the same Slave ID;
+- reuse of one raw register value by multiple semantic points without changing semantic conversion order;
+- no reads across undeclared register gaps;
+- atomic factual snapshots even when a batch fails or returns the wrong size;
+- separate start-to-start cadence for ordinary polls, successful command/confirmation work and failed operations;
+- bounded configurable Power write attempts, confirmation attempts and priority burst before an ordinary poll;
+- retry backoff that reduces repeated traffic after timeout, I/O or invalid-response outcomes.
+
+Default behavior remains compatible with the accepted runtime policy: three Power write attempts, three confirmation attempts and at most four priority operations before polling. Current defaults are 150 ms for ordinary polls, 20 ms for successful command work and 500 ms after failures. The serial transport still enforces Modbus RTU inter-frame timing independently.
+
+For the current `vrf_add_controller` profile, Power and AlarmCode registers are separated by an undeclared gap, so they intentionally remain separate FC03 requests. Optimization metrics therefore report no unsafe transaction saving for that production profile. A test profile proves adjacent batching and shared raw-value reuse without manufacturing-specific branches.
+
 ## Verification status
 
-Milestones 1 through 10 were accepted only after their required local build/CTest or web-model verification before their commits.
+Milestones 1 through 11 were accepted only after their required local build/CTest or web-model verification before their commits.
 
 Profile-loader tests cover valid schema-v1 profiles, all three current addressing declarations, transport/register/probe validation, numeric and enum declaration validation, file loading, isolated invalid files, deterministic diagnostics and duplicate-ID rejection.
 
@@ -420,7 +439,7 @@ Milestone 9 now provides:
 
 For the first production profile, normal polling reads the safe presence point plus Power and AlarmCode. A zero presence value publishes the ordinary existing offline representation (`Alarm=2`, `Status=7`). A successful FC10 response alone never changes factual Power; only matching FC03 read-back does.
 
-The current Modbus runtime supports only the capabilities enabled by the selected profile. For `vrf_add_controller`, MQTT Power commands are supported; Mode, Speed, SetTemp, Blinds and Blok commands are rejected without wire traffic. Capability-aware metadata and web control visibility belong to Milestone 10.
+The current Modbus runtime supports only the capabilities enabled by the selected profile. For `vrf_add_controller`, MQTT Power commands are supported; Mode, Speed, SetTemp, Blinds and Blok commands are rejected without wire traffic. Capability-aware metadata and web configuration are implemented, but unsupported controls remain hidden or disabled until hardware facts exist.
 
 ## Open design items
 
@@ -480,11 +499,11 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-Begin **Milestone 11: polling and transaction optimization** from `ROADMAP.md`.
+Begin **Milestone 12: real hardware validation** from `ROADMAP.md`.
 
-The next task should measure the established factual polling path before changing it, then reduce avoidable Modbus traffic without changing profile semantics, confirmation rules or the existing MDV runtime. Candidate work includes caching resolved locations and combining only proven-compatible adjacent reads.
+The next task should verify the complete stack against actual equipment: stable communication, scan `1..63`, correct logical-address discovery, long-running polling, Power read/write confirmation, offline/recovery behavior and multiple configured devices on one bus. Only manufacturer-confirmed operations may be used.
 
-The first production profile still enables only Power and AlarmCode. Mode, FanSpeed, SetTemperature and physical RoomTemperature must remain hidden or disabled until their hardware behavior and conversion are verified.
+The first production profile still enables only Power and AlarmCode. Mode, FanSpeed, SetTemperature and physical RoomTemperature must remain hidden or disabled until their hardware behavior and conversion are verified on real equipment.
 
 ## Status update rules
 
