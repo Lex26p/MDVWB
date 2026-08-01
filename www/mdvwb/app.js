@@ -1,5 +1,6 @@
 import { DashboardEditor } from "./dashboard-editor.js";
 import { TinyMqttClient } from "./mqtt-client.js";
+import { ModbusBusEditor, protocolDisplayName } from "./modbus-profile-ui.js";
 import {
   busCommandTopic,
   busFromEditorValues,
@@ -12,6 +13,7 @@ import {
   formatAddresses,
   nextAvailableBusId,
   normalizeConfiguration,
+  normalizeModbusProfileCatalog,
   parseBusTopic,
   parseJsonPayload,
   serviceLabel,
@@ -44,9 +46,20 @@ const elements = {
   cancelEditorButton: document.getElementById("cancelEditorButton"),
 };
 
+const busEditor = new ModbusBusEditor({
+  form: elements.busEditorForm,
+  addressInput: elements.busAddressesInput,
+});
+busEditor.setChangeHandler(hideEditorError);
+
 const state = {
   config: { version: 1, buses: [] },
   draft: { version: 1, buses: [] },
+  profileCatalog: normalizeModbusProfileCatalog({
+    schemaVersion: 1,
+    profiles: [],
+    issues: [],
+  }),
   manager: null,
   statuses: new Map(),
   busResults: new Map(),
@@ -188,8 +201,8 @@ function createBusCard(bus) {
   const discoveryState = String(discovery.state || "idle").toLowerCase();
   const discoveryRunning = discoveryState === "running" || pendingCommand === "discovery";
 
-  fragment.querySelector(".bus-number").textContent = `Шина ${bus.id}`;
-  fragment.querySelector(".bus-title").textContent = bus.port;
+  fragment.querySelector(".bus-number").textContent = `Шина ${bus.id} · ${bus.protocol === "modbus_rtu" ? "Modbus RTU" : "MDV"}`;
+  fragment.querySelector(".bus-title").textContent = protocolDisplayName(bus, state.profileCatalog);
   fragment.querySelector(".bus-port").textContent = bus.port;
   fragment.querySelector(".bus-addresses").textContent = formatAddresses(bus.addresses);
   fragment.querySelector(".bus-enabled").textContent = bus.enabled ? "Активна" : "Отключена";
@@ -241,6 +254,7 @@ function createBusCard(bus) {
       dirty: state.dirty || state.pendingApply,
       pending: Boolean(pendingCommand),
       discoveryRunning,
+      protocol: bus.protocol,
     });
   });
 
@@ -255,6 +269,7 @@ function openEditor(bus = null) {
   elements.busPortInput.value = bus ? bus.port : "";
   elements.busAddressesInput.value = bus ? bus.addresses.join(", ") : "";
   elements.busEnabledInput.checked = bus ? bus.enabled : true;
+  busEditor.open(bus);
   elements.editorPanel.className = "editor-panel bus-editor-drawer";
   elements.busIdInput.focus();
 }
@@ -262,17 +277,21 @@ function openEditor(bus = null) {
 function closeEditor() {
   state.editingOriginalId = null;
   elements.busEditorForm.reset();
+  busEditor.reset();
   hideEditorError();
   elements.editorPanel.className = "editor-panel bus-editor-drawer editor-panel-hidden";
 }
 
 function saveEditorToDraft() {
+  const protocolValues = busEditor.values();
   const bus = busFromEditorValues({
     id: elements.busIdInput.value,
     enabled: elements.busEnabledInput.checked,
+    protocol: protocolValues.protocol,
+    profileId: protocolValues.profileId,
     port: elements.busPortInput.value,
     addresses: elements.busAddressesInput.value,
-  });
+  }, state.profileCatalog);
 
   const buses = state.draft.buses
     .filter((item) => item.id !== state.editingOriginalId)
@@ -453,6 +472,17 @@ function handleMessage(topic, payload) {
     return;
   }
   try {
+    if (topic === "/mdvwb/modbus/profiles") {
+      const catalog = normalizeModbusProfileCatalog(
+        parseJsonPayload(payload, "каталог Modbus-профилей"),
+      );
+      state.profileCatalog = catalog;
+      busEditor.setCatalog(catalog);
+      markUpdated();
+      render();
+      return;
+    }
+
     if (topic === "/mdvwb/config") {
       const incoming = normalizeConfiguration(parseJsonPayload(payload, "конфигурация"));
       state.config = cloneConfiguration(incoming);
@@ -527,12 +557,47 @@ function loadDemoData() {
   state.demo = true;
   dashboardEditor.loadDemoData();
   state.connected = true;
+  state.profileCatalog = normalizeModbusProfileCatalog({
+    schemaVersion: 1,
+    profiles: [{
+      id: "vrf_add_controller",
+      name: "VRF Add Controller",
+      transport: { baudRate: 9600, dataBits: 8, parity: "none", stopBits: 1 },
+      logicalAddresses: { minimum: 1, maximum: 63 },
+      addressingType: "fixed_slave_stride",
+      capabilities: {
+        power: { supported: true, readable: true, writable: true, type: "boolean" },
+        mode: { supported: false, readable: false, writable: false, type: null },
+        fanSpeed: { supported: false, readable: false, writable: false, type: null },
+        setTemperature: { supported: false, readable: false, writable: false, type: null },
+        roomTemperature: { supported: false, readable: false, writable: false, type: null },
+        alarm: { supported: true, readable: true, writable: false, type: "number", minimum: null, maximum: null, step: null },
+        blinds: { supported: false, readable: false, writable: false, type: null },
+        blocked: { supported: false, readable: false, writable: false, type: null },
+      },
+    }],
+    issues: [],
+  });
+  busEditor.setCatalog(state.profileCatalog);
   state.config = normalizeConfiguration({
     version: 1,
     buses: [
-      { id: 1, enabled: true, port: "/dev/ttyRS485-1", addresses: [1, 2, 3] },
-      { id: 2, enabled: true, port: "/dev/ttyUSB0", addresses: [5, 10, 18] },
-      { id: 3, enabled: false, port: "/dev/ttyUSB1", addresses: [2, 4, 6] },
+      { id: 1, enabled: true, protocol: "mdv", port: "/dev/ttyRS485-1", addresses: [1, 2, 3] },
+      {
+        id: 2,
+        enabled: true,
+        protocol: "modbus_rtu",
+        port: "/dev/ttyUSB0",
+        modbus: {
+          profileId: "vrf_add_controller",
+          baudRate: 9600,
+          dataBits: 8,
+          parity: "none",
+          stopBits: 1,
+        },
+        addresses: [5, 10, 18],
+      },
+      { id: 3, enabled: false, protocol: "mdv", port: "/dev/ttyUSB1", addresses: [2, 4, 6] },
     ],
   });
   state.draft = cloneConfiguration(state.config);
@@ -627,6 +692,7 @@ if (new URLSearchParams(window.location.search).get("demo") === "1") {
   state.client.subscribe("/mdvwb/config");
   state.client.subscribe("/mdvwb/config/result");
   state.client.subscribe("/mdvwb/status");
+  state.client.subscribe("/mdvwb/modbus/profiles");
   state.client.subscribe("/mdvwb/dashboard/config");
   state.client.subscribe("/mdvwb/dashboard/config/result");
   state.client.subscribe("/mdvwb/dashboard/status");
