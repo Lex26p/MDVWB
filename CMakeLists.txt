@@ -200,6 +200,17 @@ target_include_directories(mdvwb_modbus_profile_ui
 target_link_libraries(mdvwb_modbus_profile_ui
     PUBLIC mdvwb_modbus_profile)
 
+add_library(mdvwb_modbus_profile_mqtt STATIC
+    ${MDVWB_MANAGER_DIR}/mdv_modbus_profile_mqtt.cpp
+    ${MDVWB_MANAGER_DIR}/mdv_modbus_profile_mqtt_worker.cpp
+    ${MDVWB_MANAGER_DIR}/mdv_modbus_profile_mqtt.h
+)
+target_compile_features(mdvwb_modbus_profile_mqtt PUBLIC cxx_std_20)
+target_include_directories(mdvwb_modbus_profile_mqtt
+    PUBLIC ${MDVWB_MANAGER_DIR} ${MDVWB_DRIVER_DIR})
+target_link_libraries(mdvwb_modbus_profile_mqtt
+    PUBLIC mdvwb_modbus_profile_ui mdvwb_mosquitto_transport)
+
 add_library(mdvwb_dashboard_config STATIC
     ${MDVWB_MANAGER_DIR}/mdv_dashboard_config.cpp
     ${MDVWB_MANAGER_DIR}/mdv_dashboard_config.h
@@ -258,7 +269,9 @@ add_library(mdvwb_manager_cli STATIC
 )
 target_compile_features(mdvwb_manager_cli PUBLIC cxx_std_20)
 target_include_directories(mdvwb_manager_cli PUBLIC ${MDVWB_MANAGER_DIR})
-target_link_libraries(mdvwb_manager_cli PUBLIC mdvwb_buses_config mdvwb_service_sync mdvwb_manager_mqtt)
+target_link_libraries(mdvwb_manager_cli
+    PUBLIC mdvwb_buses_config mdvwb_service_sync mdvwb_manager_mqtt
+           mdvwb_modbus_profile_mqtt)
 
 add_executable(mdvwb-manager
     ${MDVWB_MANAGER_DIR}/mdvwb_manager_main.cpp
@@ -405,6 +418,14 @@ target_link_libraries(mdvwb_modbus_profile_ui_test
 target_compile_definitions(mdvwb_modbus_profile_ui_test
     PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
+add_executable(mdvwb_modbus_profile_mqtt_test
+    ${MDVWB_MANAGER_TEST_DIR}/mdvwb_modbus_profile_mqtt_test.cpp
+)
+target_link_libraries(mdvwb_modbus_profile_mqtt_test
+    PRIVATE mdvwb_modbus_profile_mqtt)
+target_compile_definitions(mdvwb_modbus_profile_mqtt_test
+    PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
 add_executable(mdvwb_dashboard_config_test
     ${MDVWB_MANAGER_TEST_DIR}/mdv_dashboard_config_test.cpp
 )
@@ -519,6 +540,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_buses_config
     mdvwb_modbus_bus_config
     mdvwb_modbus_profile_ui
+    mdvwb_modbus_profile_mqtt
     mdvwb_dashboard_config
     mdvwb_schedules_config
     mdvwb_dashboard_upload
@@ -533,6 +555,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_modbus_buses_config_test
     mdvwb_modbus_bus_profile_test
     mdvwb_modbus_profile_ui_test
+    mdvwb_modbus_profile_mqtt_test
     mdvwb_dashboard_config_test
     mdvwb_schedules_config_test
     mdvwb_dashboard_upload_test
@@ -586,6 +609,7 @@ add_test(NAME mdv_buses_config_test COMMAND mdvwb_buses_config_test)
 add_test(NAME mdvwb_modbus_buses_config_test COMMAND mdvwb_modbus_buses_config_test)
 add_test(NAME mdvwb_modbus_bus_profile_test COMMAND mdvwb_modbus_bus_profile_test)
 add_test(NAME mdvwb_modbus_profile_ui_test COMMAND mdvwb_modbus_profile_ui_test)
+add_test(NAME mdvwb_modbus_profile_mqtt_test COMMAND mdvwb_modbus_profile_mqtt_test)
 add_test(NAME mdvwb_dashboard_config_test COMMAND mdvwb_dashboard_config_test)
 add_test(NAME mdvwb_schedules_config_test COMMAND mdvwb_schedules_config_test)
 add_test(NAME mdvwb_dashboard_upload_test COMMAND mdvwb_dashboard_upload_test)

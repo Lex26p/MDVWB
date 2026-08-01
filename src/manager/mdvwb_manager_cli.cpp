@@ -1,6 +1,7 @@
 #include "mdvwb_manager_cli.h"
 
 #include "mdv_buses_config.h"
+#include "mdv_modbus_profile_mqtt.h"
 #include "mdvwb_service_sync.h"
 #include "mdvwb_manager_mqtt.h"
 #include "mdvwb_migration.h"
@@ -201,6 +202,10 @@ int RunManagerCommand(
                 errors << "MANAGER_ERROR: mqtt must be run as root\n";
                 return 1;
             }
+
+            const ServiceSyncPaths paths = ServiceSyncPathsFromEnvironment();
+            ModbusProfileUiRetainedPublisher profilePublisher(
+                paths.modbusProfileDirectory);
             return RunManagerMqttDaemon(configPath, output, errors);
         }
 
