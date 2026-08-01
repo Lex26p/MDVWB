@@ -44,6 +44,12 @@ using ScanReport = std::array<
     ScanResult,
     static_cast<std::size_t>(kMaxLogicalAddress)>;
 
+// Executes one already-resolved read-only probe using the same transport,
+// response validation and profile presence rule as full discovery.
+[[nodiscard]] ScanResult ExecuteScanProbe(
+    const ScanProbe& probe,
+    ITransactionTransport& transport);
+
 // Executes only the read-only probes already present in a scan plan.
 // Unsupported candidates and currently unsupported data spaces generate no I/O.
 [[nodiscard]] ScanReport ExecuteScanPlan(

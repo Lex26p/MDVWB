@@ -171,7 +171,7 @@ namespace {
         transaction.elapsed);
 }
 
-[[nodiscard]] ScanResult ExecuteProbe(
+[[nodiscard]] ScanResult ExecuteProbeImplementation(
     const ScanProbe& probe,
     ITransactionTransport& transport)
 {
@@ -200,6 +200,13 @@ namespace {
 
 } // namespace
 
+ScanResult ExecuteScanProbe(
+    const ScanProbe& probe,
+    ITransactionTransport& transport)
+{
+    return ExecuteProbeImplementation(probe, transport);
+}
+
 ScanReport ExecuteScanPlan(
     const ScanPlan& plan,
     ITransactionTransport& transport)
@@ -214,7 +221,7 @@ ScanReport ExecuteScanPlan(
             continue;
         }
 
-        report[index] = ExecuteProbe(
+        report[index] = ExecuteScanProbe(
             *candidate.probe,
             transport);
     }
