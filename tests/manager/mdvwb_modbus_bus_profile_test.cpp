@@ -111,6 +111,88 @@ mdv::modbus::ModbusProfile NarrowProfile()
 )json");
 }
 
+mdv::modbus::ModbusProfile WriteOnlyPowerProfile()
+{
+    return mdv::modbus::ParseProfile(R"json(
+{
+  "schemaVersion": 1,
+  "id": "write_only_power",
+  "name": "Write-only Power",
+  "registerAddressing": "pdu_zero_based",
+  "transport": {
+    "baudRate": 9600,
+    "dataBits": 8,
+    "parity": "none",
+    "stopBits": 1
+  },
+  "addressing": {
+    "type": "direct_slave",
+    "logicalMin": 1,
+    "logicalMax": 63
+  },
+  "capabilities": {
+    "power": true
+  },
+  "probe": {
+    "read": {
+      "space": "holding_register",
+      "address": 100
+    }
+  },
+  "points": {
+    "power": {
+      "type": "boolean",
+      "write": {
+        "space": "holding_register",
+        "address": 101
+      }
+    }
+  }
+}
+)json");
+}
+
+mdv::modbus::ModbusProfile InputRegisterProbeProfile()
+{
+    return mdv::modbus::ParseProfile(R"json(
+{
+  "schemaVersion": 1,
+  "id": "input_probe",
+  "name": "Input-register probe",
+  "registerAddressing": "pdu_zero_based",
+  "transport": {
+    "baudRate": 9600,
+    "dataBits": 8,
+    "parity": "none",
+    "stopBits": 1
+  },
+  "addressing": {
+    "type": "direct_slave",
+    "logicalMin": 1,
+    "logicalMax": 63
+  },
+  "capabilities": {
+    "power": true
+  },
+  "probe": {
+    "read": {
+      "space": "input_register",
+      "address": 100
+    }
+  },
+  "points": {
+    "power": {
+      "type": "boolean",
+      "read": {
+        "space": "holding_register",
+        "address": 101
+      }
+    }
+  }
+}
+)json");
+}
+
 void TestProductionProfileResolves()
 {
     const auto catalog = LoadProductionCatalog();
@@ -195,6 +277,51 @@ void TestConfiguredAddressMustBeSupportedByProfile()
         "logical address 3 is not supported");
 }
 
+void TestRuntimeIncompatibleProfilesRejected()
+{
+    {
+        mdv::modbus::ProfileCatalog catalog;
+        catalog.profiles.emplace(
+            "write_only_power",
+            WriteOnlyPowerProfile());
+
+        const auto config = ParseBus(
+            "write_only_power",
+            9600,
+            8,
+            "none",
+            1,
+            "[1]");
+
+        ExpectConfigError(
+            [&] {
+                mdvwb::ValidateModbusBusProfiles(config, catalog);
+            },
+            "without a read location");
+    }
+
+    {
+        mdv::modbus::ProfileCatalog catalog;
+        catalog.profiles.emplace(
+            "input_probe",
+            InputRegisterProbeProfile());
+
+        const auto config = ParseBus(
+            "input_probe",
+            9600,
+            8,
+            "none",
+            1,
+            "[1]");
+
+        ExpectConfigError(
+            [&] {
+                mdvwb::ValidateModbusBusProfiles(config, catalog);
+            },
+            "unsupported discovery probe data space");
+    }
+}
+
 void TestMdvBusDoesNotRequireProfileCatalog()
 {
     const auto config = mdvwb::ParseBusesConfig(R"json(
@@ -263,6 +390,7 @@ int main()
         TestUnknownProfileRejected();
         TestTransportMismatchRejected();
         TestConfiguredAddressMustBeSupportedByProfile();
+        TestRuntimeIncompatibleProfilesRejected();
         TestMdvBusDoesNotRequireProfileCatalog();
         TestUnrelatedCatalogIssueDoesNotInvalidateSelectedProfile();
         TestResolverRejectsMdvBus();

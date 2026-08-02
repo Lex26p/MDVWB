@@ -1,8 +1,10 @@
 #include "mdv_modbus_bus_config.h"
 
 #include "modbus_resolver.h"
+#include "modbus_runtime_profile.h"
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
 
 namespace mdvwb {
@@ -25,6 +27,22 @@ namespace {
         return mdv::SerialParity::Odd;
     }
     return mdv::SerialParity::None;
+}
+
+void ValidateRuntimeCompatibility(
+    const BusConfig& bus,
+    const mdv::modbus::ModbusProfile& profile)
+{
+    try {
+        mdv::modbus::ValidateModbusRuntimeProfile(profile);
+    }
+    catch (const std::invalid_argument& error) {
+        Fail(
+            bus,
+            "profile '" + profile.id +
+                "' is incompatible with the current Modbus runtime: " +
+                error.what());
+    }
 }
 
 void ValidateTransport(
@@ -113,6 +131,7 @@ const mdv::modbus::ModbusProfile& ResolveModbusBusProfile(
             "selects unknown Modbus profile '" + settings.profileId + "'");
     }
 
+    ValidateRuntimeCompatibility(bus, *profile);
     ValidateTransport(bus, settings, *profile);
     ValidateConfiguredAddresses(bus, *profile);
     return *profile;

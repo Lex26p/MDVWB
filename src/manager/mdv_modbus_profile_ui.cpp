@@ -1,5 +1,7 @@
 #include "mdv_modbus_profile_ui.h"
 
+#include "modbus_runtime_profile.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -8,6 +10,7 @@
 #include <optional>
 #include <ostream>
 #include <sstream>
+#include <stdexcept>
 #include <string_view>
 #include <tuple>
 #include <utility>
@@ -243,23 +246,40 @@ void WriteProfile(
 std::string SerializeModbusProfileUiCatalog(
     const mdv::modbus::ProfileCatalog& catalog)
 {
+    std::vector<mdv::modbus::ProfileLoadIssue> issues = catalog.issues;
+    std::vector<const mdv::modbus::ModbusProfile*> compatibleProfiles;
+    compatibleProfiles.reserve(catalog.profiles.size());
+
+    for (const auto& [id, profile] : catalog.profiles) {
+        static_cast<void>(id);
+        try {
+            mdv::modbus::ValidateModbusRuntimeProfile(profile);
+            compatibleProfiles.push_back(&profile);
+        }
+        catch (const std::invalid_argument& error) {
+            issues.push_back(mdv::modbus::ProfileLoadIssue{
+                .path = profile.id + ".json",
+                .error =
+                    "profile '" + profile.id +
+                    "' is incompatible with the current Modbus runtime: " +
+                    error.what(),
+            });
+        }
+    }
+
     std::ostringstream output;
     output << '{';
     output << "\"schemaVersion\":" << kModbusProfileUiSchemaVersion;
     output << ",\"profiles\":[";
 
-    bool firstProfile = true;
-    for (const auto& [id, profile] : catalog.profiles) {
-        static_cast<void>(id);
-        if (!firstProfile) {
+    for (std::size_t index = 0; index < compatibleProfiles.size(); ++index) {
+        if (index != 0U) {
             output << ',';
         }
-        firstProfile = false;
-        WriteProfile(output, profile);
+        WriteProfile(output, *compatibleProfiles[index]);
     }
     output << ']';
 
-    std::vector<mdv::modbus::ProfileLoadIssue> issues = catalog.issues;
     std::sort(
         issues.begin(),
         issues.end(),

@@ -192,6 +192,41 @@ void TestEnumAndNumericUiMetadata()
             "numeric step mismatch");
 }
 
+void TestIncompatibleProfileIsNotPublished()
+{
+    mdv::modbus::ModbusProfile profile;
+    profile.id = "write_only_power";
+    profile.name = "Write-only Power";
+    profile.capabilities.power = true;
+
+    mdv::modbus::PointDefinition power;
+    power.type = mdv::modbus::PointType::Boolean;
+    power.write = mdv::modbus::RegisterLocation{};
+    profile.points.emplace("power", power);
+
+    mdv::modbus::ProfileCatalog catalog;
+    catalog.profiles.emplace(profile.id, profile);
+
+    const auto document = mdvwb::json::Parse(
+        mdvwb::SerializeModbusProfileUiCatalog(catalog));
+    const auto& root = document.AsObject();
+
+    Require(ArrayField(root, "profiles").empty(),
+            "runtime-incompatible profile was published to the UI");
+
+    const auto& issues = ArrayField(root, "issues");
+    Require(issues.size() == 1U,
+            "runtime-incompatible profile did not produce one issue");
+
+    const auto& issue = issues.front().AsObject();
+    Require(issue.at("file").AsString() == "write_only_power.json",
+            "runtime compatibility issue has the wrong profile identifier");
+    Require(
+        issue.at("message").AsString().find("without a read location") !=
+            std::string::npos,
+        "runtime compatibility issue does not explain the rejection");
+}
+
 void TestIssuePathIsSanitizedAndSorted()
 {
     mdv::modbus::ProfileCatalog catalog;
@@ -241,6 +276,7 @@ int main()
     try {
         TestProductionProfilePresentation();
         TestEnumAndNumericUiMetadata();
+        TestIncompatibleProfileIsNotPublished();
         TestIssuePathIsSanitizedAndSorted();
         TestJsonEscaping();
 
