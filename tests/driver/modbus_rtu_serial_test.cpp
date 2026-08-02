@@ -49,6 +49,31 @@ bool TestInterFrameDelay()
                "high-baud fixed t3.5");
 }
 
+bool TestResponseDeadlineStartsAfterWriteCompletion()
+{
+    using Clock = std::chrono::steady_clock;
+
+    const Clock::time_point transactionStarted{
+        std::chrono::milliseconds(100)};
+    const Clock::time_point writeCompleted =
+        transactionStarted + std::chrono::milliseconds(2500);
+    const mdv::modbus::RtuTimingSettings timing{
+        .responseTimeout = std::chrono::milliseconds(200),
+    };
+
+    const auto deadline =
+        mdv::modbus::CalculateResponseDeadline(writeCompleted, timing);
+
+    return Check(
+               deadline ==
+                   writeCompleted + std::chrono::milliseconds(200),
+               "response timeout starts at write completion") &&
+        Check(
+               deadline >
+                   transactionStarted + std::chrono::milliseconds(200),
+               "request transmission time is not deducted from response timeout");
+}
+
 bool TestSerialValidation()
 {
     bool badBaudRejected = false;
@@ -140,6 +165,7 @@ bool TestInvalidRequestRejectedBeforeIo()
 int main()
 {
     const bool ok = TestInterFrameDelay() &&
+        TestResponseDeadlineStartsAfterWriteCompletion() &&
         TestSerialValidation() &&
         TestTransportDefaults() &&
         TestInvalidTimingRejected() &&

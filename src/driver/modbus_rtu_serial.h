@@ -33,6 +33,10 @@ struct TransactionResult {
 [[nodiscard]] std::chrono::microseconds CalculateInterFrameDelay(
     const SerialSettings& settings);
 
+[[nodiscard]] std::chrono::steady_clock::time_point CalculateResponseDeadline(
+    std::chrono::steady_clock::time_point writeCompletedAt,
+    const RtuTimingSettings& timing);
+
 class ITransactionTransport {
 public:
     virtual ~ITransactionTransport() = default;

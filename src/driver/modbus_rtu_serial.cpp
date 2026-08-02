@@ -100,6 +100,14 @@ std::chrono::microseconds CalculateInterFrameDelay(const SerialSettings& setting
     return std::chrono::microseconds(microseconds);
 }
 
+std::chrono::steady_clock::time_point CalculateResponseDeadline(
+    std::chrono::steady_clock::time_point writeCompletedAt,
+    const RtuTimingSettings& timing)
+{
+    ValidateTiming(timing);
+    return writeCompletedAt + timing.responseTimeout;
+}
+
 RtuSerialTransport::RtuSerialTransport(
     SerialSettings serial,
     RtuTimingSettings timing)
@@ -149,7 +157,6 @@ TransactionResult RtuSerialTransport::Execute(const RtuAdu& request)
     }
 
     const auto startedAt = std::chrono::steady_clock::now();
-    const auto deadline = startedAt + timing_.responseTimeout;
 
     const auto finish = [this, startedAt](TransactionResult completed) {
         const auto now = std::chrono::steady_clock::now();
@@ -162,6 +169,10 @@ TransactionResult RtuSerialTransport::Execute(const RtuAdu& request)
     try {
         port_.DiscardInput();
         port_.WriteAll(request);
+
+        const auto deadline = CalculateResponseDeadline(
+            std::chrono::steady_clock::now(),
+            timing_);
 
         ResponseCollector collector;
         std::array<std::uint8_t, 256> buffer{};
