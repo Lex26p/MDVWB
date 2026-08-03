@@ -528,6 +528,7 @@ DriverResult ModbusDriver::ConfirmPowerWrite(DeviceRuntime& runtime)
             read.value);
     }
     catch (const SemanticConversionError& error) {
+        runtime.state.online = false;
         runtime.pendingPower.reset();
         return DriverResult{
             .address = runtime.logicalAddress,

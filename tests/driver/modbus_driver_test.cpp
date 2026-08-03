@@ -265,6 +265,41 @@ public:
     std::vector<mdv::modbus::RtuAdu> requests;
 };
 
+class InvalidConfirmationTransport final
+    : public mdv::modbus::ITransactionTransport {
+public:
+    [[nodiscard]] mdv::modbus::TransactionResult Execute(
+        const mdv::modbus::RtuAdu& request) override
+    {
+        requests.push_back(request);
+        const auto function = RequestFunction(request);
+        const auto address = RequestAddress(request);
+
+        if (function == 0x10U && address == 40078U) {
+            writeSeen = true;
+            return WriteSuccess(request);
+        }
+
+        if (function == 0x03U) {
+            if (address == 40039U) {
+                return ReadSuccess(request, 24U);
+            }
+            if (address == 40028U) {
+                return ReadSuccess(request, writeSeen ? 2U : 1U);
+            }
+            if (address == 40035U) {
+                return ReadSuccess(request, 0U);
+            }
+        }
+
+        throw std::runtime_error(
+            "unexpected invalid-confirmation request");
+    }
+
+    bool writeSeen = false;
+    std::vector<mdv::modbus::RtuAdu> requests;
+};
+
 class WriteFailureTransport final
     : public mdv::modbus::ITransactionTransport {
 public:
@@ -654,6 +689,56 @@ void TestConfirmationTimeoutRetriesAreBounded()
         "failed confirmations changed factual Power");
 }
 
+void TestInvalidConfirmationMarksDeviceOffline()
+{
+    auto profile = ProductionProfile();
+    InvalidConfirmationTransport transport;
+    mdv::modbus::ModbusDriver driver({1U}, profile, transport);
+    InitializeOne(driver);
+    transport.requests.clear();
+
+    driver.ApplyCommand(mdv::DriverCommand{
+        .address = 1U,
+        .control = mdv::DriverControl::Power,
+        .value = false,
+    });
+
+    const auto write = driver.ProcessNext();
+    Require(
+        write.operation == mdv::DriverOperation::SetState &&
+            write.outcome == mdv::DriverOutcome::Success,
+        "FC10 before invalid confirmation failed");
+
+    const auto confirmation = driver.ProcessNext();
+    Require(
+        confirmation.operation == mdv::DriverOperation::ConfirmRead &&
+            confirmation.outcome == mdv::DriverOutcome::InvalidResponse,
+        "invalid Power confirmation classification is wrong");
+
+    const auto state = driver.DeviceStateByAddress(1U);
+    Require(!state.online, "invalid Power confirmation left device online");
+    Require(state.hasState, "invalid Power confirmation erased factual state");
+    Require(state.power, "invalid Power confirmation changed factual Power");
+    Require(!driver.HasQueuedWork(),
+            "invalid Power confirmation remained queued");
+
+    bool rejected = false;
+    try {
+        driver.ApplyCommand(mdv::DriverCommand{
+            .address = 1U,
+            .control = mdv::DriverControl::Power,
+            .value = false,
+        });
+    }
+    catch (const std::logic_error&) {
+        rejected = true;
+    }
+
+    Require(
+        rejected,
+        "offline device accepted a command after invalid confirmation");
+}
+
 void TestConfirmationMismatchRetriesWrite()
 {
     auto profile = ProductionProfile();
@@ -958,6 +1043,7 @@ int main()
         TestPowerWriteAndReadBackConfirmation();
         TestWriteTimeoutRetriesAreBounded();
         TestConfirmationTimeoutRetriesAreBounded();
+        TestInvalidConfirmationMarksDeviceOffline();
         TestConfirmationMismatchRetriesWrite();
         TestPriorityWorkCannotStarvePolling();
         TestNewerCommandCancelsStaleWork();
