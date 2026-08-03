@@ -31,8 +31,8 @@ This file is the persistent execution log for the MDVWB audit remediation work.
 
 | Step | Status | Subject | Required outcome | Commit SHA |
 |---:|---|---|---|---|
-| 00 | IN PROGRESS | Add remediation tracker | This file exists in the repository and becomes the persistent work log. | pending |
-| 01 | PENDING | Scheduler causal factual ordering | A factual message received before command publication can never confirm that command. Add a regression test for callback-before-command ordering. | pending |
+| 00 | COMPLETED | Add remediation tracker | This file exists in the repository and becomes the persistent work log. | `606865556ad5ea6ce777c3eda35f8ad3f10b738b` |
+| 01 | IN PROGRESS | Scheduler causal factual ordering | A factual message received before command publication can never confirm that command. Add a regression test for callback-before-command ordering. | pending |
 | 02 | PENDING | Manager recovery snapshot | A failed apply with missing or damaged `buses.json` restores the real environment files and exact active/enabled service states instead of applying an empty rollback topology. | pending |
 | 03 | PENDING | Secure installer temporary paths | Replace predictable `/tmp/...$$` paths with secure `mktemp`/`mktemp -d`, restrictive permissions, and signal-safe cleanup. | pending |
 | 04 | PENDING | Shared capability contract | Define one normalized capability model derived from protocol/profile data and publish it through the management and device MQTT contracts. | pending |
@@ -126,7 +126,7 @@ If a step is split because its implementation proves too large, insert substeps 
 
 ## Current position
 
-- Current step: `00`
+- Current step: `01`
 - Current status: `IN PROGRESS`
 - Completed technical remediation steps: `0`
-- Remaining technical remediation steps after this tracker: `13`
+- Remaining technical remediation steps including the current step: `13`
