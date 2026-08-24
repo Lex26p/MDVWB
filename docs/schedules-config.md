@@ -361,10 +361,10 @@ Stale queued request отклоняется.
 первой `/on1` команды. Поэтому прямой MQTT execute не может обойти ограничения
 web UI.
 
-В текущем production Modbus runtime подтверждённая запись реализована только
-для `Power`. Наличие `write` у `Mode`, `FanSpeed` или `SetTemperature` в
-schema-v1 профиле не разрешает соответствующую schedule action, пока её
-write/confirmation state machine не реализована в runtime.
+В текущем production Modbus runtime подтверждённая запись реализована для
+`Power`, `Mode`, `FanSpeed` и `SetTemperature`. Schedule action разрешается
+только тогда, когда соответствующая capability включена и профиль содержит
+совместимые read/write points; read-only point остаётся запрещённым.
 
 ## 29. Command order
 

@@ -87,18 +87,18 @@ const modbusCapabilities = fanCommandCapabilities(
       id: "vrf_add_controller",
       capabilities: {
         power: { supported: true, writable: true },
-        mode: { supported: false, writable: false },
-        fanSpeed: { supported: false, writable: false },
-        setTemperature: { supported: false, writable: false },
+        mode: { supported: true, writable: true },
+        fanSpeed: { supported: true, writable: true },
+        setTemperature: { supported: true, writable: true },
       },
     }],
   },
 );
 assert.deepEqual(modbusCapabilities, {
   Power: true,
-  Mode: false,
-  Speed: false,
-  SetTemp: false,
+  Mode: true,
+  Speed: true,
+  SetTemp: true,
 });
 assert.deepEqual(
   fanCommandCapabilities({ id: 1, protocol: "mdv" }, null),
@@ -185,7 +185,7 @@ const modbusGroupPlan = buildGroupCommandPlan(
 );
 assert.deepEqual(
   modbusGroupPlan.operations.map(({ control }) => control),
-  ["Power"],
+  ["Power", "SetTemp"],
 );
 
 

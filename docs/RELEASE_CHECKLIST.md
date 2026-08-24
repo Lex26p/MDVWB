@@ -340,15 +340,15 @@ no broadcast
 profile catalog and bus configuration loaded
 unsupported controls disabled in direct/group/schedule UI
 unsupported schedule rejected before any /on1 publication
-Power write confirmed only by factual read-back
+Power/Mode/Speed/SetTemp writes confirmed only by factual read-back
 obsolete optional retained values cleared when unavailable
 no write traffic during discovery
 ```
 
-Для текущего `vrf_add_controller` проверяется Power; Mode, Speed, SetTemp,
-Blinds и Blok не должны отправляться. `Status=5` у включённого online-устройства
-без Mode является намеренным compatibility fallback, но retained `Mode` должен
-оставаться пустым.
+Для текущего `vrf_add_controller` проверяются Power, Mode, Speed и целочисленный
+SetTemp. Blinds и Blok не должны отправляться. Retained `Status` должен
+соответствовать подтверждённым Power/Mode: `0` выключен, `1` охлаждение, `2`
+нагрев, `3` осушение, `4` вентиляция, `5` Auto, `6` авария, `7` offline.
 
 ## 20. Group, schedule and discovery smoke
 

@@ -383,13 +383,19 @@ This file prevents an automatic schedule from executing twice after a scheduler 
 - all manufacturer register knowledge comes from a selected schema-v1 profile;
 - effective write capability is the intersection of the profile declaration and
   the current runtime implementation; the production runtime currently performs
-  confirmed writes only for `Power`;
-- a valid profile may declare future non-Power writes without making them
+  confirmed writes for `Power`, `Mode`, `FanSpeed` and `SetTemperature`;
+- a valid profile may declare other future writes without making them
   available to the UI or scheduler;
 - profiles and managed runtime settings are strictly validated before serial I/O or discovery;
 - integer profile fields must be range-checked before narrowing to fixed-width types;
 - discovery is read-only and uses only the selected profile's safe probe;
-- a Power write response alone is not factual state; matching profile-driven read-back is required;
+- a write response alone is not factual state; matching profile-driven read-back is required;
+- the shipped `vrf_add_controller` currently enables table-derived Mode,
+  FanSpeed and integer SetTemperature mappings for field validation; these
+  mappings are not yet recorded as live-hardware-confirmed;
+- that profile uses only SetTemperature integer registers `40031/40081` and
+  whole-degree commands `16..32`; half-degree registers `40037/40085` and
+  physical RoomTemperature remain unsupported;
 - unsupported controls produce no Modbus wire traffic;
 - when an optional factual value becomes unavailable, its old retained MQTT value is cleared with an empty retained payload;
 - for compatibility, an online powered device without a factual Mode still maps to `Status=5` (Auto); this does not create a factual `Mode` value.

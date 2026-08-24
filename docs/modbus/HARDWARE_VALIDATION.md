@@ -41,19 +41,23 @@ The evidence directory contains:
 
 A successful collector run proves only that the read-only validation path
 completed and every discovered address published Power and AlarmCode during the
-capture window. It does not prove Power write behavior, long-term stability, or
-recovery after a physical disconnect.
+capture window. For this field-validation build, inspect `mqtt-state.txt`
+separately for Mode, Speed, integer SetTemp and derived Status. The collector
+does not yet accept those mappings automatically, and it does not prove write
+behavior, long-term stability, or recovery after a physical disconnect.
 
 ## Milestone 12 stages
 
 1. Add and verify the read-only evidence collector.
 2. Run discovery and repeated factual polling on real equipment; review the
    evidence before accepting any new hardware facts.
-3. Perform a controlled Power round trip with an operator-observed physical
-   result and matching FC03 read-back. No other control is eligible yet.
+3. Perform controlled, one-at-a-time Power, Mode, FanSpeed and whole-degree
+   SetTemperature round trips with an operator-observed physical result and
+   matching FC03 read-back. Stop at the first mismatch and save the journal and
+   MQTT state.
 4. Validate extended polling, physical disconnect/reconnect, and multiple
    configured devices, then record the reviewed evidence in `STATUS.md`.
 
-Mode, FanSpeed, SetTemperature, RoomTemperature and any additional alarm meaning
-remain unsupported until their own manufacturer-confirmed hardware evidence is
-reviewed in a later step.
+Mode, FanSpeed and integer SetTemperature are enabled specifically for this
+field validation but are not yet hardware-confirmed. RoomTemperature,
+half-degree SetTemperature and any additional alarm meaning remain unsupported.

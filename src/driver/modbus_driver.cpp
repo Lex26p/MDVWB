@@ -2,10 +2,12 @@
 
 #include "modbus_resolver.h"
 #include "modbus_rtu.h"
+#include "modbus_runtime_profile.h"
 #include "modbus_semantic.h"
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <exception>
 #include <optional>
 #include <set>
@@ -92,6 +94,76 @@ namespace {
     return DriverOutcome::InvalidResponse;
 }
 
+[[nodiscard]] std::optional<std::size_t> WritableControlIndex(
+    DriverControl control) noexcept
+{
+    switch (control) {
+    case DriverControl::Power:
+        return 0U;
+    case DriverControl::Mode:
+        return 1U;
+    case DriverControl::FanSpeed:
+        return 2U;
+    case DriverControl::SetTemperature:
+        return 3U;
+    case DriverControl::Blinds:
+    case DriverControl::Blocked:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::string_view> SemanticPointName(
+    DriverControl control) noexcept
+{
+    switch (control) {
+    case DriverControl::Power:
+        return "power";
+    case DriverControl::Mode:
+        return "mode";
+    case DriverControl::FanSpeed:
+        return "fanSpeed";
+    case DriverControl::SetTemperature:
+        return "setTemperature";
+    case DriverControl::Blinds:
+    case DriverControl::Blocked:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] bool FactualValueMatches(
+    const DriverDeviceState& state,
+    DriverControl control,
+    const DriverCommandValue& desired) noexcept
+{
+    switch (control) {
+    case DriverControl::Power: {
+        const auto* value = std::get_if<bool>(&desired);
+        return value != nullptr && state.power == *value;
+    }
+    case DriverControl::Mode: {
+        const auto* value = std::get_if<HvacMode>(&desired);
+        return value != nullptr && state.mode.has_value() &&
+            *state.mode == *value;
+    }
+    case DriverControl::FanSpeed: {
+        const auto* value = std::get_if<HvacFanSpeed>(&desired);
+        return value != nullptr && state.fanSpeed.has_value() &&
+            *state.fanSpeed == *value;
+    }
+    case DriverControl::SetTemperature: {
+        const auto* value = std::get_if<double>(&desired);
+        return value != nullptr && state.setTemperature.has_value() &&
+            std::fabs(*state.setTemperature - *value) < 0.000001;
+    }
+    case DriverControl::Blinds:
+    case DriverControl::Blocked:
+        return false;
+    }
+    return false;
+}
+
 } // namespace
 
 ModbusDriver::ModbusDriver(
@@ -130,7 +202,7 @@ ModbusDriver::ModbusDriver(
             .logicalAddress = devicePlan.logicalAddress,
             .pollPlan = std::move(devicePlan),
             .state = state,
-            .pendingPower = std::nullopt,
+            .pendingWrites = {},
         });
     }
 }
@@ -141,16 +213,16 @@ DriverResult ModbusDriver::ProcessNext()
         return ProcessPoll();
     }
 
-    if (auto* runtime = PopValidWork(powerConfirmationQueue_);
-        runtime != nullptr) {
+    if (auto work = PopValidWork(confirmationQueue_);
+        work.has_value()) {
         ++priorityOperations_;
-        return ConfirmPowerWrite(*runtime);
+        return ConfirmWrite(*work->runtime, work->control);
     }
 
-    if (auto* runtime = PopValidWork(powerWriteQueue_);
-        runtime != nullptr) {
+    if (auto work = PopValidWork(writeQueue_);
+        work.has_value()) {
         ++priorityOperations_;
-        return ExecutePowerWrite(*runtime);
+        return ExecuteWrite(*work->runtime, work->control);
     }
 
     return ProcessPoll();
@@ -164,15 +236,11 @@ void ModbusDriver::ApplyCommand(const DriverCommand& command)
             "Modbus device must have a current factual snapshot before commands");
     }
 
-    if (command.control != DriverControl::Power) {
+    const auto pointName = SemanticPointName(command.control);
+    if (!pointName.has_value() ||
+        !IsModbusRuntimeWritablePoint(profile_, *pointName)) {
         throw std::invalid_argument(
-            "current Modbus runtime supports Power commands only");
-    }
-
-    const auto* desired = std::get_if<bool>(&command.value);
-    if (desired == nullptr) {
-        throw std::invalid_argument(
-            "Modbus Power command requires a boolean value");
+            "Modbus control is not writable in the selected profile");
     }
 
     EncodedSemanticWrite encoded;
@@ -199,33 +267,63 @@ void ModbusDriver::ApplyCommand(const DriverCommand& command)
 
     if (!location.has_value()) {
         throw std::invalid_argument(
-            "profile does not resolve the Modbus Power write location");
+            "profile does not resolve the Modbus write location for '" +
+            std::string(*pointName) + "'");
     }
     if (location->space != RegisterSpace::HoldingRegister) {
         throw std::invalid_argument(
-            "current Modbus runtime supports Power writes to holding_register only");
+            "current Modbus runtime supports writes to holding_register only");
+    }
+
+    const auto profilePoint = profile_.points.find(*pointName);
+    if (profilePoint == profile_.points.end() ||
+        !profilePoint->second.read.has_value()) {
+        throw std::invalid_argument(
+            "profile has no readable confirmation point for '" +
+            std::string(*pointName) + "'");
+    }
+
+    std::optional<ResolvedRegisterLocation> readLocation;
+    try {
+        readLocation = ResolveRegisterLocation(
+            profile_,
+            command.address,
+            *profilePoint->second.read);
+    }
+    catch (const ResolverError& error) {
+        throw std::invalid_argument(error.what());
+    }
+    if (!readLocation.has_value() ||
+        readLocation->space != RegisterSpace::HoldingRegister) {
+        throw std::invalid_argument(
+            "profile does not resolve a readable holding-register "
+            "confirmation point for '" + std::string(*pointName) + "'");
     }
 
     const auto revision = ++nextCommandRevision_;
+    auto& pending = PendingByControl(runtime, command.control);
 
     // A newer command matching the last factual state cancels any older
     // pending command. Queue entries carry revisions and become harmlessly
     // stale, so no old write can escape after this point.
-    if (runtime.state.power == *desired) {
-        runtime.pendingPower.reset();
+    if (FactualValueMatches(runtime.state, command.control, command.value)) {
+        pending.reset();
         return;
     }
 
-    runtime.pendingPower = PendingPower{
-        .desired = *desired,
+    pending = PendingWrite{
+        .control = command.control,
+        .desired = command.value,
+        .pointName = std::string(*pointName),
         .rawValue = encoded.rawValue,
         .slaveId = location->slaveId,
         .writeAddress = location->address,
+        .readLocation = *readLocation,
         .revision = revision,
         .writeAttempts = 0,
         .confirmationAttempts = 0,
     };
-    EnqueuePowerWrite(runtime);
+    EnqueueWrite(runtime, command.control);
 }
 
 DriverDeviceState ModbusDriver::DeviceStateByAddress(
@@ -240,7 +338,12 @@ bool ModbusDriver::HasQueuedWork() const noexcept
         devices_.begin(),
         devices_.end(),
         [](const DeviceRuntime& runtime) {
-            return runtime.pendingPower.has_value();
+            return std::any_of(
+                runtime.pendingWrites.begin(),
+                runtime.pendingWrites.end(),
+                [](const auto& pending) {
+                    return pending.has_value();
+                });
         });
 }
 
@@ -283,6 +386,18 @@ const ModbusDriver::DeviceRuntime& ModbusDriver::DeviceByAddress(
     throw std::out_of_range(
         "Modbus logical address " + std::to_string(address) +
         " is not configured");
+}
+
+std::optional<ModbusDriver::PendingWrite>& ModbusDriver::PendingByControl(
+    DeviceRuntime& runtime,
+    DriverControl control)
+{
+    const auto index = WritableControlIndex(control);
+    if (!index.has_value()) {
+        throw std::invalid_argument(
+            "Modbus control has no confirmed-write state machine");
+    }
+    return runtime.pendingWrites[*index];
 }
 
 DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
@@ -356,11 +471,16 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
     runtime.state = std::move(snapshot);
 
     // A bounded ordinary poll is also a valid factual read-back. If it observes
-    // the latest desired Power value, the pending command is complete and any
-    // queued confirmation for that revision becomes stale.
-    if (runtime.pendingPower.has_value() &&
-        runtime.state.power == runtime.pendingPower->desired) {
-        runtime.pendingPower.reset();
+    // a latest desired value, that command is complete and any queued work for
+    // its revision becomes stale.
+    for (auto& pending : runtime.pendingWrites) {
+        if (pending.has_value() &&
+            FactualValueMatches(
+                runtime.state,
+                pending->control,
+                pending->desired)) {
+            pending.reset();
+        }
     }
 
     return DriverResult{
@@ -371,18 +491,21 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
     };
 }
 
-DriverResult ModbusDriver::ExecutePowerWrite(DeviceRuntime& runtime)
+DriverResult ModbusDriver::ExecuteWrite(
+    DeviceRuntime& runtime,
+    DriverControl control)
 {
-    if (!runtime.pendingPower.has_value()) {
+    auto& pendingSlot = PendingByControl(runtime, control);
+    if (!pendingSlot.has_value()) {
         return DriverResult{
             .address = runtime.logicalAddress,
             .operation = DriverOperation::SetState,
             .outcome = DriverOutcome::InvalidResponse,
-            .error = "stale Modbus Power write work item",
+            .error = "stale Modbus write work item",
         };
     }
 
-    auto& pending = *runtime.pendingPower;
+    auto& pending = *pendingSlot;
     ++pending.writeAttempts;
 
     RtuAdu request;
@@ -394,7 +517,7 @@ DriverResult ModbusDriver::ExecutePowerWrite(DeviceRuntime& runtime)
             std::span<const std::uint16_t>(values));
     }
     catch (const std::exception& error) {
-        runtime.pendingPower.reset();
+        pendingSlot.reset();
         return DriverResult{
             .address = runtime.logicalAddress,
             .operation = DriverOperation::SetState,
@@ -410,16 +533,16 @@ DriverResult ModbusDriver::ExecutePowerWrite(DeviceRuntime& runtime)
     catch (const std::exception& error) {
         transaction.status = TransactionStatus::IoError;
         transaction.error =
-            std::string("Modbus Power write transport failure: ") +
-            error.what();
+            "Modbus '" + pending.pointName +
+            "' write transport failure: " + error.what();
     }
 
     bool accepted = false;
     std::string error;
     if (transaction.status == TransactionStatus::Success) {
         if (!transaction.response.has_value()) {
-            error =
-                "successful Modbus Power write has no parsed response";
+            error = "successful Modbus '" + pending.pointName +
+                "' write has no parsed response";
         }
         else {
             const auto& response = *transaction.response;
@@ -432,20 +555,20 @@ DriverResult ModbusDriver::ExecutePowerWrite(DeviceRuntime& runtime)
                 response.quantity.has_value() &&
                 *response.quantity == 1U;
             if (!accepted) {
-                error =
-                    "Modbus Power write response does not match the request";
+                error = "Modbus '" + pending.pointName +
+                    "' write response does not match the request";
             }
         }
     }
     else {
         error = TransactionError(
             transaction,
-            "Modbus Power write transaction failed");
+            "Modbus write transaction failed");
     }
 
     if (accepted) {
         pending.confirmationAttempts = 0;
-        EnqueuePowerConfirmation(runtime);
+        EnqueueConfirmation(runtime, control);
         return DriverResult{
             .address = runtime.logicalAddress,
             .operation = DriverOperation::SetState,
@@ -460,10 +583,10 @@ DriverResult ModbusDriver::ExecutePowerWrite(DeviceRuntime& runtime)
             : TransactionOutcome(transaction.status);
 
     if (pending.writeAttempts < policy_.maxWriteAttempts) {
-        EnqueuePowerWrite(runtime);
+        EnqueueWrite(runtime, control);
     }
     else {
-        runtime.pendingPower.reset();
+        pendingSlot.reset();
     }
 
     return DriverResult{
@@ -474,41 +597,33 @@ DriverResult ModbusDriver::ExecutePowerWrite(DeviceRuntime& runtime)
     };
 }
 
-DriverResult ModbusDriver::ConfirmPowerWrite(DeviceRuntime& runtime)
+DriverResult ModbusDriver::ConfirmWrite(
+    DeviceRuntime& runtime,
+    DriverControl control)
 {
-    if (!runtime.pendingPower.has_value()) {
+    auto& pendingSlot = PendingByControl(runtime, control);
+    if (!pendingSlot.has_value()) {
         return DriverResult{
             .address = runtime.logicalAddress,
             .operation = DriverOperation::ConfirmRead,
             .outcome = DriverOutcome::InvalidResponse,
-            .error = "stale Modbus Power confirmation work item",
+            .error = "stale Modbus confirmation work item",
         };
     }
 
-    auto& pending = *runtime.pendingPower;
+    auto& pending = *pendingSlot;
     ++pending.confirmationAttempts;
 
-    if (!runtime.pollPlan.powerRead.has_value()) {
-        runtime.pendingPower.reset();
-        return DriverResult{
-            .address = runtime.logicalAddress,
-            .operation = DriverOperation::ConfirmRead,
-            .outcome = DriverOutcome::InvalidResponse,
-            .error = "profile has no readable Power confirmation point",
-        };
-    }
-
-    const RawReadResult read = ReadSemanticRegister(
-        *runtime.pollPlan.powerRead);
+    const RawReadResult read = ReadSemanticRegister(pending.readLocation);
     if (!read.success) {
         runtime.state.online = false;
 
         if (pending.confirmationAttempts <
             policy_.maxConfirmationAttempts) {
-            EnqueuePowerConfirmation(runtime);
+            EnqueueConfirmation(runtime, control);
         }
         else {
-            runtime.pendingPower.reset();
+            pendingSlot.reset();
         }
 
         return DriverResult{
@@ -524,25 +639,25 @@ DriverResult ModbusDriver::ConfirmPowerWrite(DeviceRuntime& runtime)
         ApplySemanticRead(
             confirmed,
             profile_,
-            "power",
+            pending.pointName,
             read.value);
     }
     catch (const SemanticConversionError& error) {
         runtime.state.online = false;
-        runtime.pendingPower.reset();
+        const std::string pointName = pending.pointName;
+        pendingSlot.reset();
         return DriverResult{
             .address = runtime.logicalAddress,
             .operation = DriverOperation::ConfirmRead,
             .outcome = DriverOutcome::InvalidResponse,
-            .error =
-                std::string("cannot decode Modbus Power confirmation: ") +
-                error.what(),
+            .error = "cannot decode Modbus '" + pointName +
+                "' confirmation: " + error.what(),
         };
     }
 
-    if (confirmed.power != pending.desired) {
-        const std::string error =
-            "Modbus Power read-back does not match the requested value";
+    if (!FactualValueMatches(confirmed, control, pending.desired)) {
+        const std::string error = "Modbus '" + pending.pointName +
+            "' read-back does not match the requested value";
 
         // A valid but mismatching read proves that the device is reachable; it
         // must not publish a false offline state. Retry the write while budget
@@ -550,10 +665,10 @@ DriverResult ModbusDriver::ConfirmPowerWrite(DeviceRuntime& runtime)
         runtime.state.online = true;
         if (pending.writeAttempts < policy_.maxWriteAttempts) {
             pending.confirmationAttempts = 0;
-            EnqueuePowerWrite(runtime);
+            EnqueueWrite(runtime, control);
         }
         else {
-            runtime.pendingPower.reset();
+            pendingSlot.reset();
         }
 
         return DriverResult{
@@ -567,7 +682,7 @@ DriverResult ModbusDriver::ConfirmPowerWrite(DeviceRuntime& runtime)
     confirmed.online = true;
     confirmed.hasState = true;
     runtime.state = std::move(confirmed);
-    runtime.pendingPower.reset();
+    pendingSlot.reset();
 
     return DriverResult{
         .address = runtime.logicalAddress,
@@ -750,29 +865,39 @@ DriverResult ModbusDriver::MarkOffline(
     };
 }
 
-void ModbusDriver::EnqueuePowerWrite(const DeviceRuntime& runtime)
+void ModbusDriver::EnqueueWrite(
+    const DeviceRuntime& runtime,
+    DriverControl control)
 {
-    if (!runtime.pendingPower.has_value()) {
+    const auto index = WritableControlIndex(control);
+    if (!index.has_value() ||
+        !runtime.pendingWrites[*index].has_value()) {
         return;
     }
-    powerWriteQueue_.push_back(WorkItem{
+    writeQueue_.push_back(WorkItem{
         .logicalAddress = runtime.logicalAddress,
-        .revision = runtime.pendingPower->revision,
+        .control = control,
+        .revision = runtime.pendingWrites[*index]->revision,
     });
 }
 
-void ModbusDriver::EnqueuePowerConfirmation(const DeviceRuntime& runtime)
+void ModbusDriver::EnqueueConfirmation(
+    const DeviceRuntime& runtime,
+    DriverControl control)
 {
-    if (!runtime.pendingPower.has_value()) {
+    const auto index = WritableControlIndex(control);
+    if (!index.has_value() ||
+        !runtime.pendingWrites[*index].has_value()) {
         return;
     }
-    powerConfirmationQueue_.push_back(WorkItem{
+    confirmationQueue_.push_back(WorkItem{
         .logicalAddress = runtime.logicalAddress,
-        .revision = runtime.pendingPower->revision,
+        .control = control,
+        .revision = runtime.pendingWrites[*index]->revision,
     });
 }
 
-ModbusDriver::DeviceRuntime* ModbusDriver::PopValidWork(
+std::optional<ModbusDriver::PendingWork> ModbusDriver::PopValidWork(
     std::deque<WorkItem>& queue)
 {
     while (!queue.empty()) {
@@ -780,12 +905,17 @@ ModbusDriver::DeviceRuntime* ModbusDriver::PopValidWork(
         queue.pop_front();
 
         auto& runtime = DeviceByAddress(item.logicalAddress);
-        if (runtime.pendingPower.has_value() &&
-            runtime.pendingPower->revision == item.revision) {
-            return &runtime;
+        const auto index = WritableControlIndex(item.control);
+        if (index.has_value() &&
+            runtime.pendingWrites[*index].has_value() &&
+            runtime.pendingWrites[*index]->revision == item.revision) {
+            return PendingWork{
+                .runtime = &runtime,
+                .control = item.control,
+            };
         }
     }
-    return nullptr;
+    return std::nullopt;
 }
 
 DriverResult ModbusDriver::ProcessPoll()

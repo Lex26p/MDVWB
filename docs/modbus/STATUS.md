@@ -1,6 +1,6 @@
 # Modbus implementation status
 
-> Last updated: 2026-08-22
+> Last updated: 2026-08-24
 >
 > This file records what has actually been completed or prepared for the Modbus work.
 >
@@ -10,7 +10,7 @@
 
 **The first profile-driven Modbus RTU software stack is implemented and passes the complete local regression suite. Real-hardware release validation and a second independent equipment profile remain open.**
 
-Modbus RTU framing/serial transport, strict schema-v1 profile loading, semantic conversion, logical-address resolution, the first production equipment profile, protocol-aware bus/service configuration, live polling, confirmed Power writes, MQTT integration, retained UI profile catalog, capability-aware operator/schedule control, safe discovery of logical addresses `1..63`, resolved poll plans and conservative transaction optimization are implemented.
+Modbus RTU framing/serial transport, strict schema-v1 profile loading, semantic conversion, logical-address resolution, the first production equipment profile, protocol-aware bus/service configuration, live polling, confirmed Power/Mode/FanSpeed/integer-SetTemperature writes, MQTT integration, retained UI profile catalog, capability-aware operator/schedule control, safe discovery of logical addresses `1..63`, resolved poll plans and conservative transaction optimization are implemented.
 
 The existing MDV runtime remains unchanged behind the same protocol-independent boundary. The per-bus systemd instance still owns exactly one process and one serial port; `mdvwb-run` now selects the MDV executable or the internal Modbus runtime from the managed protocol setting.
 
@@ -217,7 +217,11 @@ Known architectural characteristics already identified:
 - status and control registers may differ;
 - the common MDVWB logical address limit remains `1..63`.
 
-The confirmed subset is implemented in `profiles/modbus/vrf_add_controller.json`. Power and AlarmCode are enabled; ambiguous Mode, FanSpeed, SetTemperature and physical RoomTemperature semantics remain disabled until hardware evidence is available.
+The live-confirmed subset covers addressing, discovery, Power and AlarmCode.
+The production profile additionally enables a field-validation implementation
+of Mode, FanSpeed and integer SetTemperature from the manufacturer's published
+bit/register table. Those three mappings are executable but are not yet recorded
+as confirmed on real equipment. Physical RoomTemperature remains disabled.
 
 ## Runtime boundary implemented
 
@@ -227,7 +231,8 @@ At this status point:
 - `MdvDriver` and `ModbusDriver` both implement that interface;
 - MQTT command routing uses semantic `DriverCommand` values;
 - MQTT state publication consumes `DriverDeviceState`, not protocol frames or raw registers;
-- the first Modbus runtime performs profile-driven factual polling and confirmed Power writes;
+- the Modbus runtime performs profile-driven factual polling and confirmed
+  writes for Power, Mode, FanSpeed and scalar SetTemperature;
 - manager-generated service configuration selects the protocol and production profile;
 - `mdvwb@N.service` still launches one `mdvwb-run` wrapper per physical bus;
 - the wrapper selects `/usr/local/bin/MDVWB` for MDV or the internal `/usr/local/lib/mdvwb/mdvwb-modbus` runtime for Modbus;
@@ -266,12 +271,15 @@ Milestone 11 now provides:
 - no reads across undeclared register gaps;
 - atomic factual snapshots even when a batch fails or returns the wrong size;
 - separate start-to-start cadence for ordinary polls, successful command/confirmation work and failed operations;
-- bounded configurable Power write attempts, confirmation attempts and priority burst before an ordinary poll;
+- bounded configurable write attempts, confirmation attempts and priority burst before an ordinary poll;
 - retry backoff that reduces repeated traffic after timeout, I/O or invalid-response outcomes.
 
-Default behavior remains compatible with the accepted runtime policy: three Power write attempts, three confirmation attempts and at most four priority operations before polling. Current defaults are 150 ms for ordinary polls, 20 ms for successful command work and 500 ms after failures. The serial transport still enforces Modbus RTU inter-frame timing independently.
+Default behavior remains compatible with the accepted runtime policy: three write attempts, three confirmation attempts and at most four priority operations before polling. Current defaults are 150 ms for ordinary polls, 20 ms for successful command work and 500 ms after failures. The serial transport still enforces Modbus RTU inter-frame timing independently.
 
-For the current `vrf_add_controller` profile, Power and AlarmCode registers are separated by an undeclared gap, so they intentionally remain separate FC03 requests. Optimization metrics therefore report no unsafe transaction saving for that production profile. A test profile proves adjacent batching and shared raw-value reuse without manufacturing-specific branches.
+For the current `vrf_add_controller` profile, Power, Mode, FanSpeed and integer
+SetTemperature occupy adjacent registers `40028..40031` and are read in one
+FC03 batch; AlarmCode at `40035` remains a separate request. No undeclared gap
+is crossed.
 
 ## Runtime safety and capability enforcement
 
@@ -280,9 +288,10 @@ For the current `vrf_add_controller` profile, Power and AlarmCode registers are 
 - the profile catalog preserves supported/readable semantic points but reports
   `writable=true` only for the intersection of the profile declaration and the
   current runtime implementation;
-- the current production runtime performs confirmed writes only for `Power`;
-- a valid non-Power `write` declaration does not expose a command in
-  `/fancoils/` or permit a scheduler action;
+- the current production runtime performs confirmed writes for `Power`, `Mode`,
+  `FanSpeed` and scalar `SetTemperature`;
+- a write outside that runtime set, or a read-only point, does not expose a
+  command in `/fancoils/` or permit a scheduler action;
 - group plans omit unsupported controls per target;
 - schedule editing uses the intersection of target capabilities;
 - scheduler independently loads the current profile and rejects an unsupported action before publishing any command;
@@ -427,13 +436,20 @@ Confirmed live-installation facts promoted into the profile:
 - Power enabled using status `40028 + 91*Y`, control `40078 + 91*Y`, values `0/1`;
 - AlarmCode enabled read-only at `40035 + 91*Y`.
 
-Mode, FanSpeed, SetTemperature and RoomTemperature remain disabled because their runtime interpretation or conversion is not yet sufficiently verified. In particular, the raw inlet-temperature value is trusted only as a non-zero presence signal, not yet as a physical room temperature.
+The profile also enables field-validation mappings taken directly from the
+manufacturer table: Mode at `40029/40079`, FanSpeed at `40030/40080`, and the
+integer part of SetTemperature at `40031/40081` with range `16..32`. Their live
+behavior still requires controller verification. Half-degree registers
+`40037/40085` are not used, so the current profile exposes only whole-degree
+setpoints. RoomTemperature remains disabled because its scale, signedness and
+sentinel values are not verified.
 
 The current logical identity follows the controller's sorted `Y` slot. A topology change may potentially shift which physical indoor unit occupies a logical address.
 
 Milestone 7 tests load the production JSON, verify literal addresses and stride resolution, reject invalid probe presence declarations, and verify the chosen `0 -> NotFound`, non-zero -> `Found` scan behavior through the common transaction boundary.
 
-Normal profile-driven Modbus polling and confirmed Power control are implemented by `ModbusDriver`.
+Normal profile-driven Modbus polling and confirmed Power, Mode, FanSpeed and
+scalar SetTemperature control are implemented by `ModbusDriver`.
 
 ## Protocol-aware bus/service configuration implemented
 
@@ -458,10 +474,11 @@ Milestone 9 now provides:
 
 - a profile-driven `ModbusDriver` implementing the existing `IDeviceDriver` boundary;
 - atomic factual polling snapshots using the profile presence probe followed by enabled semantic reads;
-- consistent online/offline publication through the existing `Power`, `Alarm`, `AlarmCode` and `Status` topics;
+- factual publication through the existing `Power`, `Mode`, `Speed`, `SetTemp`,
+  `Alarm`, `AlarmCode` and derived `Status` topics;
 - existing `/devices/Fan-<bus>_<logical>/controls/<Control>/on1` command routing without manufacturer-specific MQTT topics;
-- profile-driven FC10 Power writes to the control register;
-- FC03 factual read-back before Power state is updated or published;
+- profile-driven FC10 writes to the selected control register;
+- FC03 factual read-back before any commanded state is updated or published;
 - bounded write/confirmation retry and ordinary-poll fairness;
 - rejection of profile-disabled controls before any Modbus write traffic;
 - strict managed-environment parsing and runtime profile/serial revalidation before the port is opened;
@@ -470,16 +487,18 @@ Milestone 9 now provides:
 - backward-compatible installer handoff that keeps old package-format fixtures valid, rejects torn Modbus payloads, and preserves the previous runtime/profile inside lifecycle backups;
 - regression tests proving that MDV launch behavior remains unchanged and that Modbus uses the same MQTT semantic contract.
 
-For the first production profile, normal polling reads the safe presence point plus Power and AlarmCode. A zero presence value publishes the ordinary existing offline representation (`Alarm=2`, `Status=7`). A successful FC10 response alone never changes factual Power; only matching FC03 read-back does.
+For the first production profile, normal polling reads the safe presence point,
+the adjacent Power/Mode/FanSpeed/integer-SetTemperature block, and AlarmCode. A
+zero presence value publishes the ordinary existing offline representation
+(`Alarm=2`, `Status=7`). A successful FC10 response alone never changes factual
+state; only matching FC03 read-back does.
 
-The current Modbus runtime reads the supported points enabled by the selected
-profile, but its confirmed command state machine currently supports only Power.
-Effective writability is the intersection of the profile declaration and that
-runtime implementation. For `vrf_add_controller`, MQTT Power commands are
-supported; Mode, Speed, SetTemp, Blinds and Blok commands are rejected without
-wire traffic. Capability-aware metadata, engineering configuration, operator
-controls and schedule execution are implemented; unsupported writes remain
-disabled until both the equipment facts and runtime implementation exist.
+The confirmed command state machine supports Power, Mode, Speed and SetTemp as
+independent pending controls. Effective writability remains the intersection of
+the profile declaration and runtime implementation. For
+`vrf_add_controller`, those four MQTT commands are supported; Blinds and Blok
+are rejected without wire traffic. Capability-aware metadata, engineering
+configuration, operator controls and schedule execution use the same boundary.
 
 ## Open design items
 
@@ -539,13 +558,14 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 Complete real hardware validation from `ROADMAP.md`.
 
-The next task should verify the complete stack against actual equipment: stable communication, scan `1..63`, correct logical-address discovery, long-running polling, Power read/write confirmation, offline/recovery behavior and multiple configured devices on one bus. Only manufacturer-confirmed operations may be used.
+The next task is field validation against actual equipment: stable
+communication, scan `1..63`, factual Mode/Speed/SetTemp reads, one-at-a-time
+Power/Mode/FanSpeed/integer-SetTemperature round trips, offline/recovery behavior
+and multiple configured devices on one bus. Record the observed raw/factual
+values before treating the three newly enabled mappings as hardware-confirmed.
 
-The first production profile still enables only Power and AlarmCode. Mode,
-FanSpeed, SetTemperature and physical RoomTemperature must remain hidden or
-disabled until their hardware behavior and conversion are verified on real
-equipment. Enabling a future write also requires a confirmed-write state machine
-in the runtime; a profile declaration alone is insufficient.
+Physical RoomTemperature and half-degree SetTemperature remain disabled until
+their conversion/composite behavior is implemented and verified.
 
 ## Status update rules
 

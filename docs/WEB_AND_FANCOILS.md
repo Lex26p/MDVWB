@@ -771,10 +771,10 @@ retained `/mdvwb/config` и `/mdvwb/modbus/profiles`. MDV bus сохраняет
 capability профиля, а `writable` — уже эффективную возможность записи: она
 учитывает и `write` point профиля, и реализацию текущего runtime. Поэтому
 профиль может оставить `Mode` или `SetTemperature` доступными для чтения, но UI
-получит для их записи `writable=false`. Сейчас production Modbus runtime
-публикует `writable=true` только для подтверждённой записи `Power`. Неизвестный
-профиль или ещё не полученная bus configuration дают безопасный результат
-«команды недоступны».
+получит для их записи `writable=false`, если write point отсутствует. Сейчас
+production Modbus runtime поддерживает подтверждённую запись `Power`, `Mode`,
+`FanSpeed` и `SetTemperature`. Неизвестный профиль или ещё не полученная bus
+configuration дают безопасный результат «команды недоступны».
 
 ## 36. Когда управление отключено
 

@@ -86,10 +86,11 @@ parser отклоняет; их добавление требует расшир
 register для записи, но само по себе не означает готовность production runtime.
 Фактическая writable capability равна пересечению capability профиля, его
 `write` point и реализации драйвера. Сейчас подтверждённый write/FC03 read-back
-реализован только для `Power`. Объявленные профилем записи `Mode`, `FanSpeed`
-или `SetTemperature` остаются валидными для будущего расширения, но каталог UI
-публикует для них `writable=false`, scheduler отклоняет их до MQTT publish, а
-driver сохраняет окончательную защиту от Modbus traffic.
+реализован для `Power`, `Mode`, `FanSpeed` и `SetTemperature`. Каталог UI и
+scheduler разрешают только те из этих команд, для которых выбранный профиль
+содержит совместимые read/write points. `Blinds`, `Blocked` и любые будущие
+write-capabilities остаются недоступными до появления отдельной подтверждаемой
+реализации в driver.
 
 ## 3. Карта исходников драйвера
 

@@ -56,10 +56,17 @@ Important invariants:
 - MDV uses individual addresses `0..63`; Modbus uses logical addresses `1..63`;
 - protocol broadcast is not used;
 - MDV factual controls are updated only from valid C0 reads;
-- the current Modbus runtime performs confirmed writes only for `Power`;
+- the current Modbus runtime performs confirmed writes for `Power`, `Mode`,
+  `FanSpeed` and integer `SetTemperature` when the selected profile exposes
+  matching read/write points;
 - a Modbus control is writable only when both the selected profile and the
   current runtime support it; unsupported controls are rejected before wire
   traffic.
+
+The shipped `vrf_add_controller` enables Mode, FanSpeed and the integer part of
+SetTemperature as field-validation mappings from the manufacturer table. They
+still require confirmation on the target equipment; half-degree setpoints and
+physical room temperature are not enabled.
 
 ## Runtime files
 

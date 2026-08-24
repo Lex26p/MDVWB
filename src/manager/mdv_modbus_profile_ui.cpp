@@ -175,7 +175,7 @@ void WriteCapability(
     const mdv::modbus::PointDefinition* point =
         pointIterator == profile.points.end() ? nullptr : &pointIterator->second;
     const bool runtimeWritable =
-        supported && point != nullptr && point->write.has_value() &&
+        supported && point != nullptr &&
         mdv::modbus::IsModbusRuntimeWritablePoint(
             profile, descriptor.pointName);
 

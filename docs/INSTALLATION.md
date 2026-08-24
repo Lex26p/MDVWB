@@ -344,6 +344,12 @@ journalctl -u mdvwb@1.service -n 200 --no-pager
 `MDVWB_MODBUS_PROFILE_ID` и serial settings. Scheduler должен видеть тот же
 каталог через `MDVWB_MODBUS_PROFILE_DIR` в `/etc/default/mdvwb-scheduler`.
 
+Текущий `vrf_add_controller` публикует factual `Power`, `Mode`, `Speed`, целый
+`SetTemp`, `AlarmCode` и производный `Status`; команды Power/Mode/Speed/SetTemp
+доступны только после первого успешного snapshot и подтверждаются чтением
+обратно. Половинные градусы и физический `Temp` этим профилем пока не
+поддерживаются.
+
 Web:
 
 ```text

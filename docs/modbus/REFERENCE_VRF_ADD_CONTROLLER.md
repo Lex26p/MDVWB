@@ -19,7 +19,12 @@ This document is a reference, not executable truth.
 
 The source spreadsheet contains several conventions that require live verification before they may be promoted into executable profile data.
 
-Milestone 7 now has enough verification for a deliberately limited production profile: literal register addressing, fixed `Y` stride mapping, Power, AlarmCode, and a read-only temperature-based presence probe. Ambiguous Mode/FanSpeed/SetTemperature/RoomTemperature semantics remain disabled.
+Live verification established literal register addressing, fixed `Y` stride
+mapping, Power, AlarmCode and the read-only temperature-based presence probe.
+The current production profile also contains a field-validation implementation
+of the manufacturer's Mode/FanSpeed masks and integer SetTemperature registers.
+Those additions are executable but not yet confirmed by a recorded hardware
+round trip. RoomTemperature and half-degree SetTemperature remain disabled.
 
 Do not silently infer missing behavior.
 
@@ -437,7 +442,9 @@ A simple profile model where one semantic value maps to exactly one Modbus regis
 
 The profile system must eventually support **composite semantic values** whose read/write representation spans more than one point.
 
-This requirement should be incorporated into the final profile schema before the first production profile is implemented.
+This requirement must be incorporated into a future profile schema before
+half-degree SetTemperature is enabled; the current scalar profile intentionally
+uses only the integer registers.
 
 ## 11. Humidity
 
@@ -753,27 +760,32 @@ Known limitation: a genuine indoor unit that ever reports raw inlet temperature 
 
 ## 21. Production-profile scope
 
-Milestone 7 intentionally enables only semantics that are sufficiently confirmed:
+The current executable scope is:
 
 ```text
 Power       enabled
 AlarmCode   enabled
-Mode        disabled
-FanSpeed    disabled
-SetTemperature disabled
+Mode        enabled for field validation
+FanSpeed    enabled for field validation
+SetTemperature enabled, integer 16..32 only, for field validation
 RoomTemperature disabled
 Blinds      disabled
 Blocked     disabled
 ```
 
-Why the remaining HVAC controls stay disabled:
+Field-validation mappings:
 
-- Mode one-hot/multi-bit behavior is not yet confirmed on live equipment.
-- FanSpeed exposes six native fixed levels plus Auto and has no reviewed Low/Medium/High normalization yet.
-- SetTemperature spans integer and half-degree registers and needs composite read/write support plus hardware confirmation.
-- RoomTemperature uses `40039 + 91*Y`, but its physical scaling/signedness is still unknown. The raw value is used only as a non-zero presence signal.
+- Mode uses the table's one-hot masks `1/2/4/8/16` for
+  Auto/Cool/Dry/Fan/Heat.
+- FanSpeed writes Auto/High/Medium/Low as `1/2/4/8`; native extended reads
+  `16/32/64` normalize to High/Medium/Low.
+- SetTemperature reads/writes only the integer registers `40031/40081` and
+  accepts whole degrees `16..32`; the half-degree flag registers are untouched.
 
-The production profile is therefore intentionally small rather than confidently wrong.
+These three mappings must be checked on the installed controller before they
+are described as hardware-confirmed. RoomTemperature stays disabled because
+`40039 + 91*Y` still has unknown physical scaling/signedness and is used only as
+a non-zero presence signal.
 
 ## 22. Impact on generic profile format
 
@@ -829,7 +841,10 @@ probe
 
 ## 24. Current conclusion
 
-The supplied table plus live WirenBoard verification are sufficient for a deliberately limited first production profile.
+The supplied table plus live WirenBoard verification establish the addressing,
+presence, Power and Alarm baseline. The executable profile additionally carries
+Mode, FanSpeed and integer SetTemperature mappings for controlled field
+validation.
 
 The strongest confirmed parts are:
 
@@ -846,11 +861,12 @@ The strongest confirmed parts are:
 
 The most important unresolved items are:
 
-- exact wire register-address convention;
 - stable mapping between MDVWB logical address and manufacturer `Y`;
-- unused-`Y` behavior for scanning;
+- Mode one-hot behavior and whether unused bits must be preserved;
 - native fan-speed normalization;
 - inlet-temperature encoding;
 - exact composite set-temperature write/read behavior.
 
-Do not implement these unresolved items by assumption.
+Do not describe unresolved mappings as hardware-confirmed. The current
+field-validation implementation is the explicit exception used to collect that
+evidence; stop testing at the first factual or physical mismatch.

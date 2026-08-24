@@ -98,10 +98,9 @@ A normal new Modbus air-conditioner/fan-coil should usually be added as a new pr
 The common Modbus engine should not need manufacturer-specific branches for ordinary equipment.
 
 Schema v1 supports different combinations of the existing common semantic
-points, not arbitrary new variable names. Profile write mappings are broader
-than the current live command path: production confirmed writes currently cover
-only `Power`. UI and scheduler use the intersection of profile metadata and
-runtime support.
+points, not arbitrary new variable names. Production confirmed writes cover
+`Power`, `Mode`, `FanSpeed` and `SetTemperature`; UI and scheduler expose only
+the intersection of those runtime capabilities and the selected profile.
 
 A profile may define:
 

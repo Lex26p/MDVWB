@@ -48,9 +48,10 @@ A profile `write` declaration describes the register mapping and conversion; it
 does not by itself guarantee that the live driver implements the corresponding
 confirmed command. Effective writability is the intersection of the enabled
 profile capability, its `write` definition and the production runtime. The
-current runtime performs confirmed writes only for `power`. Valid non-Power
-write declarations remain usable as forward-compatible profile metadata, while
-the UI and scheduler expose them as non-writable until runtime support is added.
+current runtime performs confirmed scalar writes for `power`, `mode`,
+`fanSpeed` and `setTemperature`. Other write declarations remain usable as
+forward-compatible profile metadata, while the UI and scheduler expose them as
+non-writable until runtime support is added.
 
 ## 2. Separation of profile and bus configuration
 
@@ -524,10 +525,9 @@ raw 235 -> 23.5 °C
 
 ## 18. Writable temperature example
 
-This example demonstrates schema conversion only. In the current production
-runtime a `setTemperature.write` declaration is accepted but is not exposed as
-writable and does not produce live Modbus traffic; only `power` has the required
-confirmed-write state machine.
+This example is executable by the current scalar confirmed-write runtime when
+both read and write locations use holding registers. The factual value changes
+only after a matching read-back.
 
 Example:
 
@@ -569,6 +569,10 @@ MDVWB 22.5 °C -> raw 225
 ```
 
 The engine must perform the inverse transformation automatically.
+
+This scalar form does not implement a temperature split across integer and
+half-degree registers. Such equipment still requires the future composite form
+described below.
 
 ## 18.1 Composite semantic values
 

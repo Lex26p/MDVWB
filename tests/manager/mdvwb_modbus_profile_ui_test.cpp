@@ -97,8 +97,25 @@ void TestProductionProfilePresentation()
             "read-only Alarm was exposed writable");
 
     for (const std::string name : {
-             "mode", "fanSpeed", "setTemperature", "roomTemperature",
-             "blinds", "blocked"}) {
+             "mode", "fanSpeed", "setTemperature"}) {
+        const auto& capability = ObjectField(capabilities, name);
+        Require(capability.at("supported").AsBoolean(),
+                "enabled HVAC capability was hidden: " + name);
+        Require(capability.at("readable").AsBoolean(),
+                "enabled HVAC read was hidden: " + name);
+        Require(capability.at("writable").AsBoolean(),
+                "enabled HVAC write was hidden: " + name);
+    }
+
+    const auto& setTemperature =
+        ObjectField(capabilities, "setTemperature");
+    Require(NumberField(setTemperature, "minimum") == 16.0 &&
+                NumberField(setTemperature, "maximum") == 32.0 &&
+                NumberField(setTemperature, "step") == 1.0,
+            "production SetTemperature limits mismatch");
+
+    for (const std::string name : {
+             "roomTemperature", "blinds", "blocked"}) {
         const auto& capability = ObjectField(capabilities, name);
         Require(!capability.at("supported").AsBoolean(),
                 "disabled capability was exposed as supported: " + name);
@@ -168,8 +185,8 @@ void TestEnumAndNumericUiMetadata()
             "profile-supported Mode was hidden");
     Require(modeUi.at("readable").AsBoolean(),
             "runtime-readable Mode was hidden");
-    Require(!modeUi.at("writable").AsBoolean(),
-            "runtime-unsupported Mode write was exposed");
+    Require(modeUi.at("writable").AsBoolean(),
+            "runtime-supported Mode write was hidden");
     const auto& values = ArrayField(modeUi, "values");
     Require(values.size() == 3U, "enum semantic value count mismatch");
 
@@ -178,8 +195,8 @@ void TestEnumAndNumericUiMetadata()
             "enum values are not deterministic");
     Require(cool.at("readable").AsBoolean(),
             "readable enum value was hidden");
-    Require(!cool.at("writable").AsBoolean(),
-            "runtime-unsupported enum write was exposed");
+    Require(cool.at("writable").AsBoolean(),
+            "runtime-supported enum write was hidden");
 
     const auto& off = values.at(2).AsObject();
     Require(off.at("value").AsString() == "off",
@@ -195,8 +212,8 @@ void TestEnumAndNumericUiMetadata()
             "profile-supported SetTemperature was hidden");
     Require(setTemperatureUi.at("readable").AsBoolean(),
             "runtime-readable SetTemperature was hidden");
-    Require(!setTemperatureUi.at("writable").AsBoolean(),
-            "runtime-unsupported SetTemperature write was exposed");
+    Require(setTemperatureUi.at("writable").AsBoolean(),
+            "runtime-supported SetTemperature write was hidden");
     Require(NumberField(setTemperatureUi, "minimum") == 16.0,
             "numeric minimum mismatch");
     Require(NumberField(setTemperatureUi, "maximum") == 30.0,

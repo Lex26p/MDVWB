@@ -1,6 +1,8 @@
 # VRF Add Controller production-profile verification checklist
 
-> Purpose: record which source-table uncertainties are resolved for the first production profile and which capabilities remain intentionally disabled.
+> Purpose: record which source-table uncertainties are resolved, which mappings
+> are enabled for controlled field validation, and which capabilities remain
+> intentionally disabled.
 
 ## Current state
 
@@ -113,7 +115,7 @@ nonzero -> vendor alarm code
 
 Enabled as an unsigned raw numeric code.
 
-## Deferred capability 1: Mode
+## Field-validation capability 1: Mode
 
 Source points:
 
@@ -128,9 +130,11 @@ Still confirm:
 - whether one write mask is sufficient;
 - whether unused bits must be preserved.
 
-Capability remains disabled.
+The profile currently enables the table-derived one-hot mapping so the operator
+can perform a controlled hardware check. It is not yet a recorded live-confirmed
+fact.
 
-## Deferred capability 2: FanSpeed
+## Field-validation capability 2: FanSpeed
 
 Source points:
 
@@ -139,11 +143,11 @@ Source points:
 40080 + 91*Y   control
 ```
 
-Still confirm one-hot behavior and review the mapping from six native fixed speeds to MDVWB Low/Medium/High.
+Still confirm one-hot behavior and the current normalization from six native
+fixed speeds to MDVWB Low/Medium/High. The profile enables the mapping for this
+controlled field check.
 
-Capability remains disabled.
-
-## Deferred capability 3: SetTemperature
+## Field-validation capability 3: SetTemperature
 
 Source points:
 
@@ -154,9 +158,9 @@ Source points:
 40085 + 91*Y   half-degree control flag
 ```
 
-This requires composite semantic value support plus hardware confirmation of write behavior.
-
-Capability remains disabled.
+The current profile enables only the integer registers `40031/40081`, whole
+degrees `16..32`. Composite half-degree behavior remains disabled and still
+requires schema/runtime support plus hardware confirmation.
 
 ## Deferred capability 4: RoomTemperature
 
@@ -172,6 +176,9 @@ Capability remains disabled until physical-unit conversion is verified.
 
 ## Promotion rule for future capabilities
 
-A new semantic capability may be enabled only when its raw behavior and conversion are supported by the workbook plus live evidence or equivalent trustworthy documentation.
-
-Unresolved capabilities remain disabled rather than guessed.
+A new semantic capability normally requires both documented raw behavior and
+live evidence. Mode, FanSpeed and integer SetTemperature are temporarily enabled
+as an explicit field-validation build at the operator's request; they must not
+be relabeled as confirmed until the observed reads, writes and physical results
+are recorded. Unresolved RoomTemperature and half-degree behavior remain
+disabled.

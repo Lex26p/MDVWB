@@ -609,9 +609,9 @@ function loadDemoData() {
       addressingType: "fixed_slave_stride",
       capabilities: {
         power: { supported: true, readable: true, writable: true, type: "boolean" },
-        mode: { supported: false, readable: false, writable: false, type: null },
-        fanSpeed: { supported: false, readable: false, writable: false, type: null },
-        setTemperature: { supported: false, readable: false, writable: false, type: null },
+        mode: { supported: true, readable: true, writable: true, type: "enum" },
+        fanSpeed: { supported: true, readable: true, writable: true, type: "enum" },
+        setTemperature: { supported: true, readable: true, writable: true, type: "number", minimum: 16, maximum: 32, step: 1 },
         roomTemperature: { supported: false, readable: false, writable: false, type: null },
         alarm: { supported: true, readable: true, writable: false, type: "number", minimum: null, maximum: null, step: null },
         blinds: { supported: false, readable: false, writable: false, type: null },

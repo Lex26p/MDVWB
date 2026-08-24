@@ -295,8 +295,8 @@ void TestUnsupportedModbusScheduleActionIsRejected()
     TestEnvironment environment;
     environment.WriteModbusProfile(R"json({
       "schemaVersion":1,
-      "id":"mode_write_profile",
-      "name":"Mode write profile",
+      "id":"mode_read_only_profile",
+      "name":"Mode read-only profile",
       "registerAddressing":"pdu_zero_based",
       "transport":{"baudRate":9600,"dataBits":8,"parity":"none","stopBits":1},
       "addressing":{"type":"direct_slave","logicalMin":1,"logicalMax":63,"registerOffset":0},
@@ -319,9 +319,7 @@ void TestUnsupportedModbusScheduleActionIsRejected()
         "mode":{
           "type":"enum",
           "read":{"space":"holding_register","address":2},
-          "write":{"space":"holding_register","address":3},
-          "readMap":{"0":"cool","1":"heat"},
-          "writeMap":{"cool":0,"heat":1}
+          "readMap":{"0":"cool","1":"heat"}
         }
       }
     })json");
@@ -333,7 +331,7 @@ void TestUnsupportedModbusScheduleActionIsRejected()
         "protocol":"modbus_rtu",
         "port":"/dev/ttyRS485-1",
         "modbus":{
-          "profileId":"mode_write_profile",
+          "profileId":"mode_read_only_profile",
           "baudRate":9600,
           "dataBits":8,
           "parity":"none",
@@ -369,11 +367,11 @@ void TestUnsupportedModbusScheduleActionIsRejected()
     Require(
         result.has_value() && !result->success &&
             result->message.find("not supported") != std::string::npos,
-        "scheduler accepted a profile write not implemented by the Modbus runtime");
+        "scheduler accepted a read-only Modbus action");
     Require(
         mqtt.CountTopic(
             "/devices/Fan-1_1/controls/Mode/on1") == 0U,
-        "scheduler published a command not implemented by the Modbus runtime");
+        "scheduler published a command for a read-only Modbus point");
 }
 
 void TestStatusPublishesControllerClockEveryMinute()

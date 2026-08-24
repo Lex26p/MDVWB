@@ -6,6 +6,7 @@
 #include "modbus_rtu_serial.h"
 #include "modbus_scan_execute.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -51,11 +52,16 @@ public:
     [[nodiscard]] const ModbusPollPlanMetrics& PollPlanMetrics() const noexcept;
 
 private:
-    struct PendingPower {
-        bool desired = false;
+    static constexpr std::size_t kWritableControlCount = 4U;
+
+    struct PendingWrite {
+        DriverControl control = DriverControl::Power;
+        DriverCommandValue desired = false;
+        std::string pointName;
         std::uint16_t rawValue = 0;
         std::uint8_t slaveId = 1;
         std::uint16_t writeAddress = 0;
+        ResolvedRegisterLocation readLocation;
         std::uint64_t revision = 0;
         std::uint32_t writeAttempts = 0;
         std::uint32_t confirmationAttempts = 0;
@@ -65,7 +71,8 @@ private:
         std::uint8_t logicalAddress = 0;
         ModbusDevicePollPlan pollPlan;
         DriverDeviceState state;
-        std::optional<PendingPower> pendingPower;
+        std::array<std::optional<PendingWrite>, kWritableControlCount>
+            pendingWrites{};
     };
 
     struct RawReadResult {
@@ -84,16 +91,29 @@ private:
 
     struct WorkItem {
         std::uint8_t logicalAddress = 0;
+        DriverControl control = DriverControl::Power;
         std::uint64_t revision = 0;
+    };
+
+    struct PendingWork {
+        DeviceRuntime* runtime = nullptr;
+        DriverControl control = DriverControl::Power;
     };
 
     [[nodiscard]] DeviceRuntime& DeviceByAddress(std::uint8_t address);
     [[nodiscard]] const DeviceRuntime& DeviceByAddress(
         std::uint8_t address) const;
+    [[nodiscard]] std::optional<PendingWrite>& PendingByControl(
+        DeviceRuntime& runtime,
+        DriverControl control);
 
     [[nodiscard]] DriverResult Poll(DeviceRuntime& runtime);
-    [[nodiscard]] DriverResult ExecutePowerWrite(DeviceRuntime& runtime);
-    [[nodiscard]] DriverResult ConfirmPowerWrite(DeviceRuntime& runtime);
+    [[nodiscard]] DriverResult ExecuteWrite(
+        DeviceRuntime& runtime,
+        DriverControl control);
+    [[nodiscard]] DriverResult ConfirmWrite(
+        DeviceRuntime& runtime,
+        DriverControl control);
 
     [[nodiscard]] RawBatchReadResult ReadSemanticBatch(
         const ModbusSemanticReadBatch& batch);
@@ -106,10 +126,14 @@ private:
         DriverOutcome outcome,
         std::string error);
 
-    void EnqueuePowerWrite(const DeviceRuntime& runtime);
-    void EnqueuePowerConfirmation(const DeviceRuntime& runtime);
+    void EnqueueWrite(
+        const DeviceRuntime& runtime,
+        DriverControl control);
+    void EnqueueConfirmation(
+        const DeviceRuntime& runtime,
+        DriverControl control);
 
-    [[nodiscard]] DeviceRuntime* PopValidWork(
+    [[nodiscard]] std::optional<PendingWork> PopValidWork(
         std::deque<WorkItem>& queue);
 
     [[nodiscard]] DriverResult ProcessPoll();
@@ -119,8 +143,8 @@ private:
     ModbusPollPlanMetrics pollPlanMetrics_;
     ITransactionTransport& transport_;
     std::vector<DeviceRuntime> devices_;
-    std::deque<WorkItem> powerWriteQueue_;
-    std::deque<WorkItem> powerConfirmationQueue_;
+    std::deque<WorkItem> writeQueue_;
+    std::deque<WorkItem> confirmationQueue_;
     std::size_t nextPollIndex_ = 0;
     std::size_t priorityOperations_ = 0;
     std::uint64_t nextCommandRevision_ = 0;

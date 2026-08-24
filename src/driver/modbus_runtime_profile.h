@@ -30,6 +30,15 @@ inline constexpr std::array<SemanticPointDescriptor, 8> kSemanticPoints{{
     {"blocked", &ProfileCapabilities::blocked},
 }};
 
+[[nodiscard]] inline bool IsWritableSemanticPointName(
+    std::string_view pointName) noexcept
+{
+    return pointName == "power" ||
+        pointName == "mode" ||
+        pointName == "fanSpeed" ||
+        pointName == "setTemperature";
+}
+
 [[nodiscard]] inline std::uint32_t MaximumRegisterOffset(
     const Addressing& addressing)
 {
@@ -92,19 +101,31 @@ inline void ValidateResolvedRegisterRange(
 } // namespace runtime_profile_detail
 
 // Returns the effective write capability of the current production runtime,
-// not merely the write declaration stored in a profile. Profiles may describe
-// semantic writes that are implemented by the generic conversion layer before
-// the serial driver gains the corresponding confirmed-write state machine.
+// not merely the write declaration stored in a profile. Every exposed write
+// must have both profile support and a confirmed-write state machine.
 [[nodiscard]] inline bool IsModbusRuntimeWritablePoint(
     const ModbusProfile& profile,
     std::string_view pointName) noexcept
 {
-    if (pointName != "power" || !profile.capabilities.power) {
+    if (!runtime_profile_detail::IsWritableSemanticPointName(pointName)) {
+        return false;
+    }
+
+    const auto descriptor = std::find_if(
+        runtime_profile_detail::kSemanticPoints.begin(),
+        runtime_profile_detail::kSemanticPoints.end(),
+        [pointName](const auto& candidate) {
+            return candidate.name == pointName;
+        });
+    if (descriptor == runtime_profile_detail::kSemanticPoints.end() ||
+        !(profile.capabilities.*(descriptor->enabled))) {
         return false;
     }
 
     const auto point = profile.points.find(pointName);
     return point != profile.points.end() &&
+        point->second.read.has_value() &&
+        point->second.read->space == RegisterSpace::HoldingRegister &&
         point->second.write.has_value() &&
         point->second.write->space == RegisterSpace::HoldingRegister;
 }
@@ -162,6 +183,25 @@ inline void ValidateModbusRuntimeProfile(const ModbusProfile& profile)
             *iterator->second.read,
             1U,
             "semantic point '" + std::string(descriptor.name) + "'");
+
+        if (iterator->second.write.has_value() &&
+            runtime_profile_detail::IsWritableSemanticPointName(
+                descriptor.name)) {
+            if (iterator->second.write->space !=
+                RegisterSpace::HoldingRegister) {
+                throw std::invalid_argument(
+                    "profile '" + profile.id +
+                    "' uses an unsupported write data space for semantic point '" +
+                    std::string(descriptor.name) +
+                    "'; only holding_register is supported");
+            }
+            runtime_profile_detail::ValidateResolvedRegisterRange(
+                profile,
+                *iterator->second.write,
+                1U,
+                "semantic point '" + std::string(descriptor.name) +
+                    "' write");
+        }
         ++readablePoints;
     }
 
@@ -171,24 +211,6 @@ inline void ValidateModbusRuntimeProfile(const ModbusProfile& profile)
             "' exposes no readable semantic points");
     }
 
-    if (profile.capabilities.power) {
-        const auto power = profile.points.find("power");
-        if (power != profile.points.end() &&
-            power->second.write.has_value()) {
-            if (power->second.write->space !=
-                RegisterSpace::HoldingRegister) {
-                throw std::invalid_argument(
-                    "profile '" + profile.id +
-                    "' uses an unsupported Power write data space; "
-                    "only holding_register is supported");
-            }
-            runtime_profile_detail::ValidateResolvedRegisterRange(
-                profile,
-                *power->second.write,
-                1U,
-                "Power write");
-        }
-    }
 }
 
 } // namespace mdv::modbus

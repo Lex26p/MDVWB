@@ -108,10 +108,15 @@ public:
             RequestFunction(request) == 0x03U,
             "read-only production transport received a write");
         const auto address = RequestAddress(request);
+        const auto quantity = RequestQuantity(request);
 
         switch (address) {
         case 40039U: return ReadSuccess(request, 24U); // logical 1 probe
-        case 40028U: return ReadSuccess(request, 1U);  // logical 1 Power
+        case 40028U:
+            Require(quantity == 4U, "production state batch size mismatch");
+            return ReadSuccess(
+                request,
+                std::vector<std::uint16_t>{1U, 2U, 1U, 24U});
         case 40035U: return ReadSuccess(request, 5U);  // logical 1 AlarmCode
         case 40130U: return ReadSuccess(request, 0U);  // logical 2 absent probe
         default:
@@ -175,6 +180,12 @@ public:
         steps.pop_front();
 
         if (step.status == mdv::modbus::TransactionStatus::Success) {
+            if (RequestQuantity(request) == 4U) {
+                return ReadSuccess(
+                    request,
+                    std::vector<std::uint16_t>{
+                        step.value, 1U, 1U, 24U});
+            }
             return ReadSuccess(request, step.value);
         }
 
@@ -199,11 +210,19 @@ public:
         const auto address = RequestAddress(request);
 
         if (function == 0x10U) {
-            Require(address == 40078U, "Power write address mismatch");
-            Require(RequestQuantity(request) == 1U, "Power write quantity mismatch");
+            Require(RequestQuantity(request) == 1U, "write quantity mismatch");
             const auto value = RequestWriteValue(request);
             if (applyWrites) {
-                powerRaw = value;
+                switch (address) {
+                case 40078U: powerRaw = value; break;
+                case 40079U: modeRaw = value; break;
+                case 40080U: fanSpeedRaw = value; break;
+                case 40081U: setTemperatureRaw = value; break;
+                default:
+                    throw std::runtime_error(
+                        "unexpected write register " +
+                        std::to_string(address));
+                }
             }
             return WriteSuccess(request);
         }
@@ -211,7 +230,20 @@ public:
         Require(function == 0x03U, "unexpected Modbus function");
         switch (address) {
         case 40039U: return ReadSuccess(request, 24U);
-        case 40028U: return ReadSuccess(request, powerRaw);
+        case 40028U:
+            if (RequestQuantity(request) == 4U) {
+                return ReadSuccess(
+                    request,
+                    std::vector<std::uint16_t>{
+                        powerRaw,
+                        modeRaw,
+                        fanSpeedRaw,
+                        setTemperatureRaw});
+            }
+            return ReadSuccess(request, powerRaw);
+        case 40029U: return ReadSuccess(request, modeRaw);
+        case 40030U: return ReadSuccess(request, fanSpeedRaw);
+        case 40031U: return ReadSuccess(request, setTemperatureRaw);
         case 40035U: return ReadSuccess(request, 0U);
         default:
             throw std::runtime_error(
@@ -222,6 +254,9 @@ public:
 
     bool applyWrites = true;
     std::uint16_t powerRaw = 1U;
+    std::uint16_t modeRaw = 1U;
+    std::uint16_t fanSpeedRaw = 1U;
+    std::uint16_t setTemperatureRaw = 24U;
     std::vector<mdv::modbus::RtuAdu> requests;
 };
 
@@ -245,7 +280,9 @@ public:
                 return ReadSuccess(request, 24U);
             }
             if (address == 40028U && !writeSeen) {
-                return ReadSuccess(request, 1U);
+                return ReadSuccess(
+                    request,
+                    std::vector<std::uint16_t>{1U, 1U, 1U, 24U});
             }
             if (address == 40028U && writeSeen) {
                 mdv::modbus::TransactionResult result;
@@ -285,7 +322,12 @@ public:
                 return ReadSuccess(request, 24U);
             }
             if (address == 40028U) {
-                return ReadSuccess(request, writeSeen ? 2U : 1U);
+                if (!writeSeen) {
+                    return ReadSuccess(
+                        request,
+                        std::vector<std::uint16_t>{1U, 1U, 1U, 24U});
+                }
+                return ReadSuccess(request, 2U);
             }
             if (address == 40035U) {
                 return ReadSuccess(request, 0U);
@@ -313,7 +355,10 @@ public:
         if (function == 0x03U) {
             switch (address) {
             case 40039U: return ReadSuccess(request, 24U);
-            case 40028U: return ReadSuccess(request, 1U);
+            case 40028U:
+                return ReadSuccess(
+                    request,
+                    std::vector<std::uint16_t>{1U, 1U, 1U, 24U});
             case 40035U: return ReadSuccess(request, 0U);
             default: break;
             }
@@ -342,6 +387,9 @@ mdv::modbus::ModbusProfile ProductionProfile()
 mdv::modbus::ModbusProfile AdjacentAndSharedProfile()
 {
     auto profile = ProductionProfile();
+    profile.capabilities.mode = false;
+    profile.capabilities.fanSpeed = false;
+    profile.capabilities.setTemperature = false;
     profile.capabilities.roomTemperature = true;
 
     mdv::modbus::PointDefinition room;
@@ -400,6 +448,15 @@ void TestProductionProfileReadOnlyPolling()
     Require(state.online, "successful snapshot did not mark device online");
     Require(state.hasState, "successful snapshot did not publish factual state");
     Require(state.power, "Power semantic value mismatch");
+    Require(
+        state.mode == mdv::HvacMode::Cool,
+        "Mode semantic value mismatch");
+    Require(
+        state.fanSpeed == mdv::HvacFanSpeed::Auto,
+        "FanSpeed semantic value mismatch");
+    Require(
+        state.setTemperature == 24.0,
+        "SetTemperature semantic value mismatch");
     Require(state.alarmCode == 5, "AlarmCode semantic value mismatch");
 
     Require(
@@ -409,8 +466,9 @@ void TestProductionProfileReadOnlyPolling()
         RequestAddress(transport.requests[0]) == 40039U,
         "snapshot did not begin with the profile presence probe");
     Require(
-        RequestAddress(transport.requests[1]) == 40028U,
-        "Power read address mismatch");
+        RequestAddress(transport.requests[1]) == 40028U &&
+            RequestQuantity(transport.requests[1]) == 4U,
+        "factual state batch mismatch");
     Require(
         RequestAddress(transport.requests[2]) == 40035U,
         "AlarmCode read address mismatch");
@@ -605,6 +663,148 @@ void TestPowerWriteAndReadBackConfirmation()
     Require(confirmed.hasState, "confirmed device lost factual state");
     Require(!confirmed.power, "confirmed Power state did not change");
     Require(!driver.HasQueuedWork(), "confirmed command remained queued");
+}
+
+void TestModeSpeedAndSetTemperatureWritesAreConfirmed()
+{
+    auto profile = ProductionProfile();
+    PowerTransport transport;
+    mdv::modbus::ModbusDriver driver({1U}, profile, transport);
+    InitializeOne(driver);
+    transport.requests.clear();
+
+    const auto verifyCommand = [&](
+                                   mdv::DriverControl control,
+                                   mdv::DriverCommandValue value,
+                                   std::uint16_t writeAddress,
+                                   std::uint16_t rawValue,
+                                   std::uint16_t readAddress) {
+        driver.ApplyCommand(mdv::DriverCommand{
+            .address = 1U,
+            .control = control,
+            .value = std::move(value),
+        });
+
+        auto requestOffset = transport.requests.size();
+        auto write = driver.ProcessNext();
+        if (write.operation == mdv::DriverOperation::PollRead) {
+            requestOffset = transport.requests.size();
+            write = driver.ProcessNext();
+        }
+        if (write.operation != mdv::DriverOperation::SetState ||
+            write.outcome != mdv::DriverOutcome::Success) {
+            throw std::runtime_error(
+                "semantic FC10 write failed: " + write.error);
+        }
+        Require(
+            RequestFunction(transport.requests[requestOffset]) == 0x10U &&
+                RequestAddress(transport.requests[requestOffset]) == writeAddress &&
+                RequestWriteValue(transport.requests[requestOffset]) == rawValue,
+            "semantic FC10 request mismatch");
+
+        const auto confirmation = driver.ProcessNext();
+        Require(
+            confirmation.operation == mdv::DriverOperation::ConfirmRead &&
+                confirmation.outcome == mdv::DriverOutcome::Success,
+            "semantic read-back confirmation failed");
+        Require(
+            RequestFunction(transport.requests[requestOffset + 1U]) == 0x03U &&
+                RequestAddress(transport.requests[requestOffset + 1U]) == readAddress,
+            "semantic confirmation register mismatch");
+    };
+
+    verifyCommand(
+        mdv::DriverControl::Mode,
+        mdv::HvacMode::Cool,
+        40079U,
+        2U,
+        40029U);
+    Require(
+        driver.DeviceStateByAddress(1U).mode == mdv::HvacMode::Cool,
+        "confirmed Mode did not become factual");
+
+    verifyCommand(
+        mdv::DriverControl::FanSpeed,
+        mdv::HvacFanSpeed::Low,
+        40080U,
+        8U,
+        40030U);
+    Require(
+        driver.DeviceStateByAddress(1U).fanSpeed == mdv::HvacFanSpeed::Low,
+        "confirmed FanSpeed did not become factual");
+
+    verifyCommand(
+        mdv::DriverControl::SetTemperature,
+        26.0,
+        40081U,
+        26U,
+        40031U);
+    Require(
+        driver.DeviceStateByAddress(1U).setTemperature == 26.0,
+        "confirmed SetTemperature did not become factual");
+    Require(!driver.HasQueuedWork(), "confirmed semantic commands remained queued");
+}
+
+void TestIndependentControlsCanBeQueuedTogether()
+{
+    auto profile = ProductionProfile();
+    PowerTransport transport;
+    mdv::modbus::ModbusDriver driver({1U}, profile, transport);
+    InitializeOne(driver);
+    transport.requests.clear();
+
+    for (const auto& command : {
+             mdv::DriverCommand{
+                 .address = 1U,
+                 .control = mdv::DriverControl::Mode,
+                 .value = mdv::HvacMode::Heat,
+             },
+             mdv::DriverCommand{
+                 .address = 1U,
+                 .control = mdv::DriverControl::FanSpeed,
+                 .value = mdv::HvacFanSpeed::High,
+             },
+             mdv::DriverCommand{
+                 .address = 1U,
+                 .control = mdv::DriverControl::SetTemperature,
+                 .value = 27.0,
+             },
+             mdv::DriverCommand{
+                 .address = 1U,
+                 .control = mdv::DriverControl::Power,
+                 .value = false,
+             }}) {
+        driver.ApplyCommand(command);
+    }
+
+    for (std::size_t operation = 0U;
+         operation < 16U && driver.HasQueuedWork();
+         ++operation) {
+        static_cast<void>(driver.ProcessNext());
+    }
+
+    Require(!driver.HasQueuedWork(),
+            "simultaneous semantic commands did not finish");
+    const auto state = driver.DeviceStateByAddress(1U);
+    Require(!state.power, "queued Power did not become factual");
+    Require(state.mode == mdv::HvacMode::Heat,
+            "queued Mode did not become factual");
+    Require(state.fanSpeed == mdv::HvacFanSpeed::High,
+            "queued FanSpeed did not become factual");
+    Require(state.setTemperature == 27.0,
+            "queued SetTemperature did not become factual");
+
+    for (const auto address : {40078U, 40079U, 40080U, 40081U}) {
+        const auto count = std::count_if(
+            transport.requests.begin(),
+            transport.requests.end(),
+            [address](const auto& request) {
+                return RequestFunction(request) == 0x10U &&
+                    RequestAddress(request) == address;
+            });
+        Require(count == 1,
+                "queued semantic control was not written exactly once");
+    }
 }
 
 void TestWriteTimeoutRetriesAreBounded()
@@ -851,16 +1051,16 @@ void TestUnsupportedCommandsGenerateNoTraffic()
     InitializeOne(driver);
     transport.requests.clear();
 
-    bool modeRejected = false;
+    bool unsupportedRejected = false;
     try {
         driver.ApplyCommand(mdv::DriverCommand{
             .address = 1U,
-            .control = mdv::DriverControl::Mode,
-            .value = mdv::HvacMode::Cool,
+            .control = mdv::DriverControl::Blinds,
+            .value = false,
         });
     }
     catch (const std::invalid_argument&) {
-        modeRejected = true;
+        unsupportedRejected = true;
     }
 
     bool typeRejected = false;
@@ -875,7 +1075,7 @@ void TestUnsupportedCommandsGenerateNoTraffic()
         typeRejected = true;
     }
 
-    Require(modeRejected, "disabled Mode command was accepted");
+    Require(unsupportedRejected, "unsupported Blinds command was accepted");
     Require(typeRejected, "non-boolean Power command was accepted");
     Require(transport.requests.empty(), "rejected commands generated traffic");
 }
@@ -893,20 +1093,20 @@ void TestResolvedPollPlanBaselineIsExposed()
         metrics.probeTransactionsPerCycle == 2U,
         "driver probe baseline is wrong");
     Require(
-        metrics.semanticTransactionsPerCycle == 4U,
+        metrics.semanticTransactionsPerCycle == 10U,
         "driver semantic baseline is wrong");
     Require(
-        metrics.totalTransactionsPerCycle == 6U,
+        metrics.totalTransactionsPerCycle == 12U,
         "driver total transaction baseline is wrong");
     Require(
-        metrics.registersRequestedPerCycle == 6U,
+        metrics.registersRequestedPerCycle == 12U,
         "driver register baseline is wrong");
     Require(
         metrics.optimizedSemanticTransactionsPerCycle == 4U &&
             metrics.optimizedTotalTransactionsPerCycle == 6U &&
-            metrics.optimizedRegistersRequestedPerCycle == 6U &&
+            metrics.optimizedRegistersRequestedPerCycle == 12U &&
             metrics.reusedSemanticReadsPerCycle == 0U &&
-            metrics.savedTransactionsPerCycle == 0U,
+            metrics.savedTransactionsPerCycle == 6U,
         "driver production optimization metrics are wrong");
     Require(
         transport.requests.empty(),
@@ -1041,6 +1241,8 @@ int main()
         TestFailedSnapshotDoesNotPublishPartialValues();
         TestPowerWriteRequiresFactualState();
         TestPowerWriteAndReadBackConfirmation();
+        TestModeSpeedAndSetTemperatureWritesAreConfirmed();
+        TestIndependentControlsCanBeQueuedTogether();
         TestWriteTimeoutRetriesAreBounded();
         TestConfirmationTimeoutRetriesAreBounded();
         TestInvalidConfirmationMarksDeviceOffline();

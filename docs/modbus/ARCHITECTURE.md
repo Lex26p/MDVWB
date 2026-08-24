@@ -32,8 +32,9 @@ The main architectural goal is:
 This applies when the equipment can be represented by the semantic point types
 and runtime operations already implemented. A profile alone does not add a new
 common semantic variable or a new confirmed-write state machine. The current
-production runtime performs confirmed writes only for `Power`; other profile
-write mappings remain inactive until the common runtime is extended.
+production runtime performs confirmed writes for `Power`, `Mode`, `FanSpeed`
+and scalar `SetTemperature`; other profile write mappings remain inactive until
+the common runtime is extended.
 
 ## 2. Scope
 

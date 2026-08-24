@@ -19,9 +19,9 @@
   },
   "capabilities": {
     "power": true,
-    "mode": false,
-    "fanSpeed": false,
-    "setTemperature": false,
+    "mode": true,
+    "fanSpeed": true,
+    "setTemperature": true,
     "roomTemperature": false,
     "alarm": true,
     "blinds": false,
@@ -48,6 +48,87 @@
         "space": "holding_register",
         "address": 40078,
         "reference": "40078 + 91*Y"
+      }
+    },
+    "mode": {
+      "type": "enum",
+      "read": {
+        "space": "holding_register",
+        "address": 40029,
+        "reference": "40029 + 91*Y"
+      },
+      "write": {
+        "space": "holding_register",
+        "address": 40079,
+        "reference": "40079 + 91*Y"
+      },
+      "readMap": {
+        "1": "auto",
+        "2": "cool",
+        "4": "dry",
+        "8": "fan",
+        "16": "heat"
+      },
+      "writeMap": {
+        "auto": 1,
+        "cool": 2,
+        "dry": 4,
+        "fan": 8,
+        "heat": 16
+      }
+    },
+    "fanSpeed": {
+      "type": "enum",
+      "read": {
+        "space": "holding_register",
+        "address": 40030,
+        "reference": "40030 + 91*Y"
+      },
+      "write": {
+        "space": "holding_register",
+        "address": 40080,
+        "reference": "40080 + 91*Y"
+      },
+      "readMap": {
+        "1": "auto",
+        "2": "high",
+        "4": "medium",
+        "8": "low",
+        "16": "high",
+        "32": "medium",
+        "64": "low"
+      },
+      "writeMap": {
+        "auto": 1,
+        "high": 2,
+        "medium": 4,
+        "low": 8
+      }
+    },
+    "setTemperature": {
+      "type": "number",
+      "rawType": "uint16",
+      "read": {
+        "space": "holding_register",
+        "address": 40031,
+        "reference": "40031 + 91*Y (integer part)"
+      },
+      "write": {
+        "space": "holding_register",
+        "address": 40081,
+        "reference": "40081 + 91*Y (integer part)"
+      },
+      "transform": {
+        "scale": 1,
+        "offset": 0
+      },
+      "limits": {
+        "min": 16,
+        "max": 32,
+        "step": 1
+      },
+      "writeConversion": {
+        "rounding": "exact"
       }
     },
     "alarmCode": {

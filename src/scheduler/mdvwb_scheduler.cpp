@@ -204,7 +204,6 @@ void ValidateScheduleModbusCapabilities(
         }
         const auto point = profile->points.find(pointName);
         if (!capability || point == profile->points.end() ||
-            !point->second.write.has_value() ||
             !mdv::modbus::IsModbusRuntimeWritablePoint(
                 *profile, pointName)) {
             throw SchedulesConfigError(

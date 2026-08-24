@@ -99,11 +99,11 @@ void TestProductionProfileLoads()
 
     Require(profile.capabilities.power, "Power must be enabled");
     Require(profile.capabilities.alarm, "Alarm must be enabled");
-    Require(!profile.capabilities.mode, "Mode must remain disabled");
-    Require(!profile.capabilities.fanSpeed, "FanSpeed must remain disabled");
+    Require(profile.capabilities.mode, "Mode must be enabled");
+    Require(profile.capabilities.fanSpeed, "FanSpeed must be enabled");
     Require(
-        !profile.capabilities.setTemperature,
-        "SetTemperature must remain disabled");
+        profile.capabilities.setTemperature,
+        "SetTemperature must be enabled");
     Require(
         !profile.capabilities.roomTemperature,
         "RoomTemperature must remain disabled");
@@ -128,6 +128,54 @@ void TestProductionProfileLoads()
     Require(power.write.has_value(), "Power write location missing");
     Require(power.read->address == 40028U, "Power read address mismatch");
     Require(power.write->address == 40078U, "Power write address mismatch");
+
+    const auto& mode = Point(profile, "mode");
+    Require(mode.type == mdv::modbus::PointType::Enum,
+            "Mode point type mismatch");
+    Require(mode.read.has_value() && mode.read->address == 40029U,
+            "Mode read address mismatch");
+    Require(mode.write.has_value() && mode.write->address == 40079U,
+            "Mode write address mismatch");
+    Require(mode.enumMappings.read.at(1U) == "auto" &&
+                mode.enumMappings.read.at(2U) == "cool" &&
+                mode.enumMappings.read.at(16U) == "heat",
+            "Mode read mapping mismatch");
+    Require(mode.enumMappings.write.at("auto") == 1U &&
+                mode.enumMappings.write.at("cool") == 2U &&
+                mode.enumMappings.write.at("heat") == 16U,
+            "Mode write mapping mismatch");
+
+    const auto& fanSpeed = Point(profile, "fanSpeed");
+    Require(fanSpeed.type == mdv::modbus::PointType::Enum,
+            "FanSpeed point type mismatch");
+    Require(fanSpeed.read.has_value() && fanSpeed.read->address == 40030U,
+            "FanSpeed read address mismatch");
+    Require(fanSpeed.write.has_value() && fanSpeed.write->address == 40080U,
+            "FanSpeed write address mismatch");
+    Require(fanSpeed.enumMappings.read.at(16U) == "high" &&
+                fanSpeed.enumMappings.read.at(32U) == "medium" &&
+                fanSpeed.enumMappings.read.at(64U) == "low",
+            "extended FanSpeed normalization mismatch");
+    Require(fanSpeed.enumMappings.write.at("auto") == 1U &&
+                fanSpeed.enumMappings.write.at("high") == 2U &&
+                fanSpeed.enumMappings.write.at("medium") == 4U &&
+                fanSpeed.enumMappings.write.at("low") == 8U,
+            "FanSpeed write mapping mismatch");
+
+    const auto& setTemperature = Point(profile, "setTemperature");
+    Require(setTemperature.type == mdv::modbus::PointType::Number,
+            "SetTemperature point type mismatch");
+    Require(setTemperature.read.has_value() &&
+                setTemperature.read->address == 40031U,
+            "SetTemperature read address mismatch");
+    Require(setTemperature.write.has_value() &&
+                setTemperature.write->address == 40081U,
+            "SetTemperature write address mismatch");
+    Require(setTemperature.limits.has_value() &&
+                setTemperature.limits->minimum == 16.0 &&
+                setTemperature.limits->maximum == 32.0 &&
+                setTemperature.limits->step == 1.0,
+            "SetTemperature integer limits mismatch");
 
     const auto& alarm = Point(profile, "alarmCode");
     Require(

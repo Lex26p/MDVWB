@@ -54,22 +54,25 @@ function productionCatalog() {
           type: "boolean",
         },
         mode: {
-          supported: false,
-          readable: false,
-          writable: false,
-          type: null,
+          supported: true,
+          readable: true,
+          writable: true,
+          type: "enum",
         },
         fanSpeed: {
-          supported: false,
-          readable: false,
-          writable: false,
-          type: null,
+          supported: true,
+          readable: true,
+          writable: true,
+          type: "enum",
         },
         setTemperature: {
-          supported: false,
-          readable: false,
-          writable: false,
-          type: null,
+          supported: true,
+          readable: true,
+          writable: true,
+          type: "number",
+          minimum: 16,
+          maximum: 32,
+          step: 1,
         },
         roomTemperature: {
           supported: false,
@@ -231,7 +234,7 @@ function testCatalogAndCapabilities() {
   assert.equal(profile.transport.baudRate, 9600);
   assert.equal(
     describeModbusCapabilities(profile),
-    "Power: чтение и запись · Alarm: только чтение",
+    "Power: чтение и запись · Mode: чтение и запись · FanSpeed: чтение и запись · SetTemperature: чтение и запись · Alarm: только чтение",
   );
   assert.equal(
     protocolDisplayName({

@@ -38,6 +38,24 @@ void Require(bool condition, std::string_view message)
         static_cast<std::uint16_t>(request[3]));
 }
 
+[[nodiscard]] std::uint16_t RequestQuantity(
+    const mdv::modbus::RtuAdu& request)
+{
+    Require(request.size() >= 6U, "Modbus request has no quantity");
+    return static_cast<std::uint16_t>(
+        (static_cast<std::uint16_t>(request[4]) << 8U) |
+        static_cast<std::uint16_t>(request[5]));
+}
+
+[[nodiscard]] std::uint16_t RequestWriteValue(
+    const mdv::modbus::RtuAdu& request)
+{
+    Require(request.size() == 11U, "one-register FC10 request size mismatch");
+    return static_cast<std::uint16_t>(
+        (static_cast<std::uint16_t>(request[7]) << 8U) |
+        static_cast<std::uint16_t>(request[8]));
+}
+
 [[nodiscard]] mdv::modbus::TransactionResult ReadSuccess(
     const mdv::modbus::RtuAdu& request,
     std::uint16_t value)
@@ -54,6 +72,22 @@ void Require(bool condition, std::string_view message)
     return result;
 }
 
+[[nodiscard]] mdv::modbus::TransactionResult ReadSuccess(
+    const mdv::modbus::RtuAdu& request,
+    std::vector<std::uint16_t> values)
+{
+    mdv::modbus::ParsedResponse response;
+    response.status = mdv::modbus::ResponseStatus::Success;
+    response.slaveId = request[0];
+    response.function = mdv::modbus::Function::ReadHoldingRegisters;
+    response.registers = std::move(values);
+
+    mdv::modbus::TransactionResult result;
+    result.status = mdv::modbus::TransactionStatus::Success;
+    result.response = std::move(response);
+    return result;
+}
+
 [[nodiscard]] mdv::modbus::TransactionResult WriteSuccess(
     const mdv::modbus::RtuAdu& request)
 {
@@ -62,7 +96,7 @@ void Require(bool condition, std::string_view message)
     response.slaveId = request[0];
     response.function = mdv::modbus::Function::WriteMultipleRegisters;
     response.startAddress = RequestAddress(request);
-    response.quantity = 1U;
+    response.quantity = static_cast<std::uint16_t>(1U);
 
     mdv::modbus::TransactionResult result;
     result.status = mdv::modbus::TransactionStatus::Success;
@@ -82,12 +116,18 @@ public:
 
         if (function == static_cast<std::uint8_t>(
                 mdv::modbus::Function::WriteMultipleRegisters)) {
-            Require(address == 40078U, "Power FC10 address mismatch");
-            Require(request.size() == 11U, "Power FC10 request size mismatch");
-            Require(request[4] == 0U && request[5] == 1U,
-                    "Power FC10 quantity mismatch");
-            Require(request[6] == 2U && request[7] == 0U && request[8] == 1U,
-                    "Power ON was not encoded as raw 1");
+            Require(RequestQuantity(request) == 1U, "FC10 quantity mismatch");
+            const auto value = RequestWriteValue(request);
+            switch (address) {
+            case 40078U: powerRaw = value; break;
+            case 40079U: modeRaw = value; break;
+            case 40080U: fanSpeedRaw = value; break;
+            case 40081U: setTemperatureRaw = value; break;
+            default:
+                throw std::runtime_error(
+                    "unexpected Modbus write register " +
+                    std::to_string(address));
+            }
             ++writeCount;
             return WriteSuccess(request);
         }
@@ -105,9 +145,20 @@ public:
         }
         if (address == 40028U) {
             ++powerReadCount;
-            // Initial factual state is OFF; confirmation after FC10 is ON.
-            return ReadSuccess(request, powerReadCount == 1U ? 0U : 1U);
+            if (RequestQuantity(request) == 4U) {
+                return ReadSuccess(
+                    request,
+                    std::vector<std::uint16_t>{
+                        powerRaw,
+                        modeRaw,
+                        fanSpeedRaw,
+                        setTemperatureRaw});
+            }
+            return ReadSuccess(request, powerRaw);
         }
+        if (address == 40029U) return ReadSuccess(request, modeRaw);
+        if (address == 40030U) return ReadSuccess(request, fanSpeedRaw);
+        if (address == 40031U) return ReadSuccess(request, setTemperatureRaw);
         if (address == 40035U) {
             return ReadSuccess(request, 0U);
         }
@@ -120,6 +171,10 @@ public:
     std::size_t probeCount = 0;
     std::size_t powerReadCount = 0;
     std::size_t writeCount = 0;
+    std::uint16_t powerRaw = 0U;
+    std::uint16_t modeRaw = 2U;
+    std::uint16_t fanSpeedRaw = 1U;
+    std::uint16_t setTemperatureRaw = 24U;
 };
 
 class FakeMqttClient final : public mdv::IMqttClient {
@@ -190,7 +245,7 @@ private:
         "profiles/modbus/vrf_add_controller.json");
 }
 
-void TestModbusStateAndPowerCommandUseExistingMqttBoundary()
+void TestModbusStateAndCommandsUseExistingMqttBoundary()
 {
     auto profile = ProductionProfile();
     RuntimeTransport transport;
@@ -223,11 +278,20 @@ void TestModbusStateAndPowerCommandUseExistingMqttBoundary()
         mqtt.HasPublication(
             "/devices/Fan-2_1/controls/AlarmCode", "0"),
         "initial Modbus AlarmCode was not published on the existing topic");
+    Require(
+        mqtt.HasPublication(
+            "/devices/Fan-2_1/controls/Mode", "0") &&
+            mqtt.HasPublication(
+                "/devices/Fan-2_1/controls/Speed", "4") &&
+            mqtt.HasPublication(
+                "/devices/Fan-2_1/controls/SetTemp", "24") &&
+            mqtt.HasPublication(
+                "/devices/Fan-2_1/controls/Status", "0"),
+        "initial Modbus HVAC state was not published factually");
 
     const auto beforeForcedSnapshot = mqtt.publications.size();
     states.PublishDevice(driver.DeviceStateByAddress(1U), true);
-    for (const std::string_view control : {
-             "Mode", "Speed", "SetTemp", "Blinds", "Blok"}) {
+    for (const std::string_view control : {"Blinds", "Blok"}) {
         Require(
             mqtt.HasPublication(
                 "/devices/Fan-2_1/controls/" + std::string(control),
@@ -284,19 +348,52 @@ void TestModbusStateAndPowerCommandUseExistingMqttBoundary()
             "1",
             publicationsBeforeWrite),
         "confirmed Power did not publish on the existing retained topic");
+    Require(
+        mqtt.HasPublication(
+            "/devices/Fan-2_1/controls/Status",
+            "1",
+            publicationsBeforeWrite),
+        "confirmed Power did not publish cooling Status=1");
 
-    const auto trafficBeforeUnsupported = transport.requests.size();
+    const auto trafficBeforeMode = transport.requests.size();
     mqtt.Emit(
         "/devices/Fan-2_1/controls/Mode/on1",
         "1");
-    const auto unsupported = commands.ProcessOne();
-    Require(unsupported.has_value(), "unsupported MQTT command was lost");
+    const auto modeCommand = commands.ProcessOne();
+    Require(modeCommand.has_value(), "Mode MQTT command was lost");
     Require(
-        unsupported->status == mdv::MqttCommandStatus::InvalidPayload,
-        "profile-disabled Mode command was not rejected");
+        modeCommand->status == mdv::MqttCommandStatus::Applied,
+        "Mode MQTT command was not accepted");
     Require(
-        transport.requests.size() == trafficBeforeUnsupported,
-        "unsupported MQTT command generated Modbus traffic");
+        transport.requests.size() == trafficBeforeMode,
+        "Mode routing generated Modbus traffic outside driver thread");
+
+    const auto modeWrite = driver.ProcessNext();
+    states.PublishAfter(driver, modeWrite);
+    Require(
+        modeWrite.operation == mdv::DriverOperation::SetState &&
+            modeWrite.outcome == mdv::DriverOutcome::Success &&
+            RequestAddress(transport.requests.back()) == 40079U &&
+            RequestWriteValue(transport.requests.back()) == 16U,
+        "Mode Heat was not written as the profile raw value");
+
+    const auto modeConfirmation = driver.ProcessNext();
+    const auto publicationsBeforeModeConfirmation = mqtt.publications.size();
+    states.PublishAfter(driver, modeConfirmation);
+    Require(
+        modeConfirmation.operation == mdv::DriverOperation::ConfirmRead &&
+            modeConfirmation.outcome == mdv::DriverOutcome::Success,
+        "Mode confirmation read failed");
+    Require(
+        mqtt.HasPublication(
+            "/devices/Fan-2_1/controls/Mode",
+            "1",
+            publicationsBeforeModeConfirmation) &&
+            mqtt.HasPublication(
+                "/devices/Fan-2_1/controls/Status",
+                "2",
+                publicationsBeforeModeConfirmation),
+        "confirmed Heat mode did not publish Mode=1 and Status=2");
 
     const auto publicationsBeforeOffline = mqtt.publications.size();
     const auto offline = driver.ProcessNext();
@@ -324,7 +421,7 @@ void TestModbusStateAndPowerCommandUseExistingMqttBoundary()
 int main()
 {
     try {
-        TestModbusStateAndPowerCommandUseExistingMqttBoundary();
+        TestModbusStateAndCommandsUseExistingMqttBoundary();
         std::cout << "MDVWB Modbus MQTT integration tests: OK\n";
         return 0;
     }
