@@ -265,13 +265,29 @@ ModbusRuntimeConfig ParseModbusRuntimeConfig(
     };
     ValidateSerialSettings(result.serial);
 
-    result.cadence.pollPeriod = std::chrono::milliseconds(
-        IntegerInRange(lookup, "MDVWB_PERIOD_MS", 150, 1, 60000));
+    const auto modbusPollPeriod = OptionalValue(
+        lookup,
+        "MDVWB_MODBUS_POLL_PERIOD_MS");
+    if (modbusPollPeriod.has_value()) {
+        const int value = ParseInteger(
+            *modbusPollPeriod,
+            "MDVWB_MODBUS_POLL_PERIOD_MS");
+        if (value < 1 || value > 60000) {
+            Fail("MDVWB_MODBUS_POLL_PERIOD_MS must be in range 1..60000");
+        }
+        result.cadence.pollPeriod = std::chrono::milliseconds(value);
+    }
+    else {
+        // Keep existing manually tuned installations compatible. New managed
+        // configurations always provide the protocol-specific variable.
+        result.cadence.pollPeriod = std::chrono::milliseconds(
+            IntegerInRange(lookup, "MDVWB_PERIOD_MS", 300, 1, 60000));
+    }
     result.cadence.commandPeriod = std::chrono::milliseconds(
         IntegerInRange(
             lookup,
             "MDVWB_MODBUS_COMMAND_PERIOD_MS",
-            20,
+            300,
             1,
             60000));
     result.cadence.retryPeriod = std::chrono::milliseconds(
@@ -281,6 +297,12 @@ ModbusRuntimeConfig ParseModbusRuntimeConfig(
             500,
             1,
             60000));
+    result.cadence.commandPeriod = std::max(
+        result.cadence.commandPeriod,
+        result.cadence.pollPeriod);
+    result.cadence.retryPeriod = std::max(
+        result.cadence.retryPeriod,
+        result.cadence.pollPeriod);
     result.responseTimeout = std::chrono::milliseconds(
         IntegerInRange(
             lookup,

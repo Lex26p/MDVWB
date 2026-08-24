@@ -64,7 +64,9 @@ Important invariants:
   traffic;
 - transient Modbus read failures preserve an established online state; the
   device changes to offline after three consecutive failed complete polls and
-  recovers after the first complete successful poll.
+  recovers after the first complete successful poll;
+- Modbus starts the next logical-device operation no sooner than 300 ms by
+  default, including after a write or confirmation; native MDV remains 150 ms.
 
 The shipped `vrf_add_controller` enables Mode, FanSpeed and the integer part of
 SetTemperature as field-validation mappings from the manufacturer table. They

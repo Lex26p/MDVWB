@@ -1,5 +1,7 @@
 #include "modbus_runtime_cadence.h"
 
+#include <algorithm>
+
 namespace mdv::modbus {
 
 std::chrono::milliseconds ModbusOperationPeriod(
@@ -7,12 +9,12 @@ std::chrono::milliseconds ModbusOperationPeriod(
     const ModbusRuntimeCadence& cadence) noexcept
 {
     if (result.outcome != DriverOutcome::Success) {
-        return cadence.retryPeriod;
+        return std::max(cadence.pollPeriod, cadence.retryPeriod);
     }
     if (result.operation == DriverOperation::PollRead) {
         return cadence.pollPeriod;
     }
-    return cadence.commandPeriod;
+    return std::max(cadence.pollPeriod, cadence.commandPeriod);
 }
 
 } // namespace mdv::modbus

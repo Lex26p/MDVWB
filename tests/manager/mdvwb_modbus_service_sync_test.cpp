@@ -89,7 +89,10 @@ void WriteTemplate(const std::filesystem::path& path)
         "MDVWB_MODBUS_BAUD_RATE=\"19200\"\n"
         "MDVWB_MODBUS_DATA_BITS=\"7\"\n"
         "MDVWB_MODBUS_PARITY=\"odd\"\n"
-        "MDVWB_MODBUS_STOP_BITS=\"2\"\n");
+        "MDVWB_MODBUS_STOP_BITS=\"2\"\n"
+        "MDVWB_PERIOD_MS=\"150\"\n"
+        "MDVWB_MODBUS_POLL_PERIOD_MS=\"300\"\n"
+        "MDVWB_MODBUS_COMMAND_PERIOD_MS=\"300\"\n");
 }
 
 mdvwb::ServiceSyncPaths MakePaths(const TemporaryDirectory& temporary)
@@ -179,6 +182,13 @@ void TestModbusRuntimeEnvironment()
     Require(
         content.find("MDVWB_MODBUS_STOP_BITS=\"1\"") != std::string::npos,
         "runtime environment omitted stop bits");
+    Require(
+        content.find("MDVWB_PERIOD_MS=\"150\"") != std::string::npos &&
+            content.find("MDVWB_MODBUS_POLL_PERIOD_MS=\"300\"") !=
+                std::string::npos &&
+            content.find("MDVWB_MODBUS_COMMAND_PERIOD_MS=\"300\"") !=
+                std::string::npos,
+        "Modbus timing changed the MDV period or omitted the 300 ms bounds");
     Require(
         content.find("MDVWB_ADDRESSES=\"1,2,63\"") != std::string::npos,
         "runtime environment omitted logical addresses");

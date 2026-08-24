@@ -65,6 +65,11 @@ restores factual online state. Journal evidence must include `stage`,
 `logical-address`, `slave-id`, `register`/`registers` and
 `consecutive-poll-failures=N/3` for ordinary poll failures.
 
+During a one-device command, confirm from runtime startup output that effective
+cadence is `300/300/500 ms`. The ordinary round-robin poll may be postponed by
+the bounded command queue, but no successful write or confirmation may start
+the next logical-device operation on the former 20 ms fast path.
+
 Mode, FanSpeed and integer SetTemperature are enabled specifically for this
 field validation but are not yet hardware-confirmed. RoomTemperature,
 half-degree SetTemperature and any additional alarm meaning remain unsupported.

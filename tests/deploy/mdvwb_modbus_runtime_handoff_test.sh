@@ -13,6 +13,7 @@ cat >"$runtime" <<'RUNTIME_EOF'
 #!/bin/sh
 set -eu
 printf '%s\n' \
+    "poll=$MDVWB_MODBUS_POLL_PERIOD_MS" \
     "command=$MDVWB_MODBUS_COMMAND_PERIOD_MS" \
     "retry=$MDVWB_MODBUS_RETRY_PERIOD_MS" \
     "writes=$MDVWB_MODBUS_WRITE_ATTEMPTS" \
@@ -39,6 +40,7 @@ MDVWB_MODBUS_STOP_BITS="1"
 CONFIG_EOF
     if [ "$include_policy" = "1" ]; then
         cat >>"$target" <<'POLICY_EOF'
+MDVWB_MODBUS_POLL_PERIOD_MS="301"
 MDVWB_MODBUS_COMMAND_PERIOD_MS="31"
 MDVWB_MODBUS_RETRY_PERIOD_MS="701"
 MDVWB_MODBUS_WRITE_ATTEMPTS="5"
@@ -51,7 +53,8 @@ POLICY_EOF
 custom_config="$temporary/custom.env"
 write_config "$custom_config" 1
 custom_output=$(MDVWB_CONFIG_FILE="$custom_config" MDVWB_MODBUS_BINARY="$runtime" sh "$WRAPPER")
-custom_expected='command=31
+custom_expected='poll=301
+command=31
 retry=701
 writes=5
 confirmations=6
@@ -64,7 +67,8 @@ burst=7'
 default_config="$temporary/default.env"
 write_config "$default_config" 0
 default_output=$(MDVWB_CONFIG_FILE="$default_config" MDVWB_MODBUS_BINARY="$runtime" sh "$WRAPPER")
-default_expected='command=20
+default_expected='poll=300
+command=300
 retry=500
 writes=3
 confirmations=3

@@ -48,14 +48,14 @@ int main()
             mdv::modbus::ModbusOperationPeriod(
                 Result(mdv::DriverOperation::SetState,
                        mdv::DriverOutcome::Success),
-                cadence) == std::chrono::milliseconds{25},
-            "successful write used the wrong period");
+                cadence) == std::chrono::milliseconds{175},
+            "successful write bypassed the poll-period lower bound");
         Require(
             mdv::modbus::ModbusOperationPeriod(
                 Result(mdv::DriverOperation::ConfirmRead,
                        mdv::DriverOutcome::Success),
-                cadence) == std::chrono::milliseconds{25},
-            "successful confirmation used the wrong period");
+                cadence) == std::chrono::milliseconds{175},
+            "successful confirmation bypassed the poll-period lower bound");
 
         for (const auto outcome : {
                  mdv::DriverOutcome::Timeout,
@@ -67,6 +67,18 @@ int main()
                     cadence) == std::chrono::milliseconds{650},
                 "failed operation did not use retry backoff");
         }
+
+        const mdv::modbus::ModbusRuntimeCadence shortRetry{
+            .pollPeriod = std::chrono::milliseconds{300},
+            .commandPeriod = std::chrono::milliseconds{20},
+            .retryPeriod = std::chrono::milliseconds{100},
+        };
+        Require(
+            mdv::modbus::ModbusOperationPeriod(
+                Result(mdv::DriverOperation::SetState,
+                       mdv::DriverOutcome::Timeout),
+                shortRetry) == std::chrono::milliseconds{300},
+            "failed operation bypassed the poll-period lower bound");
 
         std::cout << "MDVWB Modbus runtime cadence tests: OK\n";
         return 0;

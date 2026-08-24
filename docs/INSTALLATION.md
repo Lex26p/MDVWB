@@ -356,6 +356,18 @@ journalctl -u mdvwb@1.service -n 200 --no-pager
 online. Ошибки записи и отдельного confirmation read сами по себе offline не
 публикуют.
 
+Штатный Modbus-интервал задаётся отдельно:
+
+```text
+MDVWB_MODBUS_POLL_PERIOD_MS="300"
+MDVWB_MODBUS_COMMAND_PERIOD_MS="300"
+MDVWB_MODBUS_RETRY_PERIOD_MS="500"
+```
+
+`MDVWB_MODBUS_POLL_PERIOD_MS` является нижней границей и для обычного опроса,
+и для write/confirmation. Поэтому команда больше не создаёт ускоренный цикл
+`20 ms`. `MDVWB_PERIOD_MS="150"` продолжает относиться к родному MDV-протоколу.
+
 Web:
 
 ```text

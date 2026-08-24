@@ -393,6 +393,9 @@ This file prevents an automatic schedule from executing twice after a scheduler 
 - an already-online device becomes offline only after three consecutive failed
   complete polling attempts; one complete successful poll resets the counter
   and restores online state;
+- the default Modbus logical-device operation period is 300 ms and is a lower
+  bound for ordinary polls, writes, confirmations and retry scheduling; this
+  does not change the native MDV 150 ms transaction period;
 - write and confirmation failures do not change availability by themselves;
   runtime failure diagnostics identify the logical address, stage, Slave ID
   and register or register range;

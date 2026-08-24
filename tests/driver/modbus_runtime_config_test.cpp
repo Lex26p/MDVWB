@@ -124,6 +124,7 @@ Environment ValidEnvironment()
         {"MDVWB_MODBUS_STOP_BITS", "1"},
         {"MDVWB_MODBUS_RESPONSE_TIMEOUT_MS", "230"},
         {"MDVWB_PERIOD_MS", "175"},
+        {"MDVWB_MODBUS_POLL_PERIOD_MS", "275"},
         {"MDVWB_MODBUS_COMMAND_PERIOD_MS", "25"},
         {"MDVWB_MODBUS_RETRY_PERIOD_MS", "650"},
         {"MDVWB_MODBUS_WRITE_ATTEMPTS", "4"},
@@ -162,11 +163,11 @@ void TestValidManagedEnvironment()
         config.responseTimeout == std::chrono::milliseconds(230),
         "response timeout mismatch");
     Require(
-        config.cadence.pollPeriod == std::chrono::milliseconds(175),
-        "poll period mismatch");
+        config.cadence.pollPeriod == std::chrono::milliseconds(275),
+        "protocol-specific poll period did not override MDV period");
     Require(
-        config.cadence.commandPeriod == std::chrono::milliseconds(25),
-        "command period mismatch");
+        config.cadence.commandPeriod == std::chrono::milliseconds(275),
+        "command period bypassed the Modbus poll lower bound");
     Require(
         config.cadence.retryPeriod == std::chrono::milliseconds(650),
         "retry period mismatch");
@@ -208,9 +209,9 @@ void TestDefaultsRemainDeterministic()
     Require(config.serial.baudRate == 9600U, "default baud rate mismatch");
     Require(config.responseTimeout == std::chrono::milliseconds(200),
             "default response timeout mismatch");
-    Require(config.cadence.pollPeriod == std::chrono::milliseconds(150),
+    Require(config.cadence.pollPeriod == std::chrono::milliseconds(300),
             "default poll period mismatch");
-    Require(config.cadence.commandPeriod == std::chrono::milliseconds(20),
+    Require(config.cadence.commandPeriod == std::chrono::milliseconds(300),
             "default command period mismatch");
     Require(config.cadence.retryPeriod == std::chrono::milliseconds(500),
             "default retry period mismatch");
@@ -234,7 +235,7 @@ void TestDefaultsRemainDeterministic()
 void TestInvalidTuningRejected()
 {
     for (const auto& [name, value, expected] : {
-             std::tuple{"MDVWB_PERIOD_MS", "0", "1..60000"},
+             std::tuple{"MDVWB_MODBUS_POLL_PERIOD_MS", "0", "1..60000"},
              std::tuple{"MDVWB_MODBUS_COMMAND_PERIOD_MS", "60001", "1..60000"},
              std::tuple{"MDVWB_MODBUS_RETRY_PERIOD_MS", "0", "1..60000"},
              std::tuple{"MDVWB_MODBUS_WRITE_ATTEMPTS", "11", "1..10"},
@@ -249,6 +250,34 @@ void TestInvalidTuningRejected()
             },
             expected);
     }
+}
+
+void TestLegacyCommonPollPeriodFallback()
+{
+    auto environment = ValidEnvironment();
+    environment.erase("MDVWB_MODBUS_POLL_PERIOD_MS");
+    environment["MDVWB_PERIOD_MS"] = "425";
+
+    const auto config = mdv::modbus::ParseModbusRuntimeConfig(
+        Lookup(environment));
+    Require(
+        config.cadence.pollPeriod == std::chrono::milliseconds(425),
+        "legacy common poll period was not preserved");
+}
+
+void TestPollPeriodIsGlobalOperationLowerBound()
+{
+    auto environment = ValidEnvironment();
+    environment["MDVWB_MODBUS_POLL_PERIOD_MS"] = "300";
+    environment["MDVWB_MODBUS_COMMAND_PERIOD_MS"] = "20";
+    environment["MDVWB_MODBUS_RETRY_PERIOD_MS"] = "100";
+
+    const auto config = mdv::modbus::ParseModbusRuntimeConfig(
+        Lookup(environment));
+    Require(
+        config.cadence.commandPeriod == std::chrono::milliseconds(300) &&
+            config.cadence.retryPeriod == std::chrono::milliseconds(300),
+        "command or retry period bypassed the 300 ms Modbus lower bound");
 }
 
 void TestInvalidEnvironmentRejected()
@@ -338,6 +367,8 @@ int main()
         TestValidManagedEnvironment();
         TestDefaultsRemainDeterministic();
         TestInvalidTuningRejected();
+        TestLegacyCommonPollPeriodFallback();
+        TestPollPeriodIsGlobalOperationLowerBound();
         TestInvalidEnvironmentRejected();
         TestProfileSelectionAndTransportRevalidated();
         TestRuntimeCompatibilityIsRevalidatedAtLoad();
