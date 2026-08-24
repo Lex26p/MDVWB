@@ -5,6 +5,8 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <locale>
+#include <sstream>
 #include <system_error>
 #include <utility>
 
@@ -189,7 +191,7 @@ private:
         const auto begin = position_;
         bool floating = false;
 
-        TryConsume('-');
+        static_cast<void>(TryConsume('-'));
 
         if (AtEnd()) {
             Fail("unfinished number");
@@ -255,17 +257,11 @@ private:
         }
 
         double value = 0.0;
-        const auto result = std::from_chars(
-            token.data(),
-            token.data() + token.size(),
-            value,
-            std::chars_format::general);
-        if (result.ec == std::errc::result_out_of_range || !std::isfinite(value)) {
+        std::istringstream stream{std::string(token)};
+        stream.imbue(std::locale::classic());
+        stream >> value;
+        if (stream.fail() || !stream.eof() || !std::isfinite(value)) {
             Fail("floating-point number is outside the supported range");
-        }
-        if (result.ec != std::errc{} ||
-            result.ptr != token.data() + token.size()) {
-            Fail("invalid floating-point number");
         }
         return Value(value);
     }

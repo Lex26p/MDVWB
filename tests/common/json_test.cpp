@@ -71,6 +71,17 @@ void TestIntegerAndNumberTypesRemainDistinct()
             "exponent was not represented as a floating-point number");
 }
 
+void TestFloatingPointRange()
+{
+    const auto value = mdvwb::json::Parse("1.7976931348623157e308");
+    Require(value.IsNumber() && std::isfinite(value.AsNumber()),
+            "largest finite double was rejected");
+
+    RequireParseError(
+        [] { static_cast<void>(mdvwb::json::Parse("1e309")); },
+        "overflowing floating-point number was accepted");
+}
+
 void TestUnicodeEscapes()
 {
     const auto value = mdvwb::json::Parse(
@@ -163,6 +174,7 @@ int main()
     try {
         TestCompleteDocument();
         TestIntegerAndNumberTypesRemainDistinct();
+        TestFloatingPointRange();
         TestUnicodeEscapes();
         TestStrictSyntax();
         TestParseErrorLocation();
