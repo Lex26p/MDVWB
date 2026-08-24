@@ -712,14 +712,14 @@ function updateGroupOperationFeedback() {
     );
     return;
   }
-  if (operation.timedOut > 0) {
+  if (operation.timedOut > 0 || operation.failed > 0) {
     setGroupFeedback(
-      `Групповая команда завершена: подтверждено ${operation.confirmed}, без подтверждения ${operation.timedOut}. Пропущено устройств: ${operation.skippedDevices}${operation.failed ? `, ошибок отправки: ${operation.failed}` : ""}.`,
+      `Групповая команда завершена: подтверждено ${operation.confirmed}, без подтверждения ${operation.timedOut}, уже установлено без отправки ${operation.unchanged}. Пропущено устройств: ${operation.skippedDevices}${operation.failed ? `, ошибок отправки: ${operation.failed}` : ""}.`,
       "warning",
     );
   } else {
     setGroupFeedback(
-      `Все ${operation.confirmed} команд подтверждены. Изменено устройств: ${operation.targetDevices}. Пропущено: ${operation.skippedDevices}${operation.failed ? `, ошибок отправки: ${operation.failed}` : ""}.`,
+      `Все ${operation.confirmed} команд подтверждены. Уже установлено без отправки: ${operation.unchanged}. Обработано устройств: ${operation.targetDevices}. Пропущено: ${operation.skippedDevices}${operation.failed ? `, ошибок отправки: ${operation.failed}` : ""}.`,
       "success",
     );
   }
@@ -1229,18 +1229,30 @@ function beginPendingCommand(fan, control, rawValue, batchId = null) {
   }
 
   const value = normalizeFanCommand(control, rawValue);
-  const topic = fanCommandTopic(fan.bus, fan.address, control);
   const key = pendingKey(deviceKey, control);
   if (state.pendingCommands.has(key)) {
     throw new Error(`${fan.label}: параметр ${control} уже ожидает подтверждения`);
   }
 
+  const displayValue = commandDisplayValue(control, value);
+  if (fanCommandMatchesState(control, value, fanState)) {
+    return {
+      status: "unchanged",
+      control,
+      expected: value,
+      displayValue,
+    };
+  }
+
+  const topic = fanCommandTopic(fan.bus, fan.address, control);
+
   const pending = {
+    status: "pending",
     key,
     deviceKey,
     control,
     expected: value,
-    displayValue: commandDisplayValue(control, value),
+    displayValue,
     sentAt: Date.now(),
     batchId,
     timer: null,
@@ -1282,8 +1294,12 @@ function sendSelectedCommand(control, rawValue) {
     return;
   }
   try {
-    const pending = beginPendingCommand(fan, control, rawValue);
-    setCommandFeedback(`${fan.label}: команда ${control} отправлена. Ожидается фактическое подтверждение ${pending.displayValue}.`, "pending");
+    const command = beginPendingCommand(fan, control, rawValue);
+    if (command.status === "unchanged") {
+      setCommandFeedback(`${fan.label}: ${control} уже имеет фактическое значение ${command.displayValue}. Команда не отправлялась.`, "success");
+    } else {
+      setCommandFeedback(`${fan.label}: команда ${control} отправлена. Ожидается фактическое подтверждение ${command.displayValue}.`, "pending");
+    }
     renderMarkers();
     renderDetails();
   } catch (error) {
@@ -1317,6 +1333,7 @@ function applyGroupCommands() {
       confirmed: 0,
       timedOut: 0,
       failed: 0,
+      unchanged: 0,
       targetDevices: plan.targets.length,
       skippedDevices: plan.skipped.length,
       pendingSkipped: plan.pendingSkipped.length,
@@ -1325,21 +1342,29 @@ function applyGroupCommands() {
 
     plan.operations.forEach(({ fan, control, value }) => {
       try {
-        beginPendingCommand(fan, control, value, operation.id);
-        operation.total += 1;
+        const command = beginPendingCommand(fan, control, value, operation.id);
+        if (command.status === "unchanged") {
+          operation.unchanged += 1;
+        } else {
+          operation.total += 1;
+        }
       } catch (_error) {
         operation.failed += 1;
       }
     });
     if (!operation.total) {
       state.groupOperation = null;
-      setGroupFeedback(`Не удалось отправить команды. Ошибок публикации: ${operation.failed}.`, "error");
+      if (operation.unchanged > 0 && operation.failed === 0) {
+        setGroupFeedback("Все выбранные значения уже установлены. Команды не отправлялись.", "success");
+      } else {
+        setGroupFeedback(`Не удалось отправить команды. Уже установлено: ${operation.unchanged}, ошибок публикации: ${operation.failed}.`, "error");
+      }
       renderGroupPanel();
       return;
     }
 
     setGroupFeedback(
-      `Отправлено ${operation.total} команд для ${operation.targetDevices} устройств. Ожидается фактическое подтверждение. Пропущено устройств: ${operation.skippedDevices}${operation.pendingSkipped ? `, занятых параметров: ${operation.pendingSkipped}` : ""}${operation.failed ? `, ошибок отправки: ${operation.failed}` : ""}.`,
+      `Отправлено ${operation.total} команд для ${operation.targetDevices} устройств. Ожидается фактическое подтверждение. Уже установлено без отправки: ${operation.unchanged}. Пропущено устройств: ${operation.skippedDevices}${operation.pendingSkipped ? `, занятых параметров: ${operation.pendingSkipped}` : ""}${operation.failed ? `, ошибок отправки: ${operation.failed}` : ""}.`,
       "pending",
     );
     renderMarkers();

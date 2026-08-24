@@ -53,6 +53,7 @@ require_text "$CHECKLIST" "MDVWB $VERSION release checklist"
 require_text "$CHECKLIST" "tag: v$VERSION"
 
 require_text "$MANIFEST" '"version": "@MDVWB_VERSION@"'
+require_text "$MANIFEST" '"packageFormat": 2'
 require_text "$ONLINE" 'DEFAULT_ASSET=MDVWB-arm64-offline.tar.gz'
 
 require_text "$BUILD_WORKFLOW" 'tags:'
@@ -95,6 +96,10 @@ require_text "$OFFLINE" 'verify_modbus_payload'
 require_text "$OFFLINE" 'install_modbus_payload'
 require_text "$OFFLINE" 'patch_setup_backup'
 require_text "$OFFLINE" 'modbus-profiles/vrf_add_controller.json'
+require_text "$VALIDATE_WORKFLOW" 'tests/deploy/mdvwb_modbus_runtime_handoff_test.sh'
+require_text "$VALIDATE_WORKFLOW" 'tests/deploy/mdvwb_modbus_hardware_readonly_test.sh'
+require_text "$BUILD_WORKFLOW" 'tests/deploy/mdvwb_modbus_runtime_handoff_test.sh'
+require_text "$BUILD_WORKFLOW" 'tests/deploy/mdvwb_modbus_hardware_readonly_test.sh'
 
 require_text "$VALIDATE_WORKFLOW" 'tests/deploy/mdvwb_release_contract_test.sh'
 require_text "$VALIDATE_WORKFLOW" '".github/workflows/build-arm64-offline.yml"'

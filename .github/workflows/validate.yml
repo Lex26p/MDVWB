@@ -80,6 +80,8 @@ jobs:
           sh -n tests/deploy/mdvwb_online_installer_test.sh
           sh -n tests/deploy/mdvwb_uninstall_test.sh
           sh -n tests/deploy/mdvwb_release_contract_test.sh
+          sh -n tests/deploy/mdvwb_modbus_runtime_handoff_test.sh
+          sh -n tests/deploy/mdvwb_modbus_hardware_readonly_test.sh
 
           sh tests/deploy/mdvwb_setup_test.sh
           sh tests/deploy/mdvwb_install_engine_test.sh
@@ -88,6 +90,8 @@ jobs:
           sh tests/deploy/mdvwb_online_installer_test.sh
           sh tests/deploy/mdvwb_uninstall_test.sh
           sh tests/deploy/mdvwb_release_contract_test.sh
+          sh tests/deploy/mdvwb_modbus_runtime_handoff_test.sh
+          sh tests/deploy/mdvwb_modbus_hardware_readonly_test.sh
 
           python3 -m json.tool deploy/package-manifest.json.in >/dev/null
           python3 -m json.tool deploy/buses.default.json >/dev/null

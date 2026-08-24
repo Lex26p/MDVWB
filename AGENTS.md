@@ -484,6 +484,8 @@ The offline installer:
 
 - requires root and architecture `arm64`;
 - requires `libmosquitto.so.1`;
+- emits package format `2`; format `1` remains accepted for legacy archives,
+  while format `2` requires the internal Modbus runtime and production profile;
 - validates all required package files and `SHA256SUMS`;
 - installs all five executables (including internal `mdvwb-modbus`) and three systemd unit types;
 - installs both static web applications;
@@ -494,11 +496,15 @@ The offline installer:
 - validates and applies bus configuration;
 - enables and starts manager and scheduler.
 
-Current installer caveat: when `buses.json` is absent or empty, both installers run `migrate-defaults`, but any nonzero migration result currently triggers installation of `buses.example.json`. The scripts do not distinguish “no legacy files” from malformed or ambiguous legacy files. Do not describe this fallback as lossless migration; review it whenever installer behavior is changed.
+When `buses.json` is absent or empty, both installers run `migrate-defaults`.
+Exit code `3` means that no legacy files exist and installs the empty default;
+every other migration error aborts installation instead of silently falling back.
 
 The native ARM64 workflow packages the release inside Debian 11 Bullseye and includes internal checksums.
 
-The offline installer and both workflows currently check `scheduler-status-ui.js` inconsistently and do not explicitly require `scheduler-status-health.js`, although the full `www/fancoils/` directory is copied into the artifact. Do not rely on directory copying as the only completeness gate when these helpers become production dependencies.
+The offline installer and both workflows explicitly require
+`scheduler-status-ui.js` and `scheduler-status-health.js`. They remain dormant
+helpers until the `/fancoils/` browser entry point imports the status UI module.
 
 ## 18. Forbidden regressions
 

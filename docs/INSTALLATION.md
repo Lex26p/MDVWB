@@ -141,6 +141,11 @@ binary self-tests
 existing buses.json validation
 ```
 
+Текущий package format `2` требует встроенный `mdvwb-modbus` и production
+профиль `modbus-profiles/vrf_add_controller.json`. Старые архивы format `1`
+остаются читаемыми для совместимости, но новые неполные Modbus-пакеты preflight
+отклоняет.
+
 Ошибка preflight не изменяет systemd и runtime-файлы.
 
 ## 7. Версии

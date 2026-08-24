@@ -1,5 +1,5 @@
 {
-  "packageFormat": 1,
+  "packageFormat": 2,
   "product": "MDVWB",
   "version": "@MDVWB_VERSION@",
   "commit": "@MDVWB_COMMIT@",

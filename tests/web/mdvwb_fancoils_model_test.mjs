@@ -75,6 +75,11 @@ assert.equal(canSendFanCommands(false, fan), false);
 assert.equal(canSendFanCommands(true, offline), false);
 assert.equal(fanCommandMatchesState("Mode", 1, fan), true);
 assert.equal(fanCommandMatchesState("Mode", 0, fan), false);
+const unknownState = createFanState(1, 1);
+assert.equal(fanCommandMatchesState("Mode", 0, unknownState), false);
+assert.equal(fanCommandMatchesState("Power", 0, unknownState), false);
+assert.equal(fanCommandMatchesState("Mode", 0, { ...unknownState, Mode: "" }), false);
+assert.equal(fanCommandMatchesState("Mode", 0, { ...unknownState, Mode: undefined }), false);
 
 const modbusCapabilities = fanCommandCapabilities(
   {
@@ -221,5 +226,9 @@ assert.match(pageCss, /--header-height:\s*56px/);
 assert.match(pageCss, /user-select:\s*none/);
 assert.match(pageApp, /subscribe\("\/mdvwb\/config"\)/);
 assert.match(pageApp, /subscribe\("\/mdvwb\/modbus\/profiles"\)/);
+assert.match(pageApp, /fanCommandMatchesState\(control, value, fanState\)/);
+assert.match(pageApp, /status: "unchanged"/);
+assert.match(pageApp, /Команда не отправлялась/);
+assert.match(pageApp, /operation\.timedOut > 0 \|\| operation\.failed > 0/);
 
 console.log("MDVWB fan-coil working panel model tests: OK");

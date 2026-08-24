@@ -786,6 +786,11 @@ Browser не отправляет команду, если:
 - эффективная Modbus capability не разрешает запись этого control;
 - предыдущая команда этого control ещё ждёт confirmation.
 
+Если выбранное значение уже совпадает с последним factual значением, browser
+также не публикует повторную команду, не запускает 10-second confirmation timer
+и сразу сообщает, что значение уже установлено. То же правило применяется к
+каждой операции групповой команды.
+
 Даже при программном вызове browser повторно проверяет capability перед publish.
 Disabled button не означает, что dashboard повреждён. Проверьте connection,
 factual state, bus configuration и каталог профилей.
@@ -793,6 +798,9 @@ factual state, bus configuration и каталог профилей.
 ## 37. Подтверждение команды
 
 После publish browser не меняет factual state оптимистично.
+
+Для команды, совпавшей с factual state до publish, подтверждение уже имеется:
+такая команда не отправляется и в pending state не попадает.
 
 Он ждёт base topic:
 
@@ -1746,12 +1754,16 @@ docs/RELEASE_CHECKLIST.md
 ## 99. Важные deployment ограничения
 
 - MDVWB installer не настраивает Mosquitto WebSocket `/mqtt`.
-- Offline installer сохраняет non-empty JSON и uploaded assets, но не создаёт backup.
-- Automatic rollback отсутствует.
+- Offline installer сохраняет non-empty JSON и uploaded assets и по умолчанию
+  создаёт backup до системных изменений.
+- При ошибке после начала изменений installer автоматически восстанавливает
+  backup; параметр `--no-backup` отключает и backup, и automatic rollback.
 - Production installation выполняется offline ARM64 package.
-- Текущий online source installer не устанавливает полный `/fancoils/` application.
+- Source installer устанавливает обе полные static web applications:
+  `/mdvwb/` и `/fancoils/`.
 - `scheduler-status-ui.js` и `scheduler-status-health.js` поставляются, но текущий entry point их не загружает; наличие файлов не означает активный heartbeat UI.
-- Offline package required-file list и workflows не везде явно проверяют `scheduler-status-health.js`.
+- Offline package required-file list и оба workflows явно проверяют наличие
+  обоих scheduler-status helper-файлов.
 - Перед update сохраняйте `/etc/mdvwb`, scheduler state и assets.
 - После installation проверяйте manager, scheduler и каждый expected `mdvwb@N`.
 

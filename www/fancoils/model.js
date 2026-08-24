@@ -391,7 +391,9 @@ export function fanCommandMatchesState(control, expectedValue, fanState) {
   if (!COMMAND_CONTROL_SET.has(String(control)) || !fanState) {
     return false;
   }
-  return Number(fanState[control]) === Number(expectedValue);
+  const factualValue = finiteOrNull(fanState[control]);
+  const expected = finiteOrNull(expectedValue);
+  return factualValue !== null && expected !== null && factualValue === expected;
 }
 
 export function canSendFanCommands(connected, fanState) {

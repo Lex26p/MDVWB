@@ -206,6 +206,37 @@ grep -q '^VERIFY_RESULT=success$' "$TEMPORARY/package-verify" ||
 grep -q '^scope=package$' "$TEMPORARY/package-verify" ||
     fail "package-only verification scope is incorrect"
 
+STRICT_PACKAGE="$TEMPORARY/strict-package"
+cp -a "$PACKAGE" "$STRICT_PACKAGE"
+sed -i 's/"packageFormat": 1/"packageFormat": 2/' \
+    "$STRICT_PACKAGE/manifest.json"
+(
+    cd "$STRICT_PACKAGE"
+    find . -type f ! -name SHA256SUMS -print0 | sort -z |
+        xargs -0 sha256sum >SHA256SUMS
+)
+expect_code 2 sh "$STRICT_PACKAGE/offline-install.sh" verify --package-only
+grep -q 'mdvwb-modbus' "$TEMPORARY/stderr" ||
+    fail "format-2 package without Modbus runtime was not rejected"
+
+mkdir -p "$STRICT_PACKAGE/modbus-profiles"
+cat >"$STRICT_PACKAGE/mdvwb-modbus" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod 0755 "$STRICT_PACKAGE/mdvwb-modbus"
+printf '{"schemaVersion":1}\n' \
+    >"$STRICT_PACKAGE/modbus-profiles/vrf_add_controller.json"
+(
+    cd "$STRICT_PACKAGE"
+    find . -type f ! -name SHA256SUMS -print0 | sort -z |
+        xargs -0 sha256sum >SHA256SUMS
+)
+sh "$STRICT_PACKAGE/offline-install.sh" verify --package-only \
+    >"$TEMPORARY/strict-package-verify"
+grep -q '^VERIFY_RESULT=success$' "$TEMPORARY/strict-package-verify" ||
+    fail "complete format-2 package was not accepted"
+
 sh "$PACKAGE/offline-install.sh" --verify-only >"$TEMPORARY/controller-verify"
 grep -q '^scope=controller$' "$TEMPORARY/controller-verify" ||
     fail "controller verification scope is incorrect"

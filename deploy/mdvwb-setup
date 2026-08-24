@@ -230,8 +230,13 @@ load_manifest()
     MANIFEST_BUILD_OS=$(json_string "$MANIFEST_PATH" buildOs)
     MANIFEST_BUILT_AT=$(json_string "$MANIFEST_PATH" builtAt)
 
-    [ "$MANIFEST_FORMAT" = "1" ] ||
-        fail 2 "unsupported package format: $MANIFEST_FORMAT"
+    case "$MANIFEST_FORMAT" in
+        1|2)
+            ;;
+        *)
+            fail 2 "unsupported package format: $MANIFEST_FORMAT"
+            ;;
+    esac
     [ "$MANIFEST_PRODUCT" = "MDVWB" ] ||
         fail 2 "unexpected package product: $MANIFEST_PRODUCT"
     validate_version "$MANIFEST_VERSION"
@@ -841,6 +846,13 @@ www/fancoils/scheduler-status-health.js
 www/fancoils/styles.css
 SHA256SUMS
 EOF
+
+    if [ "${MANIFEST_FORMAT:-1}" = "2" ]; then
+        cat <<'EOF'
+mdvwb-modbus
+modbus-profiles/vrf_add_controller.json
+EOF
+    fi
 }
 
 canonical_directory()
@@ -853,6 +865,9 @@ canonical_directory()
 validate_package_layout()
 {
     package=$1
+    require_file "$package/manifest.json"
+    load_manifest "$package/manifest.json"
+
     while IFS= read -r required; do
         [ -n "$required" ] || continue
         require_file "$package/$required"
@@ -866,6 +881,9 @@ EOF
     require_executable "$package/mdvwb-scheduler"
     require_executable "$package/mdvwb-run"
     require_executable "$package/mdvwb-setup"
+    if [ "$MANIFEST_FORMAT" = "2" ]; then
+        require_executable "$package/mdvwb-modbus"
+    fi
 }
 
 verify_package_checksums()
