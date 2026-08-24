@@ -350,6 +350,12 @@ SetTemp. Blinds и Blok не должны отправляться. Retained `St
 соответствовать подтверждённым Power/Mode: `0` выключен, `1` охлаждение, `2`
 нагрев, `3` осушение, `4` вентиляция, `5` Auto, `6` авария, `7` offline.
 
+Для уже online Modbus-устройства воспроизведите две последовательные ошибки
+полного poll: retained offline публиковаться не должен. Третья ошибка должна
+опубликовать `Alarm=2`, `Status=7`, а первый полностью успешный poll — вернуть
+online. В `journalctl -u mdvwb@<bus>.service` каждая ошибка должна содержать
+устройство, stage, Slave ID, register/range и счётчик `N/3`.
+
 ## 20. Group, schedule and discovery smoke
 
 Проверьте:

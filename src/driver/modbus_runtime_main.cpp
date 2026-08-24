@@ -75,6 +75,40 @@ void RequestStop(int) noexcept
             std::chrono::milliseconds{1000});
 }
 
+[[nodiscard]] std::string_view DriverOperationName(
+    mdv::DriverOperation operation) noexcept
+{
+    switch (operation) {
+    case mdv::DriverOperation::PollRead:
+        return "poll";
+    case mdv::DriverOperation::SetState:
+        return "write";
+    case mdv::DriverOperation::ConfirmRead:
+        return "confirmation";
+    case mdv::DriverOperation::Lock:
+        return "lock";
+    case mdv::DriverOperation::Unlock:
+        return "unlock";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] std::string_view DriverOutcomeName(
+    mdv::DriverOutcome outcome) noexcept
+{
+    switch (outcome) {
+    case mdv::DriverOutcome::Success:
+        return "success";
+    case mdv::DriverOutcome::Timeout:
+        return "timeout";
+    case mdv::DriverOutcome::IoError:
+        return "io-error";
+    case mdv::DriverOutcome::InvalidResponse:
+        return "invalid-response";
+    }
+    return "unknown";
+}
+
 int RunModbusRuntime()
 {
     if (!mdv::MosquittoMqttClient::IsSupported()) {
@@ -176,6 +210,15 @@ int RunModbusRuntime()
         const auto result = driver.ProcessNext();
         statePublisher.PublishAfter(driver, result);
         systemPublisher.PublishAfter(result);
+        if (result.outcome != mdv::DriverOutcome::Success) {
+            std::cerr
+                << "Modbus operation failed: device=Fan-"
+                << config.busNumber << '_'
+                << static_cast<int>(result.address)
+                << ", operation=" << DriverOperationName(result.operation)
+                << ", outcome=" << DriverOutcomeName(result.outcome)
+                << ", " << result.error << '\n';
+        }
 
         if (mqtt.IsConnected() && initialSnapshotAt.has_value() &&
             std::chrono::steady_clock::now() >= *initialSnapshotAt) {

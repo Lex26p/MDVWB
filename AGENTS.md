@@ -390,6 +390,12 @@ This file prevents an automatic schedule from executing twice after a scheduler 
 - integer profile fields must be range-checked before narrowing to fixed-width types;
 - discovery is read-only and uses only the selected profile's safe probe;
 - a write response alone is not factual state; matching profile-driven read-back is required;
+- an already-online device becomes offline only after three consecutive failed
+  complete polling attempts; one complete successful poll resets the counter
+  and restores online state;
+- write and confirmation failures do not change availability by themselves;
+  runtime failure diagnostics identify the logical address, stage, Slave ID
+  and register or register range;
 - the shipped `vrf_add_controller` currently enables table-derived Mode,
   FanSpeed and integer SetTemperature mappings for field validation; these
   mappings are not yet recorded as live-hardware-confirmed;

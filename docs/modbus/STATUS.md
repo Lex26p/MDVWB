@@ -270,6 +270,12 @@ Milestone 11 now provides:
 - reuse of one raw register value by multiple semantic points without changing semantic conversion order;
 - no reads across undeclared register gaps;
 - atomic factual snapshots even when a batch fails or returns the wrong size;
+- established online state is retained through two consecutive failed complete
+  polls; the third failure publishes offline, and the first subsequent complete
+  successful poll resets the counter and restores online;
+- write/confirmation failures do not independently change device availability;
+- journal diagnostics identify the logical device, failing stage, Slave ID,
+  register or register range, and the ordinary-poll failure counter;
 - separate start-to-start cadence for ordinary polls, successful command/confirmation work and failed operations;
 - bounded configurable write attempts, confirmation attempts and priority burst before an ordinary poll;
 - retry backoff that reduces repeated traffic after timeout, I/O or invalid-response outcomes.
@@ -489,7 +495,8 @@ Milestone 9 now provides:
 
 For the first production profile, normal polling reads the safe presence point,
 the adjacent Power/Mode/FanSpeed/integer-SetTemperature block, and AlarmCode. A
-zero presence value publishes the ordinary existing offline representation
+zero presence value contributes one failed complete poll; three consecutive
+failed complete polls publish the ordinary existing offline representation
 (`Alarm=2`, `Status=7`). A successful FC10 response alone never changes factual
 state; only matching FC03 read-back does.
 

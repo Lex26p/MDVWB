@@ -61,7 +61,10 @@ Important invariants:
   matching read/write points;
 - a Modbus control is writable only when both the selected profile and the
   current runtime support it; unsupported controls are rejected before wire
-  traffic.
+  traffic;
+- transient Modbus read failures preserve an established online state; the
+  device changes to offline after three consecutive failed complete polls and
+  recovers after the first complete successful poll.
 
 The shipped `vrf_add_controller` enables Mode, FanSpeed and the integer part of
 SetTemperature as field-validation mappings from the manufacturer table. They

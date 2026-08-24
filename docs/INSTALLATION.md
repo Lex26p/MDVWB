@@ -350,6 +350,12 @@ journalctl -u mdvwb@1.service -n 200 --no-pager
 обратно. Половинные градусы и физический `Temp` этим профилем пока не
 поддерживаются.
 
+Для уже работающего Modbus-устройства одна или две последовательные ошибки
+полного опроса не меняют retained online-state. Третья ошибка подряд публикует
+`Alarm=2`, `Status=7`; первый следующий полностью успешный опрос возвращает
+online. Ошибки записи и отдельного confirmation read сами по себе offline не
+публикуют.
+
 Web:
 
 ```text
@@ -400,3 +406,13 @@ systemctl status mdvwb-scheduler.service --no-pager
 systemctl list-units 'mdvwb@*.service' --all --no-pager
 systemctl --failed --no-pager
 ```
+
+Ошибки конкретной Modbus-шины:
+
+```bash
+journalctl -u mdvwb@2.service -n 200 --no-pager | grep 'Modbus operation failed'
+```
+
+Строка содержит устройство, `operation`, `outcome`, `stage`, `logical-address`,
+`slave-id`, `register` или `registers` и для обычного poll счётчик
+`consecutive-poll-failures=N/3`.

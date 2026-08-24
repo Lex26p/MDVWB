@@ -139,8 +139,8 @@ public:
 
         if (address == 40039U) {
             ++probeCount;
-            // Initial snapshot sees the device. The next ordinary poll after
-            // the confirmed command reports absence and must publish offline.
+            // Initial snapshot sees the device. Later ordinary polls report
+            // absence so MQTT can verify the three-failure offline threshold.
             return ReadSuccess(request, probeCount == 1U ? 24U : 0U);
         }
         if (address == 40028U) {
@@ -396,12 +396,36 @@ void TestModbusStateAndCommandsUseExistingMqttBoundary()
         "confirmed Heat mode did not publish Mode=1 and Status=2");
 
     const auto publicationsBeforeOffline = mqtt.publications.size();
+    for (std::uint32_t failure = 1;
+         failure < mdv::modbus::kModbusPollFailuresBeforeOffline;
+         ++failure) {
+        const auto transientFailure = driver.ProcessNext();
+        states.PublishAfter(driver, transientFailure);
+        Require(
+            transientFailure.operation == mdv::DriverOperation::PollRead &&
+                transientFailure.outcome == mdv::DriverOutcome::Timeout,
+            "zero presence probe did not produce ordinary offline outcome");
+        Require(
+            driver.DeviceStateByAddress(1U).online,
+            "transient Modbus failure marked the device offline");
+        Require(
+            mqtt.publications.size() == publicationsBeforeOffline,
+            "transient Modbus failure published a false offline state");
+    }
+
     const auto offline = driver.ProcessNext();
     states.PublishAfter(driver, offline);
     Require(
         offline.operation == mdv::DriverOperation::PollRead &&
-            offline.outcome == mdv::DriverOutcome::Timeout,
-        "zero presence probe did not produce ordinary offline outcome");
+            offline.outcome == mdv::DriverOutcome::Timeout &&
+            !driver.DeviceStateByAddress(1U).online,
+        "third zero presence probe did not mark the device offline");
+    Require(
+        offline.error.find("stage=probe") != std::string::npos &&
+            offline.error.find("register=40039") != std::string::npos &&
+            offline.error.find("consecutive-poll-failures=3/3") !=
+                std::string::npos,
+        "offline diagnostic lacks stage, register or failure counter");
     Require(
         mqtt.HasPublication(
             "/devices/Fan-2_1/controls/Alarm",

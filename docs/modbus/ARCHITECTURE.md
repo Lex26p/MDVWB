@@ -589,7 +589,8 @@ Expected model:
 
 ```text
 device 1 -> online
-device 2 -> timeout/offline
+device 2 -> one or two failed complete polls -> previous online state retained
+device 2 -> third consecutive failed complete poll -> offline
 device 3 -> online
 ```
 
@@ -597,7 +598,12 @@ Modbus exception responses must be distinguished from transport timeouts when pr
 
 A failed or unknown value for one optional field should not automatically destroy all successfully decoded state if the profile and transaction design allow safe partial handling.
 
-Exact retry/freshness policy will be defined during implementation.
+The implemented availability policy is per logical device. A complete poll
+includes the presence probe and every enabled semantic read. Three consecutive
+failed complete polls change an established device to offline; one complete
+successful poll resets the failure count and restores online. A failed write or
+single-point confirmation does not change availability. Runtime journal entries
+identify the logical address, stage, Slave ID and register/range.
 
 ## 23. Configuration compatibility
 

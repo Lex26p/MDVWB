@@ -541,13 +541,35 @@ void TestMalformedBatchPreservesPreviousFactualState()
     const auto factual = driver.DeviceStateByAddress(1U);
 
     transport.malformedBatch = true;
-    const auto failed = driver.ProcessNext();
+    for (std::uint32_t failure = 1;
+         failure < mdv::modbus::kModbusPollFailuresBeforeOffline;
+         ++failure) {
+        const auto failed = driver.ProcessNext();
+        Require(
+            failed.outcome == mdv::DriverOutcome::InvalidResponse,
+            "malformed batch was not rejected");
+        Require(
+            failed.error.find("stage=semantic-read") != std::string::npos &&
+                failed.error.find("registers=40028..40029") !=
+                    std::string::npos &&
+                failed.error.find(
+                    "consecutive-poll-failures=" +
+                    std::to_string(failure) + "/3") != std::string::npos,
+            "poll failure diagnostic lacks stage, register range or counter");
+        Require(
+            driver.DeviceStateByAddress(1U).online,
+            "device went offline before the poll failure threshold");
+    }
+
+    const auto thresholdFailure = driver.ProcessNext();
     Require(
-        failed.outcome == mdv::DriverOutcome::InvalidResponse,
-        "malformed batch was not rejected");
+        thresholdFailure.outcome == mdv::DriverOutcome::InvalidResponse &&
+            thresholdFailure.error.find("device marked offline") !=
+                std::string::npos,
+        "third malformed batch did not reach the offline threshold");
 
     const auto after = driver.DeviceStateByAddress(1U);
-    Require(!after.online, "malformed batch left the device online");
+    Require(!after.online, "third malformed batch left the device online");
     Require(after.hasState, "malformed batch erased the prior factual snapshot");
     Require(after.power == factual.power, "malformed batch changed factual Power");
     Require(
@@ -556,6 +578,20 @@ void TestMalformedBatchPreservesPreviousFactualState()
     Require(
         after.alarmCode == factual.alarmCode,
         "malformed batch changed factual AlarmCode");
+
+    transport.malformedBatch = false;
+    Require(
+        driver.ProcessNext().outcome == mdv::DriverOutcome::Success &&
+            driver.DeviceStateByAddress(1U).online,
+        "first complete successful poll did not restore the device online");
+
+    transport.malformedBatch = true;
+    const auto afterRecoveryFailure = driver.ProcessNext();
+    Require(
+        afterRecoveryFailure.error.find("consecutive-poll-failures=1/3") !=
+                std::string::npos &&
+            driver.DeviceStateByAddress(1U).online,
+        "successful poll did not reset the consecutive failure counter");
 }
 
 void TestFailedSnapshotDoesNotPublishPartialValues()
@@ -589,7 +625,7 @@ void TestFailedSnapshotDoesNotPublishPartialValues()
         "invalid semantic response classification mismatch");
 
     const auto after = driver.DeviceStateByAddress(1U);
-    Require(!after.online, "failed snapshot did not mark device offline");
+    Require(after.online, "one failed snapshot marked device offline");
     Require(after.hasState, "failed snapshot destroyed last confirmed state");
     Require(after.power, "partial Power read overwrote confirmed snapshot");
     Require(
@@ -832,6 +868,10 @@ void TestWriteTimeoutRetriesAreBounded()
             result.outcome == mdv::DriverOutcome::Timeout,
             "write timeout outcome mismatch");
         Require(
+            result.error.find("stage=write") != std::string::npos &&
+                result.error.find("register=40078") != std::string::npos,
+            "write timeout diagnostic lacks stage or register");
+        Require(
             driver.HasQueuedWork() ==
                 (attempt < mdv::modbus::kMaxModbusWriteAttempts),
             "write retry budget mismatch");
@@ -876,20 +916,25 @@ void TestConfirmationTimeoutRetriesAreBounded()
             result.outcome == mdv::DriverOutcome::Timeout,
             "confirmation timeout outcome mismatch");
         Require(
+            result.error.find("stage=confirmation-read") !=
+                    std::string::npos &&
+                result.error.find("register=40028") != std::string::npos,
+            "confirmation timeout diagnostic lacks stage or register");
+        Require(
             driver.HasQueuedWork() ==
                 (attempt < mdv::modbus::kMaxModbusConfirmationAttempts),
             "confirmation retry budget mismatch");
     }
 
     Require(
-        !driver.DeviceStateByAddress(1U).online,
-        "exhausted confirmation failures left device online");
+        driver.DeviceStateByAddress(1U).online,
+        "confirmation failures changed full-poll availability");
     Require(
         driver.DeviceStateByAddress(1U).power,
         "failed confirmations changed factual Power");
 }
 
-void TestInvalidConfirmationMarksDeviceOffline()
+void TestInvalidConfirmationPreservesAvailability()
 {
     auto profile = ProductionProfile();
     InvalidConfirmationTransport transport;
@@ -916,27 +961,26 @@ void TestInvalidConfirmationMarksDeviceOffline()
         "invalid Power confirmation classification is wrong");
 
     const auto state = driver.DeviceStateByAddress(1U);
-    Require(!state.online, "invalid Power confirmation left device online");
+    Require(state.online, "invalid Power confirmation marked device offline");
     Require(state.hasState, "invalid Power confirmation erased factual state");
     Require(state.power, "invalid Power confirmation changed factual Power");
     Require(!driver.HasQueuedWork(),
             "invalid Power confirmation remained queued");
 
-    bool rejected = false;
-    try {
-        driver.ApplyCommand(mdv::DriverCommand{
-            .address = 1U,
-            .control = mdv::DriverControl::Power,
-            .value = false,
-        });
-    }
-    catch (const std::logic_error&) {
-        rejected = true;
-    }
-
     Require(
-        rejected,
-        "offline device accepted a command after invalid confirmation");
+        confirmation.error.find("stage=confirmation-decode") !=
+                std::string::npos &&
+            confirmation.error.find("register=40028") != std::string::npos,
+        "invalid confirmation diagnostic lacks stage or register");
+
+    driver.ApplyCommand(mdv::DriverCommand{
+        .address = 1U,
+        .control = mdv::DriverControl::Power,
+        .value = false,
+    });
+    Require(
+        driver.HasQueuedWork(),
+        "available device rejected a command after invalid confirmation");
 }
 
 void TestConfirmationMismatchRetriesWrite()
@@ -1245,7 +1289,7 @@ int main()
         TestIndependentControlsCanBeQueuedTogether();
         TestWriteTimeoutRetriesAreBounded();
         TestConfirmationTimeoutRetriesAreBounded();
-        TestInvalidConfirmationMarksDeviceOffline();
+        TestInvalidConfirmationPreservesAvailability();
         TestConfirmationMismatchRetriesWrite();
         TestPriorityWorkCannotStarvePolling();
         TestNewerCommandCancelsStaleWork();

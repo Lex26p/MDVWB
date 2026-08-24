@@ -433,7 +433,7 @@ void MqttStatePublisher::PublishAfter(
     if (result.outcome == DriverOutcome::Success) {
         PublishDevice(driver.DeviceStateByAddress(result.address));
     }
-    else {
+    else if (!driver.DeviceStateByAddress(result.address).online) {
         PublishOffline(result.address, false);
     }
 }

@@ -18,6 +18,7 @@ namespace mdv::modbus {
 
 inline constexpr std::uint32_t kMaxModbusWriteAttempts = 3;
 inline constexpr std::uint32_t kMaxModbusConfirmationAttempts = 3;
+inline constexpr std::uint32_t kModbusPollFailuresBeforeOffline = 3;
 inline constexpr std::size_t kMaxModbusPriorityOperationsBeforePoll = 4;
 
 struct ModbusDriverPolicy {
@@ -73,6 +74,7 @@ private:
         DriverDeviceState state;
         std::array<std::optional<PendingWrite>, kWritableControlCount>
             pendingWrites{};
+        std::uint32_t consecutivePollFailures = 0;
     };
 
     struct RawReadResult {
@@ -120,9 +122,8 @@ private:
     [[nodiscard]] RawReadResult ReadSemanticRegister(
         const ResolvedRegisterLocation& location);
 
-    [[nodiscard]] DriverResult MarkOffline(
+    [[nodiscard]] DriverResult RecordPollFailure(
         DeviceRuntime& runtime,
-        DriverOperation operation,
         DriverOutcome outcome,
         std::string error);
 

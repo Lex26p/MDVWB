@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <optional>
 #include <set>
@@ -74,6 +75,34 @@ namespace {
         break;
     }
     return "Modbus probe failed";
+}
+
+[[nodiscard]] std::string ReadFailureContext(
+    std::string_view stage,
+    std::uint8_t logicalAddress,
+    std::uint8_t slaveId,
+    std::uint16_t startAddress,
+    std::uint16_t quantity,
+    std::string_view detail)
+{
+    std::string result =
+        "stage=" + std::string(stage) +
+        ", logical-address=" + std::to_string(logicalAddress) +
+        ", slave-id=" + std::to_string(slaveId);
+
+    if (quantity <= 1U) {
+        result += ", register=" + std::to_string(startAddress);
+    }
+    else {
+        const auto lastAddress =
+            static_cast<std::uint32_t>(startAddress) + quantity - 1U;
+        result += ", registers=" + std::to_string(startAddress) + ".." +
+            std::to_string(lastAddress);
+    }
+
+    result += ": ";
+    result += detail;
+    return result;
 }
 
 [[nodiscard]] DriverOutcome TransactionOutcome(
@@ -203,6 +232,7 @@ ModbusDriver::ModbusDriver(
             .pollPlan = std::move(devicePlan),
             .state = state,
             .pendingWrites = {},
+            .consecutivePollFailures = 0,
         });
     }
 }
@@ -407,19 +437,30 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
         probe = ExecuteScanProbe(runtime.pollPlan.probe, transport_);
     }
     catch (const std::exception& error) {
-        return MarkOffline(
+        return RecordPollFailure(
             runtime,
-            DriverOperation::PollRead,
             DriverOutcome::IoError,
-            std::string("Modbus probe transport failure: ") + error.what());
+            ReadFailureContext(
+                "probe",
+                runtime.logicalAddress,
+                runtime.pollPlan.probe.slaveId,
+                runtime.pollPlan.probe.address,
+                runtime.pollPlan.probe.quantity,
+                std::string("Modbus probe transport failure: ") +
+                    error.what()));
     }
 
     if (probe.disposition != ScanDisposition::Found) {
-        return MarkOffline(
+        return RecordPollFailure(
             runtime,
-            DriverOperation::PollRead,
             ProbeFailureOutcome(probe),
-            ProbeFailureMessage(probe));
+            ReadFailureContext(
+                "probe",
+                runtime.logicalAddress,
+                runtime.pollPlan.probe.slaveId,
+                runtime.pollPlan.probe.address,
+                runtime.pollPlan.probe.quantity,
+                ProbeFailureMessage(probe)));
     }
 
     DriverDeviceState snapshot;
@@ -430,11 +471,16 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
     for (const auto& batch : runtime.pollPlan.semanticBatches) {
         RawBatchReadResult read = ReadSemanticBatch(batch);
         if (!read.success) {
-            return MarkOffline(
+            return RecordPollFailure(
                 runtime,
-                DriverOperation::PollRead,
                 read.outcome,
-                std::move(read.error));
+                ReadFailureContext(
+                    "semantic-read",
+                    runtime.logicalAddress,
+                    batch.slaveId,
+                    batch.startAddress,
+                    batch.quantity,
+                    read.error));
         }
         batchValues.push_back(std::move(read.values));
     }
@@ -442,11 +488,16 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
     for (const auto& point : runtime.pollPlan.semanticReads) {
         if (point.batchIndex >= batchValues.size() ||
             point.registerOffset >= batchValues[point.batchIndex].size()) {
-            return MarkOffline(
+            return RecordPollFailure(
                 runtime,
-                DriverOperation::PollRead,
                 DriverOutcome::InvalidResponse,
-                "resolved Modbus semantic read is outside its batch");
+                ReadFailureContext(
+                    "semantic-decode",
+                    runtime.logicalAddress,
+                    point.location.slaveId,
+                    point.location.address,
+                    1U,
+                    "resolved Modbus semantic read is outside its batch"));
         }
 
         try {
@@ -457,18 +508,24 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
                 batchValues[point.batchIndex][point.registerOffset]);
         }
         catch (const SemanticConversionError& error) {
-            return MarkOffline(
+            return RecordPollFailure(
                 runtime,
-                DriverOperation::PollRead,
                 DriverOutcome::InvalidResponse,
-                "cannot decode semantic point '" + point.pointName +
-                    "': " + error.what());
+                ReadFailureContext(
+                    "semantic-decode",
+                    runtime.logicalAddress,
+                    point.location.slaveId,
+                    point.location.address,
+                    1U,
+                    "cannot decode semantic point '" + point.pointName +
+                        "': " + error.what()));
         }
     }
 
     snapshot.online = true;
     snapshot.hasState = true;
     runtime.state = std::move(snapshot);
+    runtime.consecutivePollFailures = 0;
 
     // A bounded ordinary poll is also a valid factual read-back. If it observes
     // a latest desired value, that command is complete and any queued work for
@@ -517,12 +574,20 @@ DriverResult ModbusDriver::ExecuteWrite(
             std::span<const std::uint16_t>(values));
     }
     catch (const std::exception& error) {
+        const auto slaveId = pending.slaveId;
+        const auto writeAddress = pending.writeAddress;
         pendingSlot.reset();
         return DriverResult{
             .address = runtime.logicalAddress,
             .operation = DriverOperation::SetState,
             .outcome = DriverOutcome::InvalidResponse,
-            .error = error.what(),
+            .error = ReadFailureContext(
+                "write-build",
+                runtime.logicalAddress,
+                slaveId,
+                writeAddress,
+                1U,
+                error.what()),
         };
     }
 
@@ -581,6 +646,8 @@ DriverResult ModbusDriver::ExecuteWrite(
         transaction.status == TransactionStatus::Success
             ? DriverOutcome::InvalidResponse
             : TransactionOutcome(transaction.status);
+    const auto slaveId = pending.slaveId;
+    const auto writeAddress = pending.writeAddress;
 
     if (pending.writeAttempts < policy_.maxWriteAttempts) {
         EnqueueWrite(runtime, control);
@@ -593,7 +660,13 @@ DriverResult ModbusDriver::ExecuteWrite(
         .address = runtime.logicalAddress,
         .operation = DriverOperation::SetState,
         .outcome = outcome,
-        .error = std::move(error),
+        .error = ReadFailureContext(
+            "write",
+            runtime.logicalAddress,
+            slaveId,
+            writeAddress,
+            1U,
+            error),
     };
 }
 
@@ -616,8 +689,7 @@ DriverResult ModbusDriver::ConfirmWrite(
 
     const RawReadResult read = ReadSemanticRegister(pending.readLocation);
     if (!read.success) {
-        runtime.state.online = false;
-
+        const auto readLocation = pending.readLocation;
         if (pending.confirmationAttempts <
             policy_.maxConfirmationAttempts) {
             EnqueueConfirmation(runtime, control);
@@ -630,7 +702,13 @@ DriverResult ModbusDriver::ConfirmWrite(
             .address = runtime.logicalAddress,
             .operation = DriverOperation::ConfirmRead,
             .outcome = read.outcome,
-            .error = read.error,
+            .error = ReadFailureContext(
+                "confirmation-read",
+                runtime.logicalAddress,
+                readLocation.slaveId,
+                readLocation.address,
+                1U,
+                read.error),
         };
     }
 
@@ -643,26 +721,37 @@ DriverResult ModbusDriver::ConfirmWrite(
             read.value);
     }
     catch (const SemanticConversionError& error) {
-        runtime.state.online = false;
         const std::string pointName = pending.pointName;
+        const auto readLocation = pending.readLocation;
         pendingSlot.reset();
         return DriverResult{
             .address = runtime.logicalAddress,
             .operation = DriverOperation::ConfirmRead,
             .outcome = DriverOutcome::InvalidResponse,
-            .error = "cannot decode Modbus '" + pointName +
-                "' confirmation: " + error.what(),
+            .error = ReadFailureContext(
+                "confirmation-decode",
+                runtime.logicalAddress,
+                readLocation.slaveId,
+                readLocation.address,
+                1U,
+                "cannot decode Modbus '" + pointName +
+                    "' confirmation: " + error.what()),
         };
     }
 
     if (!FactualValueMatches(confirmed, control, pending.desired)) {
-        const std::string error = "Modbus '" + pending.pointName +
-            "' read-back does not match the requested value";
+        const std::string error = ReadFailureContext(
+            "confirmation-compare",
+            runtime.logicalAddress,
+            pending.readLocation.slaveId,
+            pending.readLocation.address,
+            1U,
+            "Modbus '" + pending.pointName +
+                "' read-back does not match the requested value");
 
-        // A valid but mismatching read proves that the device is reachable; it
-        // must not publish a false offline state. Retry the write while budget
-        // remains and report this as a failed SetState operation.
-        runtime.state.online = true;
+        // A valid but mismatching confirmation must not change availability;
+        // only a complete ordinary poll owns offline/recovery transitions.
+        // Retry the write while budget remains and report a failed SetState.
         if (pending.writeAttempts < policy_.maxWriteAttempts) {
             pending.confirmationAttempts = 0;
             EnqueueWrite(runtime, control);
@@ -679,7 +768,6 @@ DriverResult ModbusDriver::ConfirmWrite(
         };
     }
 
-    confirmed.online = true;
     confirmed.hasState = true;
     runtime.state = std::move(confirmed);
     pendingSlot.reset();
@@ -850,16 +938,33 @@ ModbusDriver::RawReadResult ModbusDriver::ReadSemanticRegister(
     };
 }
 
-DriverResult ModbusDriver::MarkOffline(
+DriverResult ModbusDriver::RecordPollFailure(
     DeviceRuntime& runtime,
-    DriverOperation operation,
     DriverOutcome outcome,
     std::string error)
 {
-    runtime.state.online = false;
+    if (runtime.consecutivePollFailures <
+        kModbusPollFailuresBeforeOffline) {
+        ++runtime.consecutivePollFailures;
+    }
+
+    const bool thresholdReached =
+        runtime.consecutivePollFailures >=
+        kModbusPollFailuresBeforeOffline;
+    if (thresholdReached) {
+        runtime.state.online = false;
+    }
+
+    error += "; consecutive-poll-failures=" +
+        std::to_string(runtime.consecutivePollFailures) + "/" +
+        std::to_string(kModbusPollFailuresBeforeOffline);
+    error += thresholdReached
+        ? "; device marked offline"
+        : "; previous availability preserved";
+
     return DriverResult{
         .address = runtime.logicalAddress,
-        .operation = operation,
+        .operation = DriverOperation::PollRead,
         .outcome = outcome,
         .error = std::move(error),
     };

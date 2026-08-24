@@ -58,6 +58,13 @@ behavior, long-term stability, or recovery after a physical disconnect.
 4. Validate extended polling, physical disconnect/reconnect, and multiple
    configured devices, then record the reviewed evidence in `STATUS.md`.
 
+During stability and disconnect testing, verify that the first two consecutive
+failed complete polls do not publish offline, the third publishes retained
+`Alarm=2` and `Status=7`, and the first complete successful poll after reconnect
+restores factual online state. Journal evidence must include `stage`,
+`logical-address`, `slave-id`, `register`/`registers` and
+`consecutive-poll-failures=N/3` for ordinary poll failures.
+
 Mode, FanSpeed and integer SetTemperature are enabled specifically for this
 field validation but are not yet hardware-confirmed. RoomTemperature,
 half-degree SetTemperature and any additional alarm meaning remain unsupported.
