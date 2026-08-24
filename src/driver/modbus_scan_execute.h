@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace mdv::modbus {
 
@@ -36,6 +37,7 @@ struct ScanResult {
     ScanReason reason = ScanReason::UnsupportedCandidate;
     std::optional<ScanProbe> probe;
     std::optional<std::uint8_t> exceptionCode;
+    std::vector<std::uint16_t> registers;
     std::string diagnostic;
     std::chrono::milliseconds elapsed{0};
 };

@@ -75,10 +75,10 @@ function productionCatalog() {
           step: 1,
         },
         roomTemperature: {
-          supported: false,
-          readable: false,
+          supported: true,
+          readable: true,
           writable: false,
-          type: null,
+          type: "number",
         },
         alarm: {
           supported: true,
@@ -234,7 +234,7 @@ function testCatalogAndCapabilities() {
   assert.equal(profile.transport.baudRate, 9600);
   assert.equal(
     describeModbusCapabilities(profile),
-    "Power: чтение и запись · Mode: чтение и запись · FanSpeed: чтение и запись · SetTemperature: чтение и запись · Alarm: только чтение",
+    "Power: чтение и запись · Mode: чтение и запись · FanSpeed: чтение и запись · SetTemperature: чтение и запись · RoomTemperature: только чтение · Alarm: только чтение",
   );
   assert.equal(
     protocolDisplayName({

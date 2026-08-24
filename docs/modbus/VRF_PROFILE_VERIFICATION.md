@@ -162,7 +162,7 @@ The current profile enables only the integer registers `40031/40081`, whole
 degrees `16..32`. Composite half-degree behavior remains disabled and still
 requires schema/runtime support plus hardware confirmation.
 
-## Deferred capability 4: RoomTemperature
+## Field-validation capability 4: RoomTemperature
 
 Source point:
 
@@ -170,15 +170,20 @@ Source point:
 40039 + 91*Y   inlet air temperature Ti
 ```
 
-The raw value is already used for scan presence, but scale, offset, signedness and sensor-error sentinel values are still unknown.
+The raw value is already used for scan presence. At the operator's request, the
+profile now interprets it as unsigned whole degrees (`scale=1`, `offset=0`) and
+the poller reuses that probe response without a second Modbus transaction.
+Sensor-error sentinel values remain unknown.
 
-Capability remains disabled until physical-unit conversion is verified.
+The capability is enabled for field validation. It must not be called
+hardware-confirmed until `Temp` is compared with the physical inlet-air
+temperature and invalid/sensor-error behavior is recorded.
 
 ## Promotion rule for future capabilities
 
 A new semantic capability normally requires both documented raw behavior and
-live evidence. Mode, FanSpeed and integer SetTemperature are temporarily enabled
-as an explicit field-validation build at the operator's request; they must not
-be relabeled as confirmed until the observed reads, writes and physical results
-are recorded. Unresolved RoomTemperature and half-degree behavior remain
-disabled.
+live evidence. Mode, FanSpeed, integer SetTemperature and integer
+RoomTemperature are temporarily enabled as an explicit field-validation build
+at the operator's request; they must not be relabeled as confirmed until the
+observed reads, writes and physical results are recorded. Half-degree behavior
+remains disabled.

@@ -345,8 +345,10 @@ obsolete optional retained values cleared when unavailable
 no write traffic during discovery
 ```
 
-Для текущего `vrf_add_controller` проверяются Power, Mode, Speed и целочисленный
-SetTemp. Blinds и Blok не должны отправляться. Retained `Status` должен
+Для текущего `vrf_add_controller` проверяются Power, Mode, Speed, целочисленные
+SetTemp и factual Temp. Temp должен совпадать с температурой входящего воздуха
+и публиковаться целым числом; чтение Temp не должно добавлять отдельную
+транзакцию после presence probe. Blinds и Blok не должны отправляться. Retained `Status` должен
 соответствовать подтверждённым Power/Mode: `0` выключен, `1` охлаждение, `2`
 нагрев, `3` осушение, `4` вентиляция, `5` Auto, `6` авария, `7` offline.
 

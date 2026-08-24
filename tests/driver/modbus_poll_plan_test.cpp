@@ -79,13 +79,13 @@ void TestProductionBaselineAndResolvedLocations()
         plan.metrics.probeTransactionsPerCycle == 2U,
         "probe transaction baseline is wrong");
     Require(
-        plan.metrics.semanticTransactionsPerCycle == 10U,
+        plan.metrics.semanticTransactionsPerCycle == 12U,
         "semantic transaction baseline is wrong");
     Require(
-        plan.metrics.totalTransactionsPerCycle == 12U,
+        plan.metrics.totalTransactionsPerCycle == 14U,
         "total transaction baseline is wrong");
     Require(
-        plan.metrics.registersRequestedPerCycle == 12U,
+        plan.metrics.registersRequestedPerCycle == 14U,
         "register baseline is wrong");
     Require(
         plan.metrics.optimizedSemanticTransactionsPerCycle == 4U &&
@@ -93,15 +93,15 @@ void TestProductionBaselineAndResolvedLocations()
         "production profile was unsafely batched across gaps");
     Require(
         plan.metrics.optimizedRegistersRequestedPerCycle == 12U &&
-            plan.metrics.reusedSemanticReadsPerCycle == 0U &&
-            plan.metrics.savedTransactionsPerCycle == 6U,
+            plan.metrics.reusedSemanticReadsPerCycle == 2U &&
+            plan.metrics.savedTransactionsPerCycle == 8U,
         "production optimization metrics are wrong");
 
     const auto& first = plan.devices[0];
     Require(first.logicalAddress == 1U, "first logical address changed");
     Require(first.probe.slaveId == 1U, "first probe slave is wrong");
     Require(first.probe.address == 40039U, "first probe address is wrong");
-    Require(first.semanticReads.size() == 5U, "first semantic read count is wrong");
+    Require(first.semanticReads.size() == 6U, "first semantic read count is wrong");
     Require(first.semanticReads[0].pointName == "power", "semantic order is unstable");
     Require(first.semanticReads[0].location.address == 40028U, "Power read is wrong");
     Require(first.semanticReads[1].pointName == "mode", "Mode order is unstable");
@@ -110,8 +110,13 @@ void TestProductionBaselineAndResolvedLocations()
     Require(first.semanticReads[2].location.address == 40030U, "FanSpeed read is wrong");
     Require(first.semanticReads[3].pointName == "setTemperature", "SetTemperature order is unstable");
     Require(first.semanticReads[3].location.address == 40031U, "SetTemperature read is wrong");
-    Require(first.semanticReads[4].pointName == "alarmCode", "Alarm order is unstable");
-    Require(first.semanticReads[4].location.address == 40035U, "Alarm read is wrong");
+    Require(first.semanticReads[4].pointName == "roomTemperature", "RoomTemperature order is unstable");
+    Require(first.semanticReads[4].location.address == 40039U, "RoomTemperature read is wrong");
+    Require(
+        first.semanticReads[4].probeRegisterOffset == 0U,
+        "RoomTemperature did not reuse the probe register");
+    Require(first.semanticReads[5].pointName == "alarmCode", "Alarm order is unstable");
+    Require(first.semanticReads[5].location.address == 40035U, "Alarm read is wrong");
     Require(
         first.powerRead.has_value() && first.powerRead->address == 40028U,
         "Power confirmation location was not cached");
@@ -130,7 +135,10 @@ void TestProductionBaselineAndResolvedLocations()
     Require(second.semanticReads[1].location.address == 40120U, "Mode stride is wrong");
     Require(second.semanticReads[2].location.address == 40121U, "FanSpeed stride is wrong");
     Require(second.semanticReads[3].location.address == 40122U, "SetTemperature stride is wrong");
-    Require(second.semanticReads[4].location.address == 40126U, "Alarm stride is wrong");
+    Require(second.semanticReads[4].location.address == 40130U, "RoomTemperature stride is wrong");
+    Require(second.semanticReads[4].probeRegisterOffset == 0U,
+            "second RoomTemperature did not reuse the probe register");
+    Require(second.semanticReads[5].location.address == 40126U, "Alarm stride is wrong");
     Require(
         second.powerRead.has_value() && second.powerRead->address == 40119U,
         "second Power confirmation location was not cached");

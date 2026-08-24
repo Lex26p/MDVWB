@@ -344,11 +344,12 @@ journalctl -u mdvwb@1.service -n 200 --no-pager
 `MDVWB_MODBUS_PROFILE_ID` и serial settings. Scheduler должен видеть тот же
 каталог через `MDVWB_MODBUS_PROFILE_DIR` в `/etc/default/mdvwb-scheduler`.
 
-Текущий `vrf_add_controller` публикует factual `Power`, `Mode`, `Speed`, целый
-`SetTemp`, `AlarmCode` и производный `Status`; команды Power/Mode/Speed/SetTemp
-доступны только после первого успешного snapshot и подтверждаются чтением
-обратно. Половинные градусы и физический `Temp` этим профилем пока не
-поддерживаются.
+Текущий `vrf_add_controller` публикует factual `Power`, `Mode`, `Speed`, целые
+`SetTemp` и `Temp`, `AlarmCode` и производный `Status`; команды
+Power/Mode/Speed/SetTemp доступны только после первого успешного snapshot и
+подтверждаются чтением обратно. `Temp` берётся как целое значение из
+`40039 + 91*Y`, уже прочитанного presence probe, без дополнительной транзакции.
+Половинные градусы этим профилем не поддерживаются.
 
 Для уже работающего Modbus-устройства одна или две последовательные ошибки
 полного опроса не меняют retained online-state. Третья ошибка подряд публикует

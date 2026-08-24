@@ -612,7 +612,7 @@ function loadDemoData() {
         mode: { supported: true, readable: true, writable: true, type: "enum" },
         fanSpeed: { supported: true, readable: true, writable: true, type: "enum" },
         setTemperature: { supported: true, readable: true, writable: true, type: "number", minimum: 16, maximum: 32, step: 1 },
-        roomTemperature: { supported: false, readable: false, writable: false, type: null },
+        roomTemperature: { supported: true, readable: true, writable: false, type: "number" },
         alarm: { supported: true, readable: true, writable: false, type: "number", minimum: null, maximum: null, step: null },
         blinds: { supported: false, readable: false, writable: false, type: null },
         blocked: { supported: false, readable: false, writable: false, type: null },

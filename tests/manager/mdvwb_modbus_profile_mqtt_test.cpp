@@ -87,6 +87,11 @@ void TestProductionCatalogIsPublishedRetained()
         client.payload_.find("\"power\":{\"supported\":true") !=
             std::string::npos,
         "profile catalog omitted Power capability metadata");
+    Require(
+        client.payload_.find(
+            "\"roomTemperature\":{\"supported\":true,\"readable\":true,\"writable\":false,\"type\":\"number\"") !=
+            std::string::npos,
+        "profile catalog omitted read-only RoomTemperature metadata");
 }
 
 void TestUnavailableDirectoryPublishesSafeFallback()

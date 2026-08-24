@@ -457,6 +457,9 @@ void TestProductionProfileReadOnlyPolling()
     Require(
         state.setTemperature == 24.0,
         "SetTemperature semantic value mismatch");
+    Require(
+        state.roomTemperature == 24.0,
+        "integer RoomTemperature semantic value mismatch");
     Require(state.alarmCode == 5, "AlarmCode semantic value mismatch");
 
     Require(
@@ -1137,20 +1140,20 @@ void TestResolvedPollPlanBaselineIsExposed()
         metrics.probeTransactionsPerCycle == 2U,
         "driver probe baseline is wrong");
     Require(
-        metrics.semanticTransactionsPerCycle == 10U,
+        metrics.semanticTransactionsPerCycle == 12U,
         "driver semantic baseline is wrong");
     Require(
-        metrics.totalTransactionsPerCycle == 12U,
+        metrics.totalTransactionsPerCycle == 14U,
         "driver total transaction baseline is wrong");
     Require(
-        metrics.registersRequestedPerCycle == 12U,
+        metrics.registersRequestedPerCycle == 14U,
         "driver register baseline is wrong");
     Require(
         metrics.optimizedSemanticTransactionsPerCycle == 4U &&
             metrics.optimizedTotalTransactionsPerCycle == 6U &&
             metrics.optimizedRegistersRequestedPerCycle == 12U &&
-            metrics.reusedSemanticReadsPerCycle == 0U &&
-            metrics.savedTransactionsPerCycle == 6U,
+            metrics.reusedSemanticReadsPerCycle == 2U &&
+            metrics.savedTransactionsPerCycle == 8U,
         "driver production optimization metrics are wrong");
     Require(
         transport.requests.empty(),

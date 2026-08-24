@@ -486,8 +486,18 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
     }
 
     for (const auto& point : runtime.pollPlan.semanticReads) {
-        if (point.batchIndex >= batchValues.size() ||
-            point.registerOffset >= batchValues[point.batchIndex].size()) {
+        std::optional<std::uint16_t> rawValue;
+        if (point.probeRegisterOffset.has_value()) {
+            if (*point.probeRegisterOffset < probe.registers.size()) {
+                rawValue = probe.registers[*point.probeRegisterOffset];
+            }
+        }
+        else if (point.batchIndex < batchValues.size() &&
+                 point.registerOffset < batchValues[point.batchIndex].size()) {
+            rawValue = batchValues[point.batchIndex][point.registerOffset];
+        }
+
+        if (!rawValue.has_value()) {
             return RecordPollFailure(
                 runtime,
                 DriverOutcome::InvalidResponse,
@@ -497,7 +507,9 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
                     point.location.slaveId,
                     point.location.address,
                     1U,
-                    "resolved Modbus semantic read is outside its batch"));
+                    point.probeRegisterOffset.has_value()
+                        ? "resolved Modbus semantic read is outside the probe response"
+                        : "resolved Modbus semantic read is outside its batch"));
         }
 
         try {
@@ -505,7 +517,7 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
                 snapshot,
                 profile_,
                 point.pointName,
-                batchValues[point.batchIndex][point.registerOffset]);
+                *rawValue);
         }
         catch (const SemanticConversionError& error) {
             return RecordPollFailure(

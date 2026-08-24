@@ -114,8 +114,16 @@ void TestProductionProfilePresentation()
                 NumberField(setTemperature, "step") == 1.0,
             "production SetTemperature limits mismatch");
 
+    const auto& roomTemperature =
+        ObjectField(capabilities, "roomTemperature");
+    Require(roomTemperature.at("supported").AsBoolean() &&
+                roomTemperature.at("readable").AsBoolean() &&
+                !roomTemperature.at("writable").AsBoolean() &&
+                roomTemperature.at("type").AsString() == "number",
+            "read-only RoomTemperature capability metadata mismatch");
+
     for (const std::string name : {
-             "roomTemperature", "blinds", "blocked"}) {
+             "blinds", "blocked"}) {
         const auto& capability = ObjectField(capabilities, name);
         Require(!capability.at("supported").AsBoolean(),
                 "disabled capability was exposed as supported: " + name);

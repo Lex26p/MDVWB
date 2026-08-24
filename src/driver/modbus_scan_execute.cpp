@@ -110,6 +110,7 @@ namespace {
             .reason = ScanReason::Success,
             .probe = probe,
             .exceptionCode = std::nullopt,
+            .registers = response.registers,
             .diagnostic = {},
             .elapsed = transaction.elapsed,
         };

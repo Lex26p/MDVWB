@@ -280,6 +280,10 @@ void TestModbusStateAndCommandsUseExistingMqttBoundary()
         "initial Modbus AlarmCode was not published on the existing topic");
     Require(
         mqtt.HasPublication(
+            "/devices/Fan-2_1/controls/Temp", "24"),
+        "integer Modbus RoomTemperature was not published on the existing topic");
+    Require(
+        mqtt.HasPublication(
             "/devices/Fan-2_1/controls/Mode", "0") &&
             mqtt.HasPublication(
                 "/devices/Fan-2_1/controls/Speed", "4") &&

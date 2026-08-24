@@ -43,6 +43,7 @@ assert.equal(fan.updatedAt, 1236);
 assert.equal(statusLabel(fan.Status), "Нагрев");
 assert.equal(statusClass(fan.Status), "heating");
 assert.equal(temperatureLabel(fan.Temp), "21.5 °C");
+assert.equal(temperatureLabel(24), "24 °C");
 assert.equal(alarmLabel(fan), "Нет аварии");
 assert.equal(markerMatchesFilter(fan, "online"), true);
 assert.equal(markerMatchesFilter(fan, "alarm"), false);

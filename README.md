@@ -68,10 +68,11 @@ Important invariants:
 - Modbus starts the next logical-device operation no sooner than 300 ms by
   default, including after a write or confirmation; native MDV remains 150 ms.
 
-The shipped `vrf_add_controller` enables Mode, FanSpeed and the integer part of
-SetTemperature as field-validation mappings from the manufacturer table. They
-still require confirmation on the target equipment; half-degree setpoints and
-physical room temperature are not enabled.
+The shipped `vrf_add_controller` enables Mode, FanSpeed, integer
+SetTemperature and integer RoomTemperature as field-validation mappings from
+the manufacturer table. They still require confirmation on the target
+equipment; half-degree setpoints are not enabled. RoomTemperature reuses the
+existing presence-probe value and does not add another Modbus transaction.
 
 ## Runtime files
 

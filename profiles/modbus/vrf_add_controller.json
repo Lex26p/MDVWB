@@ -22,7 +22,7 @@
     "mode": true,
     "fanSpeed": true,
     "setTemperature": true,
-    "roomTemperature": false,
+    "roomTemperature": true,
     "alarm": true,
     "blinds": false,
     "blocked": false
@@ -129,6 +129,19 @@
       },
       "writeConversion": {
         "rounding": "exact"
+      }
+    },
+    "roomTemperature": {
+      "type": "number",
+      "rawType": "uint16",
+      "read": {
+        "space": "holding_register",
+        "address": 40039,
+        "reference": "40039 + 91*Y (integer inlet-air temperature)"
+      },
+      "transform": {
+        "scale": 1,
+        "offset": 0
       }
     },
     "alarmCode": {

@@ -70,6 +70,8 @@ cadence is `300/300/500 ms`. The ordinary round-robin poll may be postponed by
 the bounded command queue, but no successful write or confirmation may start
 the next logical-device operation on the former 20 ms fast path.
 
-Mode, FanSpeed and integer SetTemperature are enabled specifically for this
-field validation but are not yet hardware-confirmed. RoomTemperature,
-half-degree SetTemperature and any additional alarm meaning remain unsupported.
+Mode, FanSpeed, integer SetTemperature and integer RoomTemperature are enabled
+specifically for this field validation but are not yet hardware-confirmed.
+Verify that `Temp` matches the physical inlet-air temperature and contains no
+undocumented sensor-error value. Half-degree SetTemperature and any additional
+alarm meaning remain unsupported.

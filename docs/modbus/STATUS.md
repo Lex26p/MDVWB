@@ -219,9 +219,9 @@ Known architectural characteristics already identified:
 
 The live-confirmed subset covers addressing, discovery, Power and AlarmCode.
 The production profile additionally enables a field-validation implementation
-of Mode, FanSpeed and integer SetTemperature from the manufacturer's published
-bit/register table. Those three mappings are executable but are not yet recorded
-as confirmed on real equipment. Physical RoomTemperature remains disabled.
+of Mode, FanSpeed, integer SetTemperature and integer RoomTemperature from the
+manufacturer's published bit/register table. Those four mappings are executable
+but are not yet recorded as confirmed on real equipment.
 
 ## Runtime boundary implemented
 
@@ -453,8 +453,10 @@ manufacturer table: Mode at `40029/40079`, FanSpeed at `40030/40080`, and the
 integer part of SetTemperature at `40031/40081` with range `16..32`. Their live
 behavior still requires controller verification. Half-degree registers
 `40037/40085` are not used, so the current profile exposes only whole-degree
-setpoints. RoomTemperature remains disabled because its scale, signedness and
-sentinel values are not verified.
+setpoints. RoomTemperature is enabled read-only as raw `uint16`, `scale=1`,
+`offset=0` from `40039 + 91*Y`. Its already validated probe value is reused, so
+the factual `Temp` adds no Modbus transaction. Sensor-error sentinels are still
+not verified.
 
 The current logical identity follows the controller's sorted `Y` slot. A topology change may potentially shift which physical indoor unit occupies a logical address.
 
@@ -577,8 +579,10 @@ Power/Mode/FanSpeed/integer-SetTemperature round trips, offline/recovery behavio
 and multiple configured devices on one bus. Record the observed raw/factual
 values before treating the three newly enabled mappings as hardware-confirmed.
 
-Physical RoomTemperature and half-degree SetTemperature remain disabled until
-their conversion/composite behavior is implemented and verified.
+Integer RoomTemperature must be compared with the physical inlet-air
+temperature and checked for invalid/sensor-error values. Half-degree
+SetTemperature remains disabled until its composite behavior is implemented
+and verified.
 
 ## Status update rules
 

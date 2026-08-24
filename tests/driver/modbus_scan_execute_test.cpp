@@ -206,7 +206,8 @@ void TestTransportOutcomesAreClassifiedDeterministically()
 
     Require(
         report[0].disposition == mdv::modbus::ScanDisposition::Found &&
-            report[0].reason == mdv::modbus::ScanReason::Success,
+            report[0].reason == mdv::modbus::ScanReason::Success &&
+            report[0].registers == std::vector<std::uint16_t>({0U, 0U}),
         "success was not classified as Found");
 
     Require(

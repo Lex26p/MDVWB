@@ -77,6 +77,9 @@ void BuildSemanticBatches(ModbusDevicePollPlan& device)
     std::vector<PhysicalReadKey> uniqueLocations;
     uniqueLocations.reserve(device.semanticReads.size());
     for (const auto& read : device.semanticReads) {
+        if (read.probeRegisterOffset.has_value()) {
+            continue;
+        }
         uniqueLocations.push_back(PhysicalReadKey{
             .slaveId = read.location.slaveId,
             .address = read.location.address,
@@ -122,6 +125,9 @@ void BuildSemanticBatches(ModbusDevicePollPlan& device)
     }
 
     for (auto& read : device.semanticReads) {
+        if (read.probeRegisterOffset.has_value()) {
+            continue;
+        }
         const auto iterator = placement.find(PhysicalReadKey{
             .slaveId = read.location.slaveId,
             .address = read.location.address,
@@ -209,9 +215,22 @@ ModbusPollPlan BuildModbusPollPlan(
                 logicalAddress,
                 pointName,
                 *iterator->second.read);
+
+            std::optional<std::uint16_t> probeRegisterOffset;
+            const auto probeEnd =
+                static_cast<std::uint32_t>(device.probe.address) +
+                static_cast<std::uint32_t>(device.probe.quantity);
+            if (location.space == device.probe.space &&
+                location.slaveId == device.probe.slaveId &&
+                location.address >= device.probe.address &&
+                static_cast<std::uint32_t>(location.address) < probeEnd) {
+                probeRegisterOffset = static_cast<std::uint16_t>(
+                    location.address - device.probe.address);
+            }
             device.semanticReads.push_back(ModbusResolvedSemanticRead{
                 .pointName = std::string(pointName),
                 .location = location,
+                .probeRegisterOffset = probeRegisterOffset,
             });
             if (pointName == "power") {
                 device.powerRead = location;
@@ -241,9 +260,16 @@ ModbusPollPlan BuildModbusPollPlan(
         for (const auto& batch : device.semanticBatches) {
             result.metrics.optimizedRegistersRequestedPerCycle += batch.quantity;
         }
+        const auto probeBackedReads = static_cast<std::size_t>(std::count_if(
+            device.semanticReads.begin(),
+            device.semanticReads.end(),
+            [](const ModbusResolvedSemanticRead& read) {
+                return read.probeRegisterOffset.has_value();
+            }));
+        const auto batchBackedReads =
+            device.semanticReads.size() - probeBackedReads;
         result.metrics.reusedSemanticReadsPerCycle +=
-            device.semanticReads.size() -
-            std::accumulate(
+            probeBackedReads + batchBackedReads - std::accumulate(
                 device.semanticBatches.begin(),
                 device.semanticBatches.end(),
                 std::size_t{0},

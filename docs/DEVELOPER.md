@@ -101,6 +101,13 @@ online. Ошибка FC10 или отдельного confirmation read сама
 меняет. Каждая неуспешная операция пишется в journal с `Fan-<bus>_<address>`,
 этапом, исходом, Slave ID и регистром либо диапазоном регистров.
 
+Если semantic read попадает в диапазон уже выполненного presence probe, poll
+plan использует значение из проверенного probe response и не создаёт повторный
+FC03. В `vrf_add_controller` так читается `RoomTemperature`: raw `uint16` из
+`40039 + 91*Y` публикуется как целое число градусов через factual topic `Temp`.
+Это field-validation mapping; половинная часть и дополнительное преобразование
+к нему не применяются.
+
 Штатный нижний предел между началами операций Modbus — `300 ms`. Он применяется
 не только к обычному poll следующего logical address, но и после FC10 write,
 confirmation read и ошибки. Настройки command/retry могут увеличить интервал,

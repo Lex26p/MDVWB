@@ -403,8 +403,11 @@ This file prevents an automatic schedule from executing twice after a scheduler 
   FanSpeed and integer SetTemperature mappings for field validation; these
   mappings are not yet recorded as live-hardware-confirmed;
 - that profile uses only SetTemperature integer registers `40031/40081` and
-  whole-degree commands `16..32`; half-degree registers `40037/40085` and
-  physical RoomTemperature remain unsupported;
+  whole-degree commands `16..32`; half-degree registers `40037/40085` remain
+  unsupported;
+- that profile exposes read-only integer RoomTemperature from the existing
+  presence-probe register `40039 + 91*Y`; polling must reuse the validated
+  probe response instead of adding a second read of that register;
 - unsupported controls produce no Modbus wire traffic;
 - when an optional factual value becomes unavailable, its old retained MQTT value is cleared with an empty retained payload;
 - for compatibility, an online powered device without a factual Mode still maps to `Status=5` (Auto); this does not create a factual `Mode` value.

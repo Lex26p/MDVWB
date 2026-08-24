@@ -105,8 +105,8 @@ void TestProductionProfileLoads()
         profile.capabilities.setTemperature,
         "SetTemperature must be enabled");
     Require(
-        !profile.capabilities.roomTemperature,
-        "RoomTemperature must remain disabled");
+        profile.capabilities.roomTemperature,
+        "RoomTemperature must be enabled");
     Require(!profile.capabilities.blinds, "Blinds must remain disabled");
     Require(!profile.capabilities.blocked, "Blocked must remain disabled");
 
@@ -176,6 +176,21 @@ void TestProductionProfileLoads()
                 setTemperature.limits->maximum == 32.0 &&
                 setTemperature.limits->step == 1.0,
             "SetTemperature integer limits mismatch");
+
+    const auto& roomTemperature = Point(profile, "roomTemperature");
+    Require(roomTemperature.type == mdv::modbus::PointType::Number,
+            "RoomTemperature point type mismatch");
+    Require(roomTemperature.rawType == mdv::modbus::RawType::UInt16,
+            "RoomTemperature raw type mismatch");
+    Require(roomTemperature.read.has_value() &&
+                roomTemperature.read->address == 40039U,
+            "RoomTemperature read address mismatch");
+    Require(!roomTemperature.write.has_value(),
+            "RoomTemperature must remain read-only");
+    Require(roomTemperature.transform.has_value() &&
+                roomTemperature.transform->scale == 1.0 &&
+                roomTemperature.transform->offset == 0.0,
+            "RoomTemperature integer transform mismatch");
 
     const auto& alarm = Point(profile, "alarmCode");
     Require(

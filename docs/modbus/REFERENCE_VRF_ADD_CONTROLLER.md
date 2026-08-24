@@ -22,9 +22,9 @@ The source spreadsheet contains several conventions that require live verificati
 Live verification established literal register addressing, fixed `Y` stride
 mapping, Power, AlarmCode and the read-only temperature-based presence probe.
 The current production profile also contains a field-validation implementation
-of the manufacturer's Mode/FanSpeed masks and integer SetTemperature registers.
-Those additions are executable but not yet confirmed by a recorded hardware
-round trip. RoomTemperature and half-degree SetTemperature remain disabled.
+of the manufacturer's Mode/FanSpeed masks, integer SetTemperature registers and
+integer RoomTemperature. Those additions are executable but not yet confirmed
+by a recorded hardware round trip. Half-degree SetTemperature remains disabled.
 
 Do not silently infer missing behavior.
 
@@ -70,6 +70,13 @@ Supported function codes listed by the source:
 0x83  Read error response
 0x90  Write error response
 ```
+
+### CURRENT FIELD-VALIDATION POLICY
+
+At the operator's request, the production profile interprets the non-zero raw
+`uint16` value directly as whole degrees Celsius (`scale=1`, `offset=0`). The
+poller reuses the already validated presence-probe response, so enabling
+RoomTemperature adds no second read of `40039 + 91*Y`.
 
 ### OPEN / VERIFY
 
@@ -599,14 +606,11 @@ RoomTemperature
 
 The source does not specify:
 
-- scale;
-- offset;
-- signed/unsigned interpretation;
 - invalid/sensor-error sentinel values.
 
-Do not assume `/10`, direct degrees, or an offset until verified.
-
-This is exactly the type of field for which the profile transformation system is required.
+The direct whole-degree interpretation is an explicit field-validation choice,
+not a hardware-confirmed manufacturer encoding. Verify it against the physical
+inlet-air temperature before promoting it to confirmed status.
 
 ## 16. EEV values
 
@@ -698,7 +702,7 @@ Possible source points:
 | Mode | `40029 + 91*Y` | `40079 + 91*Y` | Medium; bitmask behavior to verify |
 | FanSpeed | `40030 + 91*Y` | `40080 + 91*Y` | Medium; normalization policy unresolved |
 | SetTemperature | `40031` + `40037` | `40081` + `40085` | Medium/high; composite behavior to verify |
-| RoomTemperature | `40039 + 91*Y` | — | Medium; numeric encoding unknown |
+| RoomTemperature | `40039 + 91*Y` | — | Medium; direct integer enabled for field validation |
 | AlarmCode | `40035 + 91*Y` | — | High |
 
 All addresses above are quoted in the manufacturer's notation and include `+ 91*Y` where applicable.
@@ -768,7 +772,7 @@ AlarmCode   enabled
 Mode        enabled for field validation
 FanSpeed    enabled for field validation
 SetTemperature enabled, integer 16..32 only, for field validation
-RoomTemperature disabled
+RoomTemperature enabled read-only as a direct integer, for field validation
 Blinds      disabled
 Blocked     disabled
 ```
@@ -781,11 +785,13 @@ Field-validation mappings:
   `16/32/64` normalize to High/Medium/Low.
 - SetTemperature reads/writes only the integer registers `40031/40081` and
   accepts whole degrees `16..32`; the half-degree flag registers are untouched.
+- RoomTemperature reuses the presence-probe raw `uint16` value from
+  `40039 + 91*Y` with `scale=1`, `offset=0`; it creates no additional read.
 
-These three mappings must be checked on the installed controller before they
-are described as hardware-confirmed. RoomTemperature stays disabled because
-`40039 + 91*Y` still has unknown physical scaling/signedness and is used only as
-a non-zero presence signal.
+These four mappings must be checked on the installed controller before they
+are described as hardware-confirmed. RoomTemperature sensor-error sentinels
+remain unknown; a raw zero still means NotFound under the confirmed presence
+rule and therefore is not published as a temperature.
 
 ## 22. Impact on generic profile format
 

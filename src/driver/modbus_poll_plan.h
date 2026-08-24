@@ -15,6 +15,7 @@ namespace mdv::modbus {
 struct ModbusResolvedSemanticRead {
     std::string pointName;
     ResolvedRegisterLocation location;
+    std::optional<std::uint16_t> probeRegisterOffset;
     std::size_t batchIndex = 0;
     std::uint16_t registerOffset = 0;
 };
@@ -38,7 +39,8 @@ struct ModbusDevicePollPlan {
 
 // Deterministic counters for one complete round-robin cycle. The baseline
 // fields describe the established one-request-per-semantic-point path. The
-// optimized fields describe the exact batches executed by the driver.
+// optimized fields describe the exact probe and batches executed by the
+// driver, including semantic values reused from the probe response.
 struct ModbusPollPlanMetrics {
     std::size_t deviceCount = 0;
     std::size_t probeTransactionsPerCycle = 0;
