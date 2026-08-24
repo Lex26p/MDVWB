@@ -299,6 +299,44 @@ export const FAN_COMMAND_CONTROLS = Object.freeze([
 
 const COMMAND_CONTROL_SET = new Set(FAN_COMMAND_CONTROLS);
 
+const ALL_FAN_COMMAND_CAPABILITIES = Object.freeze({
+  Power: true,
+  Mode: true,
+  Speed: true,
+  SetTemp: true,
+});
+
+const NO_FAN_COMMAND_CAPABILITIES = Object.freeze({
+  Power: false,
+  Mode: false,
+  Speed: false,
+  SetTemp: false,
+});
+
+export function fanCommandCapabilities(bus, profileCatalog) {
+  if (bus?.protocol !== "modbus_rtu") {
+    return { ...ALL_FAN_COMMAND_CAPABILITIES };
+  }
+
+  const profileId = String(bus.modbus?.profileId || "");
+  const profiles = Array.isArray(profileCatalog?.profiles) ? profileCatalog.profiles : [];
+  const profile = profiles.find((candidate) => candidate?.id === profileId);
+  if (!profile) {
+    return { ...NO_FAN_COMMAND_CAPABILITIES };
+  }
+
+  const writable = (name) => {
+    const capability = profile.capabilities?.[name];
+    return capability?.supported === true && capability?.writable === true;
+  };
+  return {
+    Power: writable("power"),
+    Mode: writable("mode"),
+    Speed: writable("fanSpeed"),
+    SetTemp: writable("setTemperature"),
+  };
+}
+
 export function fanCommandTopic(bus, address, control) {
   const busNumber = Number(bus);
   const addressNumber = Number(address);
@@ -392,6 +430,7 @@ export function buildGroupCommandPlan(
   connected,
   commandInput,
   pendingKeysInput = [],
+  capabilitiesInput = new Map(),
 ) {
   const dashboard = normalizeDashboardConfiguration(dashboardInput || emptyDashboardConfiguration());
   const selectedKeys = selectedKeysInput instanceof Set
@@ -401,6 +440,9 @@ export function buildGroupCommandPlan(
   const pendingKeys = pendingKeysInput instanceof Set
     ? pendingKeysInput
     : new Set(Array.isArray(pendingKeysInput) ? pendingKeysInput : []);
+  const capabilities = capabilitiesInput instanceof Map
+    ? capabilitiesInput
+    : new Map(Object.entries(capabilitiesInput || {}));
   const commands = normalizeGroupCommands(commandInput);
   const targets = [];
   const skipped = [];
@@ -428,6 +470,10 @@ export function buildGroupCommandPlan(
 
     targets.push({ fan, key, state: fanState });
     commands.forEach(({ control, value }) => {
+      const supported = capabilities.get(key);
+      if (supported && supported[control] !== true) {
+        return;
+      }
       const pending = `${key}:${control}`;
       if (pendingKeys.has(pending)) {
         pendingSkipped.push({ fan, key, control, reason: "pending" });

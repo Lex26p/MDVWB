@@ -1,6 +1,9 @@
 # Modbus profile format
 
-> Status: design specification with the schema-v1 loader/validation baseline implemented; later sections remain planned until their roadmap milestones.
+> Status: the scalar schema-v1 runtime baseline is implemented. This document
+> also contains explicitly conceptual future extensions; `STATUS.md`, current
+> source and tests determine which parts are executable. The profile format can
+> describe more write mappings than the current production runtime executes.
 >
 > Purpose: define a data-driven profile format for Modbus RTU air-conditioners/fan-coils in MDVWB.
 >
@@ -22,7 +25,32 @@ A profile defines:
 - supported capabilities;
 - a safe read-only probe used when scanning logical addresses `1..63`.
 
-Profiles are intended to be JSON files.
+Executable schema-v1 profiles are JSON files.
+
+Schema v1 accepts different combinations of these known semantic point names:
+
+```text
+power
+mode
+fanSpeed
+setTemperature
+roomTemperature
+alarmCode
+blinds
+blocked
+```
+
+An equipment profile may omit unsupported points or expose them read-only.
+Arbitrary new point names are not accepted by schema v1; adding a new common
+semantic variable requires a schema/runtime change.
+
+A profile `write` declaration describes the register mapping and conversion; it
+does not by itself guarantee that the live driver implements the corresponding
+confirmed command. Effective writability is the intersection of the enabled
+profile capability, its `write` definition and the production runtime. The
+current runtime performs confirmed writes only for `power`. Valid non-Power
+write declarations remain usable as forward-compatible profile metadata, while
+the UI and scheduler expose them as non-writable until runtime support is added.
 
 ## 2. Separation of profile and bus configuration
 
@@ -116,7 +144,7 @@ The profile schema should explicitly declare:
 
 Profiles using ambiguous register notation should fail validation.
 
-## 5. Proposed top-level structure
+## 5. Schema-v1 top-level structure
 
 Conceptual profile:
 
@@ -326,7 +354,10 @@ Conceptual example:
 
 For scan purposes an explicit profile should provide mappings for every logical candidate that is valid for that equipment family.
 
-In the implemented schema-v1 resolver, a valid `1..63` candidate with no explicit device entry is reported as unsupported and causes no fabricated physical location. Milestone 6 will use that result to skip bus traffic for unsupported candidates.
+In the implemented schema-v1 resolver, a valid `1..63` candidate with no
+explicit device entry is reported as unsupported and causes no fabricated
+physical location. The scan executor uses that result to skip bus traffic for
+unsupported candidates.
 
 ## 12. Per-device point overrides
 
@@ -492,6 +523,11 @@ raw 235 -> 23.5 °C
 ```
 
 ## 18. Writable temperature example
+
+This example demonstrates schema conversion only. In the current production
+runtime a `setTemperature.write` declaration is accepted but is not exposed as
+writable and does not produce live Modbus traffic; only `power` has the required
+confirmed-write state machine.
 
 Example:
 
@@ -1235,9 +1271,13 @@ The semantic bridge updates `DriverDeviceState` and converts `DriverCommandValue
 
 Milestone 5 now resolves that base location for a logical MDVWB address using the profile's `direct_slave`, `fixed_slave_stride` or `explicit` addressing declaration. The resolver produces the physical Slave ID and effective zero-based PDU register address, with range and overflow checks.
 
-The catalog still does not choose an installation path, integrate profiles into bus configuration, scan devices or communicate with live equipment. Those remain later milestones.
+The catalog is integrated with the installed profile directory, bus
+configuration, safe discovery, live polling and UI metadata. Production
+consumers additionally apply runtime validation before serial traffic.
 
-`composite_number` is still intentionally not finalized in executable schema v1. The first real VRF profile will drive that extension rather than turning the profile format into a tiny programming language by accident.
+`composite_number` is still intentionally not finalized in executable schema
+v1. It remains a future extension that requires verified equipment behavior and
+must not turn the profile format into a tiny programming language.
 
 ## 37. Example: conventional direct-Slave profile
 

@@ -145,6 +145,25 @@ void TestUnavailableTemperatureClearsRetainedStateOnce()
             "transition from numeric T1 to unavailable would keep stale Temp");
 }
 
+void TestUnavailableIntegerClearsRetainedStateOnce()
+{
+    std::optional<int> previous;
+    Require(mdv::mqtt_detail::ShouldPublishUnavailableInteger(previous, false),
+            "first unavailable integer would not clear a stale retained value");
+
+    previous = mdv::mqtt_detail::UnavailableIntegerMarker();
+    Require(mdv::mqtt_detail::IsUnavailableIntegerMarker(previous),
+            "unavailable integer marker was not recognized");
+    Require(!mdv::mqtt_detail::ShouldPublishUnavailableInteger(previous, false),
+            "unchanged unavailable integer would publish an endless clear loop");
+    Require(mdv::mqtt_detail::ShouldPublishUnavailableInteger(previous, true),
+            "forced snapshot did not republish unavailable integer");
+
+    previous = 4;
+    Require(mdv::mqtt_detail::ShouldPublishUnavailableInteger(previous, false),
+            "transition from integer to unavailable would keep stale state");
+}
+
 } // namespace
 
 int main()
@@ -153,6 +172,7 @@ int main()
         TestDisconnectedTransportQueuesOnlyRetainedState();
         TestSemanticStateComesOnlyFromConfirmedRead();
         TestUnavailableTemperatureClearsRetainedStateOnce();
+        TestUnavailableIntegerClearsRetainedStateOnce();
         std::cout << "MDVWB MQTT delivery tests: OK\n";
         return 0;
     }

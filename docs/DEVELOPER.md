@@ -1,12 +1,14 @@
 # MDVWB: документация драйвера, протокола и MQTT
 
-> Актуальная версия CMake-проекта: **1.2.0**.
-> Этот документ описывает фактическую реализацию `MDVWB` и `mdvwb-offline`: протокол MDV XYE, serial transport, модель состояния устройства, очереди команд и MQTT-контракт.
+> Актуальная версия CMake-проекта: **1.3.0**.
+> Этот документ описывает фактическую реализацию MDV XYE, общих manager/scheduler/MQTT-подсистем и границы Modbus RTU runtime. Формат профиля и Modbus-архитектура подробно описаны в `docs/modbus/`.
 > При расхождении документа с исходным кодом источником истины являются текущие файлы `src/driver/` и профильные тесты.
 
 ## 1. Назначение драйвера
 
-`MDVWB` — самостоятельный C++20-драйвер одной физической RS-485-шины фанкойлов MDV XYE.
+`MDVWB` — отдельный C++20-процесс одной физической RS-485-шины фанкойлов MDV
+XYE внутри расширения Wiren Board. Он использует MQTT/systemd-инфраструктуру
+контроллера и не является самостоятельной системой автоматизации.
 
 Один процесс `MDVWB`:
 
@@ -67,6 +69,28 @@ Serial = Порт закрыт
 
 Все эти публикации retained.
 
+### 2.3. `mdvwb-modbus`
+
+Внутренний процесс одной Modbus RTU-шины. Он устанавливается в
+`/usr/local/lib/mdvwb/mdvwb-modbus` и запускается только через `mdvwb-run` для
+bus с `protocol="modbus_rtu"`. Перед открытием порта runtime повторно проверяет
+managed environment, выбранный профиль, serial settings и поддерживаемые
+runtime-точки.
+
+Schema v1 позволяет разным профилям включать разные комбинации известных
+semantic points: `power`, `mode`, `fanSpeed`, `setTemperature`,
+`roomTemperature`, `alarmCode`, `blinds` и `blocked`. Неизвестные имена points
+parser отклоняет; их добавление требует расширения общей semantic schema.
+
+Наличие `write` в JSON-профиле означает, что профиль описывает преобразование и
+register для записи, но само по себе не означает готовность production runtime.
+Фактическая writable capability равна пересечению capability профиля, его
+`write` point и реализации драйвера. Сейчас подтверждённый write/FC03 read-back
+реализован только для `Power`. Объявленные профилем записи `Mode`, `FanSpeed`
+или `SetTemperature` остаются валидными для будущего расширения, но каталог UI
+публикует для них `writable=false`, scheduler отклоняет их до MQTT publish, а
+driver сохраняет окончательную защиту от Modbus traffic.
+
 ## 3. Карта исходников драйвера
 
 | Файл | Ответственность |
@@ -83,6 +107,11 @@ Serial = Порт закрыт
 | `src/driver/mdv_mosquitto.cpp`, `.h` | Асинхронный MQTT transport на libmosquitto |
 | `src/driver/mdv_bounded_queue.h` | Ограниченная FIFO с объединением последнего значения по логическому ключу |
 | `src/driver/mdv_offline.cpp` | Retained offline-состояние после завершения процесса шины |
+| `src/driver/modbus_rtu*`, `modbus_rtu_serial*` | Modbus RTU frames, CRC, exception responses и serial transport |
+| `src/driver/modbus_profile*`, `modbus_runtime_profile*` | Строгая загрузка schema-v1 профилей и runtime validation |
+| `src/driver/modbus_value*`, `modbus_semantic*`, `modbus_resolver*` | Numeric/enum conversion, semantic state и logical-address mapping |
+| `src/driver/modbus_scan*`, `modbus_poll_plan*`, `modbus_driver*` | Read-only discovery, resolved polling и подтверждённые writes |
+| `src/driver/modbus_runtime_config*`, `modbus_runtime_main.cpp` | Managed runtime configuration и точка входа `mdvwb-modbus` |
 
 ## 4. Режимы запуска
 
@@ -882,20 +911,25 @@ Retained base topics:
 /devices/Fan-<bus>_<address>/controls/Status
 ```
 
-Правила:
+Общие правила:
 
-- публикация выполняется только после `PollRead` или `ConfirmRead`;
-- успешный результат должен содержать корректный C0;
-- C3/CC/CD не публикуются как state;
+- publisher получает только фактический semantic snapshot драйвера;
+- для MDV публикация выполняется только после корректного C0 из `PollRead` или `ConfirmRead`;
+- для Modbus публикация выполняется после успешного profile-driven read; FC10 response сам по себе state не меняет;
+- C3/CC/CD и Modbus write responses не публикуются как state;
 - публикации retained;
 - без `force` публикуются только изменения;
 - значения никогда не публикуются в `/on1`.
 
-### 20.1. Неизвестные значения C0
+### 20.1. Недоступные optional values
 
-Если C0 не содержит распознаваемый Mode или Speed, соответствующий topic не обновляется.
+Если factual snapshot не содержит `Mode`, `Speed`, `SetTemp`, `Temp`, `Blinds`
+или `Blok`, publisher очищает прежний retained base topic пустым payload.
 
-Если SetTemp вне `16..32`, `SetTemp` не обновляется.
+Это относится как к нераспознанным значениям MDV C0, так и к capabilities,
+которые отсутствуют в текущем Modbus-профиле. Повторное одинаковое unavailable
+состояние не создаёт поток пустых публикаций; forced reconnect snapshot повторяет
+очистку.
 
 Нельзя подставлять desired C3 для заполнения отсутствующего фактического значения.
 
@@ -910,6 +944,13 @@ Retained base topics:
 Это удаляет устаревшее retained numeric value у broker и сообщает текущим подписчикам, что температура недоступна.
 
 Повторный одинаковый unavailable state не создаёт бесконечный поток пустых публикаций. Forced snapshot публикует очистку повторно.
+
+### 20.3. Совместимый Status без Mode
+
+Для включённого online-устройства без фактического `Mode` расчёт `Status`
+намеренно использует fallback Auto (`Status=5`). Это совместимость общего web
+контракта для разных Modbus-устройств, а не публикация выдуманного значения в
+base topic `Mode`: отсутствующий `Mode` остаётся очищенным.
 
 ## 21. Alarm, AlarmCode и Status
 
@@ -1483,14 +1524,23 @@ Schema version:
     {
       "id": 1,
       "enabled": true,
+      "protocol": "mdv",
       "port": "/dev/ttyRS485-1",
       "addresses": [1, 2, 3]
     },
     {
       "id": 2,
-      "enabled": false,
-      "port": "/dev/ttyUSB0",
-      "addresses": []
+      "enabled": true,
+      "protocol": "modbus_rtu",
+      "port": "/dev/ttyRS485-2",
+      "modbus": {
+        "profileId": "vrf_add_controller",
+        "baudRate": 9600,
+        "dataBits": 8,
+        "parity": "none",
+        "stopBits": 1
+      },
+      "addresses": [1, 2]
     }
   ]
 }
@@ -1509,7 +1559,9 @@ Bus fields:
 ```text
 id
 enabled
+protocol
 port
+modbus (только для modbus_rtu)
 addresses
 ```
 
@@ -1529,6 +1581,11 @@ addresses
 - trailing content после root отклоняется.
 
 Canonical serializer всегда записывает `revision`.
+
+Если `protocol` отсутствует в legacy-файле, parser использует `mdv`.
+Canonical serializer всегда записывает protocol явно. Допустимы только `mdv`
+и `modbus_rtu`. Для `modbus_rtu` object `modbus` обязателен; для `mdv` он
+запрещён.
 
 ### 39.2. Bus ID
 
@@ -1565,7 +1622,8 @@ Port:
 Каждый address:
 
 ```text
-0..63
+MDV:        0..63
+Modbus RTU: 1..63
 ```
 
 Addresses уникальны внутри bus.
@@ -1588,7 +1646,15 @@ Disabled bus может иметь:
 "addresses": []
 ```
 
-### 39.6. Canonical order
+### 39.6. Modbus settings
+
+`profileId` должен быть canonical profile ID. `baudRate`, `dataBits`, `parity`
+и `stopBits` проходят строгую schema-проверку, а при построении service plan
+дополнительно должны точно совпасть с transport выбранного установленного
+профиля. Неизвестный, malformed или runtime-непригодный профиль блокирует запуск
+и discovery до открытия serial port.
+
+### 39.7. Canonical order
 
 Serializer сортирует buses по `id`.
 
@@ -2164,6 +2230,9 @@ busId -> DiscoveryTask
 
 - для одного bus ID одновременно существует не более одного task;
 - повторный discovery той же bus отклоняется;
+- `start` и `restart` этой bus отклоняются, пока discovery владеет service;
+- save, удаляющий или изменяющий runtime configuration этой bus, отклоняется;
+- save только других buses разрешён, но его apply и rollback не выполняют lifecycle actions для discovery-owned service;
 - discovery разных bus ID могут выполняться параллельно;
 - завершение одной bus не забирает result другой;
 - worker completion обрабатывается основным manager loop;
@@ -2173,7 +2242,7 @@ busId -> DiscoveryTask
 
 ## 54. Native discovery runner
 
-Manager запускает:
+Для MDV manager запускает:
 
 ```text
 /usr/local/bin/MDVWB \
@@ -2183,6 +2252,13 @@ Manager запускает:
   --period-ms 150 \
   --response-timeout-ms 130
 ```
+
+Для `modbus_rtu` manager читает сгенерированный environment выбранной bus,
+повторно проверяет профиль и serial settings, затем выполняет встроенный
+profile-driven scan. Каждый logical address `1..63` преобразуется профилем в
+Slave ID/register и проверяется только безопасным read-only probe. Malformed,
+неполный или runtime-непригодный профиль завершает discovery ошибкой до serial
+traffic; частичный список после transport/protocol error не принимается.
 
 Native runner поддерживается только на Linux.
 
@@ -4349,6 +4425,7 @@ SIGINT/SIGTERM приводит к clean stop.
 MDVWB_SCHEDULES_CONFIG=/etc/mdvwb/schedules.json
 MDVWB_BUSES_CONFIG=/etc/mdvwb/buses.json
 MDVWB_DASHBOARD_CONFIG=/etc/mdvwb/dashboard.json
+MDVWB_MODBUS_PROFILE_DIR=/usr/local/lib/mdvwb/modbus-profiles
 MDVWB_SCHEDULER_STATE=/var/lib/mdvwb/scheduler-state.tsv
 MDVWB_SCHEDULER_CONFIRM_TIMEOUT=10
 ```
@@ -4541,6 +4618,14 @@ key = scheduleId
 - automatic schedule всё ещё enabled;
 - current references;
 - target buses enabled.
+- для каждой Modbus target выбранный профиль существует и runtime-пригоден;
+- каждая заданная Modbus action имеет включённую capability, writable point и
+  реализованную runtime write capability.
+
+Проверка Modbus выполняется непосредственно перед стартом manual или automatic
+run по текущим файлам профилей. Неподдерживаемая action завершает run как
+rejected/failed до первой MQTT-команды; scheduler не полагается только на
+disabled controls браузера.
 
 ## 144. Порядок команд
 

@@ -47,6 +47,8 @@ struct SchedulerPaths {
     std::filesystem::path schedules = "/etc/mdvwb/schedules.json";
     std::filesystem::path buses = "/etc/mdvwb/buses.json";
     std::filesystem::path dashboard = "/etc/mdvwb/dashboard.json";
+    std::filesystem::path modbusProfiles =
+        "/usr/local/lib/mdvwb/modbus-profiles";
     std::filesystem::path state = "/var/lib/mdvwb/scheduler-state.tsv";
     int confirmationTimeoutSeconds = 10;
 };

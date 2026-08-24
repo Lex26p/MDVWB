@@ -217,6 +217,9 @@ sudo /usr/local/sbin/mdvwb-setup rollback \
 ```
 
 Package обновляет binaries, systemd units, helper-файлы и обе web-страницы.
+Встроенный Modbus runtime и поставляемые JSON-профили также обновляются как
+часть package; пользовательские `buses.json`, dashboard, schedules и assets
+остаются под прежней политикой сохранения.
 
 ## 10. Состояние и журналы
 
@@ -299,6 +302,8 @@ sudo /usr/local/sbin/mdvwb-setup uninstall --yes --keep-retained
 /usr/local/bin/mdvwb-scheduler
 /usr/local/sbin/mdvwb-setup
 /usr/local/lib/mdvwb/
+/usr/local/lib/mdvwb/mdvwb-modbus
+/usr/local/lib/mdvwb/modbus-profiles/
 
 /etc/mdvwb/
 /etc/default/mdvwb*
@@ -321,6 +326,8 @@ sudo /usr/local/sbin/mdvwb-setup status --health
 /usr/local/bin/mdvwb-offline --self-test
 /usr/local/bin/mdvwb-manager validate /etc/mdvwb/buses.json
 /usr/local/bin/mdvwb-manager summary /etc/mdvwb/buses.json
+test -x /usr/local/lib/mdvwb/mdvwb-modbus
+test -r /usr/local/lib/mdvwb/modbus-profiles/vrf_add_controller.json
 systemctl --failed --no-pager
 journalctl -u mdvwb-manager.service -u mdvwb-scheduler.service -n 200 --no-pager
 ```
@@ -331,6 +338,11 @@ journalctl -u mdvwb-manager.service -u mdvwb-scheduler.service -n 200 --no-pager
 systemctl status mdvwb@1.service --no-pager
 journalctl -u mdvwb@1.service -n 200 --no-pager
 ```
+
+Для Modbus bus дополнительно проверьте, что generated
+`/etc/default/mdvwb-<bus>` содержит `MDVWB_PROTOCOL=modbus_rtu`, правильный
+`MDVWB_MODBUS_PROFILE_ID` и serial settings. Scheduler должен видеть тот же
+каталог через `MDVWB_MODBUS_PROFILE_DIR` в `/etc/default/mdvwb-scheduler`.
 
 Web:
 

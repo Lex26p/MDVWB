@@ -117,6 +117,36 @@ void RejectUnknownFields(
     return static_cast<std::uint16_t>(value);
 }
 
+[[nodiscard]] std::uint32_t CheckedU32(
+    std::int64_t value,
+    std::string_view path,
+    std::string_view description)
+{
+    if (value < 0 ||
+        value > static_cast<std::int64_t>(
+            std::numeric_limits<std::uint32_t>::max())) {
+        Fail(
+            std::string(path) + ": serial " +
+            std::string(description) + " is outside uint32 range");
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+[[nodiscard]] std::uint8_t CheckedU8(
+    std::int64_t value,
+    std::string_view path,
+    std::string_view description)
+{
+    if (value < 0 ||
+        value > static_cast<std::int64_t>(
+            std::numeric_limits<std::uint8_t>::max())) {
+        Fail(
+            std::string(path) + ": serial " +
+            std::string(description) + " is outside uint8 range");
+    }
+    return static_cast<std::uint8_t>(value);
+}
+
 [[nodiscard]] std::uint8_t CheckedLogicalAddress(
     std::int64_t value,
     std::string_view path)
@@ -1049,23 +1079,29 @@ void ValidateCapabilityPoints(const ModbusProfile& profile)
         {"baudRate", "dataBits", "parity", "stopBits"},
         "root.transport");
 
-    result.transport.baudRate = static_cast<std::uint32_t>(
+    result.transport.baudRate = CheckedU32(
         RequireInteger(
             RequireField(transport, "baudRate", "root.transport"),
-            "root.transport.baudRate"));
-    result.transport.dataBits = static_cast<std::uint8_t>(
+            "root.transport.baudRate"),
+        "root.transport.baudRate",
+        "baud rate");
+    result.transport.dataBits = CheckedU8(
         RequireInteger(
             RequireField(transport, "dataBits", "root.transport"),
-            "root.transport.dataBits"));
+            "root.transport.dataBits"),
+        "root.transport.dataBits",
+        "data bits");
     result.transport.parity = ParseParity(
         RequireString(
             RequireField(transport, "parity", "root.transport"),
             "root.transport.parity"),
         "root.transport.parity");
-    result.transport.stopBits = static_cast<std::uint8_t>(
+    result.transport.stopBits = CheckedU8(
         RequireInteger(
             RequireField(transport, "stopBits", "root.transport"),
-            "root.transport.stopBits"));
+            "root.transport.stopBits"),
+        "root.transport.stopBits",
+        "stop bits");
 
     try {
         ValidateSerialSettings(result.transport);

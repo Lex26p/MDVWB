@@ -134,7 +134,8 @@ void WriteOptionalNumber(
 
 void WriteEnumValues(
     std::ostream& output,
-    const mdv::modbus::PointDefinition& point)
+    const mdv::modbus::PointDefinition& point,
+    bool runtimeWritable)
 {
     std::map<std::string, std::pair<bool, bool>, std::less<>> values;
     for (const auto& [raw, semantic] : point.enumMappings.read) {
@@ -157,7 +158,8 @@ void WriteEnumValues(
         output << "\"value\":";
         WriteString(output, semantic);
         output << ",\"readable\":" << (access.first ? "true" : "false");
-        output << ",\"writable\":" << (access.second ? "true" : "false");
+        output << ",\"writable\":"
+               << (runtimeWritable && access.second ? "true" : "false");
         output << '}';
     }
     output << ']';
@@ -172,6 +174,10 @@ void WriteCapability(
     const auto pointIterator = profile.points.find(descriptor.pointName);
     const mdv::modbus::PointDefinition* point =
         pointIterator == profile.points.end() ? nullptr : &pointIterator->second;
+    const bool runtimeWritable =
+        supported && point != nullptr && point->write.has_value() &&
+        mdv::modbus::IsModbusRuntimeWritablePoint(
+            profile, descriptor.pointName);
 
     WriteString(output, descriptor.jsonName);
     output << ":{";
@@ -180,15 +186,14 @@ void WriteCapability(
            << (supported && point != nullptr && point->read.has_value()
                    ? "true" : "false");
     output << ",\"writable\":"
-           << (supported && point != nullptr && point->write.has_value()
-                   ? "true" : "false");
+           << (runtimeWritable ? "true" : "false");
 
     if (point != nullptr) {
         output << ",\"type\":";
         WriteString(output, PointTypeName(point->type));
 
         if (point->type == mdv::modbus::PointType::Enum) {
-            WriteEnumValues(output, *point);
+            WriteEnumValues(output, *point, runtimeWritable);
         }
         if (point->type == mdv::modbus::PointType::Number) {
             const mdv::modbus::NumericLimits empty;

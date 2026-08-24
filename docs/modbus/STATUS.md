@@ -1,6 +1,6 @@
 # Modbus implementation status
 
-> Last updated: 2026-08-02
+> Last updated: 2026-08-22
 >
 > This file records what has actually been completed or prepared for the Modbus work.
 >
@@ -8,17 +8,17 @@
 
 ## Current stage
 
-**Milestone 11 complete after successful build/CTest: the factual Modbus polling path now uses resolved plans, safe read batching, measured traffic metrics and bounded configurable cadence/retry policy.**
+**The first profile-driven Modbus RTU software stack is implemented and passes the complete local regression suite. Real-hardware release validation and a second independent equipment profile remain open.**
 
-Modbus RTU framing/serial transport, schema-v1 profile loading, semantic conversion, logical-address resolution, the first production equipment profile, protocol-aware bus/service configuration, live polling, confirmed Power writes, MQTT integration, retained UI profile catalog, web bus editing, safe discovery of logical addresses `1..63`, resolved poll plans and conservative transaction optimization are implemented.
+Modbus RTU framing/serial transport, strict schema-v1 profile loading, semantic conversion, logical-address resolution, the first production equipment profile, protocol-aware bus/service configuration, live polling, confirmed Power writes, MQTT integration, retained UI profile catalog, capability-aware operator/schedule control, safe discovery of logical addresses `1..63`, resolved poll plans and conservative transaction optimization are implemented.
 
 The existing MDV runtime remains unchanged behind the same protocol-independent boundary. The per-bus systemd instance still owns exactly one process and one serial port; `mdvwb-run` now selects the MDV executable or the internal Modbus runtime from the managed protocol setting.
 
 ## Current overall status
 
 ```text
-Documentation / design     PREPARED
-Runtime implementation     MILESTONE 11
+Documentation / design     CURRENT
+Runtime implementation     IMPLEMENTED / LOCALLY VERIFIED
 Hardware validation        PARTIAL (profile facts only)
 Production release         NOT STARTED
 ```
@@ -59,6 +59,10 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] MQTT integration
 - [x] Web configuration UI
 - [x] Polling and transaction optimization
+- [x] Capability-aware operator UI and backend schedule validation
+- [x] Discovery/service ownership protection
+- [x] Strict runtime profile validation and retained optional-state cleanup
+- [x] Web model tests in the validation workflow
 - [ ] Real hardware validation
 - [x] Modbus runtime packaging/deployment handoff
 - [ ] Second independent profile proving architecture reuse
@@ -115,8 +119,8 @@ one Slave ID + different per-device register blocks
 - Manufacturer-specific register knowledge belongs in a profile.
 - A normal new Modbus air-conditioner should usually require a new profile only.
 - The common Modbus engine must not accumulate manufacturer-specific `if/else` branches.
-- Profiles are intended to be data-driven, preferably JSON.
-- Available profiles should eventually be discovered automatically from profile files.
+- Profiles are data-driven JSON files using schema version 1.
+- Available profiles are loaded deterministically from the configured profile directory.
 - Truly unusual equipment may use a small specialized adapter, but this is an exception.
 
 ### Common semantic model
@@ -180,7 +184,7 @@ step
 
 ### Register conventions
 
-The proposed profile convention is:
+The implemented profile convention is:
 
 ```text
 store zero-based Modbus PDU register addresses
@@ -190,9 +194,9 @@ Manufacturer references such as `40028` may be preserved as documentation metada
 
 ### Capabilities
 
-Profiles should declare supported capabilities.
+Profiles declare supported capabilities.
 
-The UI should react to capabilities rather than profile/manufacturer names.
+The engineering and operator UI react to capabilities rather than profile/manufacturer names.
 
 Example principle:
 
@@ -203,7 +207,7 @@ capabilities.autoMode == false
 
 ## First reference equipment
 
-The first reference profile will be based on the supplied VRF controller Modbus data-point table.
+The first reference profile is based on the supplied VRF controller Modbus data-point table.
 
 Known architectural characteristics already identified:
 
@@ -246,6 +250,11 @@ Milestone 10 now provides:
 
 The discovery operation stops the selected bus service and does not restart it automatically, preserving the existing operator-visible behavior. No scan performs a write, and no unknown profile is probed.
 
+While discovery owns a bus service, manager rejects start/restart and any save
+that removes or changes that bus runtime configuration. Saves affecting only
+other buses remain allowed, but apply and rollback omit lifecycle actions for
+the discovery-owned service.
+
 ## Polling and transaction optimization implemented
 
 Milestone 11 now provides:
@@ -264,13 +273,37 @@ Default behavior remains compatible with the accepted runtime policy: three Powe
 
 For the current `vrf_add_controller` profile, Power and AlarmCode registers are separated by an undeclared gap, so they intentionally remain separate FC03 requests. Optimization metrics therefore report no unsafe transaction saving for that production profile. A test profile proves adjacent batching and shared raw-value reuse without manufacturing-specific branches.
 
+## Runtime safety and capability enforcement
+
+- profile integer fields are range-checked before conversion to fixed-width runtime types;
+- driver startup and Modbus discovery both reject profiles that are parseable but not executable by the current runtime;
+- the profile catalog preserves supported/readable semantic points but reports
+  `writable=true` only for the intersection of the profile declaration and the
+  current runtime implementation;
+- the current production runtime performs confirmed writes only for `Power`;
+- a valid non-Power `write` declaration does not expose a command in
+  `/fancoils/` or permit a scheduler action;
+- group plans omit unsupported controls per target;
+- schedule editing uses the intersection of target capabilities;
+- scheduler independently loads the current profile and rejects an unsupported action before publishing any command;
+- when `Mode`, `Speed`, `SetTemp`, `Temp`, `Blinds` or `Blok` becomes unavailable, its obsolete retained base value is cleared;
+- the compatibility fallback `Status=5` for an online powered device without Mode is intentional and does not publish a fabricated `Mode` fact.
+
 ## Verification status
 
-Milestones 1 through 11 were accepted only after their required local build/CTest or web-model verification before their commits.
+The current tree completes a clean Windows build (160 Ninja build steps), all
+42 registered CTest tests and all seven JavaScript model tests. `validate.yml` now executes
+the web tests in addition to its Release build and CTest gate.
 
 Profile-loader tests cover valid schema-v1 profiles, all three current addressing declarations, transport/register/probe validation, numeric and enum declaration validation, file loading, isolated invalid files, deterministic diagnostics and duplicate-ID rejection.
 
 Existing MDV behavior remains protected by the full regression suite.
+
+## Accepted milestone details
+
+The following sections preserve the scope verified at each earlier milestone.
+Statements such as “not included yet” describe that historical acceptance point;
+the current state is the summary above.
 
 
 ## Modbus RTU transport implemented
@@ -439,19 +472,24 @@ Milestone 9 now provides:
 
 For the first production profile, normal polling reads the safe presence point plus Power and AlarmCode. A zero presence value publishes the ordinary existing offline representation (`Alarm=2`, `Status=7`). A successful FC10 response alone never changes factual Power; only matching FC03 read-back does.
 
-The current Modbus runtime supports only the capabilities enabled by the selected profile. For `vrf_add_controller`, MQTT Power commands are supported; Mode, Speed, SetTemp, Blinds and Blok commands are rejected without wire traffic. Capability-aware metadata and web configuration are implemented, but unsupported controls remain hidden or disabled until hardware facts exist.
+The current Modbus runtime reads the supported points enabled by the selected
+profile, but its confirmed command state machine currently supports only Power.
+Effective writability is the intersection of the profile declaration and that
+runtime implementation. For `vrf_add_controller`, MQTT Power commands are
+supported; Mode, Speed, SetTemp, Blinds and Blok commands are rejected without
+wire traffic. Capability-aware metadata, engineering configuration, operator
+controls and schedule execution are implemented; unsupported writes remain
+disabled until both the equipment facts and runtime implementation exist.
 
 ## Open design items
 
 These items are not yet final and should not be treated as implemented facts:
 
 - exact JSON Schema file;
-- batching of adjacent register reads;
 - hardware-tuned retry/poll timing;
 - deployment and preservation policy for local custom profiles;
 - 32-bit values and word order;
 - specialized adapter API;
-- exact web UI layout for Modbus configuration;
 - exact persistence format for scan results;
 - exact unknown-enum update behavior.
 
@@ -499,11 +537,15 @@ Common scan remains logical `1..63` using a safe profile-defined read-only probe
 
 ## Next development step
 
-Begin **Milestone 12: real hardware validation** from `ROADMAP.md`.
+Complete real hardware validation from `ROADMAP.md`.
 
 The next task should verify the complete stack against actual equipment: stable communication, scan `1..63`, correct logical-address discovery, long-running polling, Power read/write confirmation, offline/recovery behavior and multiple configured devices on one bus. Only manufacturer-confirmed operations may be used.
 
-The first production profile still enables only Power and AlarmCode. Mode, FanSpeed, SetTemperature and physical RoomTemperature must remain hidden or disabled until their hardware behavior and conversion are verified on real equipment.
+The first production profile still enables only Power and AlarmCode. Mode,
+FanSpeed, SetTemperature and physical RoomTemperature must remain hidden or
+disabled until their hardware behavior and conversion are verified on real
+equipment. Enabling a future write also requires a confirmed-write state machine
+in the runtime; a profile declaration alone is insufficient.
 
 ## Status update rules
 

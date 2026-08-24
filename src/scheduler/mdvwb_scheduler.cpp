@@ -3,6 +3,8 @@
 #include "mdv_buses_config.h"
 #include "mdv_dashboard_config.h"
 #include "mdv_mosquitto.h"
+#include "modbus_profile.h"
+#include "modbus_runtime_profile.h"
 #include <algorithm>
 #include <atomic>
 #include <charconv>
@@ -154,6 +156,80 @@ void ValidateSchedulerReferences(
                     std::to_string(target.bus));
             }
         }
+    }
+}
+
+void ValidateScheduleModbusCapabilities(
+    const ScheduleEntry& schedule,
+    const BusesConfig& buses,
+    const std::filesystem::path& profileDirectory)
+{
+    std::optional<mdv::modbus::ProfileCatalog> catalog;
+
+    const auto requireAction = [&](const BusConfig& bus,
+                                   std::string_view action,
+                                   bool enabled,
+                                   std::string_view pointName) {
+        if (!enabled || bus.protocol != BusProtocol::ModbusRtu) {
+            return;
+        }
+        if (!bus.modbus.has_value()) {
+            throw SchedulesConfigError(
+                "Schedule '" + schedule.id +
+                "' targets a Modbus bus without profile settings");
+        }
+        if (!catalog.has_value()) {
+            catalog = mdv::modbus::LoadProfileDirectory(profileDirectory);
+        }
+        const auto* profile = catalog->Find(bus.modbus->profileId);
+        if (profile == nullptr) {
+            throw SchedulesConfigError(
+                "Schedule '" + schedule.id + "' uses unavailable Modbus profile '" +
+                bus.modbus->profileId + "'");
+        }
+        mdv::modbus::ValidateModbusRuntimeProfile(*profile);
+
+        bool capability = false;
+        if (pointName == "power") {
+            capability = profile->capabilities.power;
+        }
+        else if (pointName == "mode") {
+            capability = profile->capabilities.mode;
+        }
+        else if (pointName == "fanSpeed") {
+            capability = profile->capabilities.fanSpeed;
+        }
+        else if (pointName == "setTemperature") {
+            capability = profile->capabilities.setTemperature;
+        }
+        const auto point = profile->points.find(pointName);
+        if (!capability || point == profile->points.end() ||
+            !point->second.write.has_value() ||
+            !mdv::modbus::IsModbusRuntimeWritablePoint(
+                *profile, pointName)) {
+            throw SchedulesConfigError(
+                "Schedule '" + schedule.id + "' action '" +
+                std::string(action) + "' is not supported by Modbus profile '" +
+                profile->id + "'");
+        }
+    };
+
+    for (const ScheduleTarget& target : schedule.targets) {
+        const auto bus = std::find_if(
+            buses.buses.begin(),
+            buses.buses.end(),
+            [&](const BusConfig& candidate) { return candidate.id == target.bus; });
+        if (bus == buses.buses.end()) {
+            continue;
+        }
+        requireAction(*bus, "Power", schedule.actions.power.has_value(), "power");
+        requireAction(*bus, "Mode", schedule.actions.mode.has_value(), "mode");
+        requireAction(*bus, "Speed", schedule.actions.speed.has_value(), "fanSpeed");
+        requireAction(
+            *bus,
+            "SetTemp",
+            schedule.actions.setTemp.has_value(),
+            "setTemperature");
     }
 }
 
@@ -725,10 +801,15 @@ void SchedulerService::ValidateSelected(
     SchedulesConfig selected;
     selected.revision = schedules_.revision;
     selected.schedules.push_back(schedule);
+    const BusesConfig buses = LoadBusesConfig(paths_.buses);
     ValidateSchedulerReferences(
         selected,
-        LoadBusesConfig(paths_.buses),
+        buses,
         LoadDashboardCollection(paths_.dashboard));
+    ValidateScheduleModbusCapabilities(
+        schedule,
+        buses,
+        paths_.modbusProfiles);
 }
 
 void SchedulerService::QueueAutomaticSchedules(

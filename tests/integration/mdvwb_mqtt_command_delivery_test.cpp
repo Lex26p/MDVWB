@@ -311,6 +311,7 @@ void TestSchedulerQueuesAreBoundedAndKeepNewestCommand()
     paths.buses = fixture.buses;
     paths.dashboard = fixture.dashboard;
     paths.schedules = fixture.schedules;
+    paths.modbusProfiles = fixture.temporary.Path() / "modbus-profiles";
     paths.state = fixture.state;
     paths.confirmationTimeoutSeconds = 10;
 
@@ -404,6 +405,7 @@ void TestSchedulerFailsImmediatelyWhenCommandIsUndelivered()
     paths.buses = fixture.buses;
     paths.dashboard = fixture.dashboard;
     paths.schedules = fixture.schedules;
+    paths.modbusProfiles = fixture.temporary.Path() / "modbus-profiles";
     paths.state = fixture.state;
     paths.confirmationTimeoutSeconds = 10;
 

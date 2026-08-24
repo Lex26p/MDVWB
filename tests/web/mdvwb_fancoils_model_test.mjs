@@ -11,6 +11,7 @@ import {
   dashboardFromPayload,
   dashboardSelectionFromPayload,
   fanCommandMatchesState,
+  fanCommandCapabilities,
   fanCommandTopic,
   fanDeviceKey,
   markerMatchesFilter,
@@ -73,6 +74,36 @@ assert.equal(canSendFanCommands(false, fan), false);
 assert.equal(canSendFanCommands(true, offline), false);
 assert.equal(fanCommandMatchesState("Mode", 1, fan), true);
 assert.equal(fanCommandMatchesState("Mode", 0, fan), false);
+
+const modbusCapabilities = fanCommandCapabilities(
+  {
+    id: 2,
+    protocol: "modbus_rtu",
+    modbus: { profileId: "vrf_add_controller" },
+  },
+  {
+    schemaVersion: 1,
+    profiles: [{
+      id: "vrf_add_controller",
+      capabilities: {
+        power: { supported: true, writable: true },
+        mode: { supported: false, writable: false },
+        fanSpeed: { supported: false, writable: false },
+        setTemperature: { supported: false, writable: false },
+      },
+    }],
+  },
+);
+assert.deepEqual(modbusCapabilities, {
+  Power: true,
+  Mode: false,
+  Speed: false,
+  SetTemp: false,
+});
+assert.deepEqual(
+  fanCommandCapabilities({ id: 1, protocol: "mdv" }, null),
+  { Power: true, Mode: true, Speed: true, SetTemp: true },
+);
 
 const dashboard = dashboardFromPayload(JSON.stringify({
   version: 1,
@@ -138,6 +169,25 @@ assert.equal(groupPlan.operations.length, 3);
 assert.equal(groupPlan.operations[0].topic, "/devices/Fan-2_18/controls/Power/on1");
 assert.equal(groupPlan.operations.every((operation) => operation.control === "Power" || operation.control === "SetTemp"), true);
 
+const modbusGroupPlan = buildGroupCommandPlan(
+  dashboard,
+  new Set([fanDeviceKey(2, 18)]),
+  new Map([[fanDeviceKey(2, 18), fan]]),
+  true,
+  {
+    Power: { enabled: true, value: 1 },
+    Mode: { enabled: false, value: 0 },
+    Speed: { enabled: false, value: 4 },
+    SetTemp: { enabled: true, value: 23 },
+  },
+  new Set(),
+  new Map([[fanDeviceKey(2, 18), modbusCapabilities]]),
+);
+assert.deepEqual(
+  modbusGroupPlan.operations.map(({ control }) => control),
+  ["Power"],
+);
+
 
 const panelPayload = JSON.stringify({
   version: 2,
@@ -160,6 +210,7 @@ assert.equal(dashboardFromPayload(panelPayload, "floor-2").title, "Второй 
 
 const pageHtml = readFileSync(new URL("../../www/fancoils/index.html", import.meta.url), "utf8");
 const pageCss = readFileSync(new URL("../../www/fancoils/styles.css", import.meta.url), "utf8");
+const pageApp = readFileSync(new URL("../../www/fancoils/app.js", import.meta.url), "utf8");
 assert.match(pageHtml, /id="scheduleButton"/);
 assert.match(pageHtml, /id="groupModeButton"/);
 assert.doesNotMatch(pageHtml, /href="\/mdvwb\//);
@@ -167,5 +218,7 @@ assert.doesNotMatch(pageHtml, />Редактор</);
 assert.doesNotMatch(pageHtml, /Жалюзи|Блокировка/);
 assert.match(pageCss, /--header-height:\s*56px/);
 assert.match(pageCss, /user-select:\s*none/);
+assert.match(pageApp, /subscribe\("\/mdvwb\/config"\)/);
+assert.match(pageApp, /subscribe\("\/mdvwb\/modbus\/profiles"\)/);
 
 console.log("MDVWB fan-coil working panel model tests: OK");

@@ -91,6 +91,24 @@ inline void ValidateResolvedRegisterRange(
 
 } // namespace runtime_profile_detail
 
+// Returns the effective write capability of the current production runtime,
+// not merely the write declaration stored in a profile. Profiles may describe
+// semantic writes that are implemented by the generic conversion layer before
+// the serial driver gains the corresponding confirmed-write state machine.
+[[nodiscard]] inline bool IsModbusRuntimeWritablePoint(
+    const ModbusProfile& profile,
+    std::string_view pointName) noexcept
+{
+    if (pointName != "power" || !profile.capabilities.power) {
+        return false;
+    }
+
+    const auto point = profile.points.find(pointName);
+    return point != profile.points.end() &&
+        point->second.write.has_value() &&
+        point->second.write->space == RegisterSpace::HoldingRegister;
+}
+
 // Validates the subset of profile schema v1 that the current production
 // runtime and discovery executor can actually execute. The generic parser
 // remains capable of representing future data spaces; production consumers

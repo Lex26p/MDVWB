@@ -44,6 +44,24 @@ struct MqttPublication {
 
 namespace mqtt_detail {
 
+[[nodiscard]] inline int UnavailableIntegerMarker() noexcept
+{
+    return std::numeric_limits<int>::min();
+}
+
+[[nodiscard]] inline bool IsUnavailableIntegerMarker(
+    const std::optional<int>& value) noexcept
+{
+    return value.has_value() && *value == UnavailableIntegerMarker();
+}
+
+[[nodiscard]] inline bool ShouldPublishUnavailableInteger(
+    const std::optional<int>& previous,
+    bool force) noexcept
+{
+    return force || !IsUnavailableIntegerMarker(previous);
+}
+
 // NaN is used only inside PublishedState to distinguish an already-cleared
 // retained numeric topic from a value that has never been processed.
 [[nodiscard]] inline double UnavailableNumberMarker() noexcept
@@ -214,6 +232,16 @@ private:
         std::uint8_t address,
         std::string_view control,
         double value,
+        std::optional<double>& previous,
+        bool force);
+    void PublishUnavailableInteger(
+        std::uint8_t address,
+        std::string_view control,
+        std::optional<int>& previous,
+        bool force);
+    void PublishUnavailableNumber(
+        std::uint8_t address,
+        std::string_view control,
         std::optional<double>& previous,
         bool force);
     [[nodiscard]] std::string Topic(

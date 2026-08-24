@@ -14,13 +14,13 @@ Read in this order:
    Core architectural decisions: logical addresses `1..63`, profile-driven Modbus, scan model, separation of logical address / Slave ID / registers, common semantic state.
 
 2. [`modbus/PROFILE_FORMAT.md`](modbus/PROFILE_FORMAT.md)  
-   Proposed data-driven profile format: addressing models, read/write points, scaling, enum mappings, capabilities, composite values, validation and safe scan probes.
+   Implemented schema-v1 data-driven profile format: addressing models, read/write points, scaling, enum mappings, capabilities, composite values, validation and safe scan probes.
 
 3. [`modbus/REFERENCE_VRF_ADD_CONTROLLER.md`](modbus/REFERENCE_VRF_ADD_CONTROLLER.md)  
    Analysis of the first supplied real Modbus equipment table. Contains confirmed information and explicitly marked unknowns that must not be guessed.
 
 4. [`modbus/ROADMAP.md`](modbus/ROADMAP.md)  
-   Intended implementation sequence from documentation through reusable Modbus support and hardware validation.
+   Original implementation sequence and the remaining hardware/second-profile stages. Completion is recorded only in `STATUS.md`.
 
 5. [`modbus/STATUS.md`](modbus/STATUS.md)  
    Actual development state. Read this before starting work. Do not infer completion from the roadmap.
@@ -97,6 +97,12 @@ A normal new Modbus air-conditioner/fan-coil should usually be added as a new pr
 
 The common Modbus engine should not need manufacturer-specific branches for ordinary equipment.
 
+Schema v1 supports different combinations of the existing common semantic
+points, not arbitrary new variable names. Profile write mappings are broader
+than the current live command path: production confirmed writes currently cover
+only `Power`. UI and scheduler use the intersection of profile metadata and
+runtime support.
+
 A profile may define:
 
 - serial defaults;
@@ -129,7 +135,7 @@ Use the documents for different purposes:
 
 ```text
 ARCHITECTURE.md     -> why the system is structured this way
-PROFILE_FORMAT.md   -> how Modbus profiles are intended to be described
+PROFILE_FORMAT.md   -> implemented Modbus profile schema and validation rules
 REFERENCE_*.md      -> facts/unknowns for concrete equipment
 ROADMAP.md          -> planned implementation order
 STATUS.md           -> what is actually done now

@@ -1,5 +1,7 @@
 #include "modbus_runtime_config.h"
 
+#include "modbus_runtime_profile.h"
+
 #include <algorithm>
 #include <charconv>
 #include <limits>
@@ -352,6 +354,7 @@ ModbusProfile LoadModbusRuntimeProfile(
     }
 
     ValidateProfileTransport(config, *profile);
+    ValidateModbusRuntimeProfile(*profile);
     return *profile;
 }
 

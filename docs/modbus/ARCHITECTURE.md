@@ -1,10 +1,12 @@
 # Modbus RTU support architecture
 
-> Status: design approved in principle, implementation not started.
+> Status: implemented architectural baseline. Current progress and runtime
+> limitations are recorded in `STATUS.md`.
 >
 > Purpose: this document defines the architecture for adding Modbus RTU air-conditioner/fan-coil support to MDVWB while minimizing changes to the existing application when new equipment profiles are added.
 >
-> Audience: MDVWB developers and AI agents working on future implementation.
+> Audience: MDVWB developers and AI agents maintaining or extending the current
+> implementation.
 
 ## 1. Goals
 
@@ -26,6 +28,12 @@ The MQTT layer, scheduler, user dashboard and other protocol-independent parts o
 The main architectural goal is:
 
 > Adding a normal new Modbus device should usually require adding a profile, not rewriting the Modbus engine or the main application.
+
+This applies when the equipment can be represented by the semantic point types
+and runtime operations already implemented. A profile alone does not add a new
+common semantic variable or a new confirmed-write state machine. The current
+production runtime performs confirmed writes only for `Power`; other profile
+write mappings remain inactive until the common runtime is extended.
 
 ## 2. Scope
 

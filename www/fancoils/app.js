@@ -10,6 +10,7 @@ import {
   computeFitScale,
   createFanState,
   dashboardSelectionFromPayload,
+  fanCommandCapabilities,
   fanCommandMatchesState,
   fanCommandTopic,
   fanDeviceKey,
@@ -24,6 +25,11 @@ import {
   summarizeDashboard,
   temperatureLabel,
 } from "./model.js";
+import {
+  normalizeConfiguration,
+  normalizeModbusProfileCatalog,
+  parseJsonPayload,
+} from "../mdvwb/model.js";
 import { emptyDashboardConfiguration } from "../mdvwb/dashboard-model.js";
 import {
   cloneSchedule,
@@ -157,6 +163,9 @@ const state = {
   panelId: REQUESTED_PANEL_ID || "main",
   dashboardStatus: null,
   receivedDashboard: false,
+  busConfiguration: { version: 1, buses: [] },
+  receivedBusConfiguration: false,
+  profileCatalog: { schemaVersion: 1, profiles: [], issues: [] },
   connected: false,
   states: new Map(),
   selectedKey: "",
@@ -228,6 +237,39 @@ function visibleScheduleFans() {
   return state.dashboard.fans.filter((fan) => fan.visible);
 }
 
+function commandCapabilitiesForFan(fan) {
+  if (state.demo) {
+    return fanCommandCapabilities({ protocol: "mdv" }, null);
+  }
+  if (!state.receivedBusConfiguration) {
+    return { Power: false, Mode: false, Speed: false, SetTemp: false };
+  }
+  const bus = state.busConfiguration.buses.find((candidate) => candidate.id === fan.bus);
+  return bus
+    ? fanCommandCapabilities(bus, state.profileCatalog)
+    : { Power: false, Mode: false, Speed: false, SetTemp: false };
+}
+
+function commandCapabilitiesForFans(fans) {
+  return new Map(fans.map((fan) => [fanDeviceKey(fan.bus, fan.address), commandCapabilitiesForFan(fan)]));
+}
+
+function scheduleActionCapabilities() {
+  const selected = scheduleDraftTargets();
+  const targets = state.dashboard.fans.filter((fan) => selected.has(scheduleTargetKey(fan.bus, fan.address)));
+  if (!targets.length) {
+    return { Power: true, Mode: true, Speed: true, SetTemp: true };
+  }
+  const result = { Power: true, Mode: true, Speed: true, SetTemp: true };
+  targets.forEach((fan) => {
+    const capabilities = commandCapabilitiesForFan(fan);
+    Object.keys(result).forEach((control) => {
+      result[control] = result[control] && capabilities[control] === true;
+    });
+  });
+  return result;
+}
+
 function scheduleDraftTargets() {
   return targetSet(state.scheduleDraft || { targets: [] });
 }
@@ -286,10 +328,29 @@ function renderScheduleList() {
 }
 
 function setScheduleActionAvailability() {
-  elements.schedulePowerValue.disabled = !elements.schedulePowerEnabled.checked;
-  elements.scheduleModeValue.disabled = !elements.scheduleModeEnabled.checked;
-  elements.scheduleSpeedValue.disabled = !elements.scheduleSpeedEnabled.checked;
-  elements.scheduleSetTempValue.disabled = !elements.scheduleSetTempEnabled.checked;
+  const capabilities = scheduleActionCapabilities();
+  [
+    ["Power", elements.schedulePowerEnabled, elements.schedulePowerValue],
+    ["Mode", elements.scheduleModeEnabled, elements.scheduleModeValue],
+    ["Speed", elements.scheduleSpeedEnabled, elements.scheduleSpeedValue],
+    ["SetTemp", elements.scheduleSetTempEnabled, elements.scheduleSetTempValue],
+  ].forEach(([control, checkbox, input]) => {
+    const supported = capabilities[control] === true;
+    checkbox.disabled = !supported && !checkbox.checked;
+    input.disabled = !checkbox.checked || !supported;
+    checkbox.closest("label")?.classList.toggle("schedule-action-unsupported", !supported);
+  });
+}
+
+function scheduleHasUnsupportedActions() {
+  if (!state.scheduleDraft) {
+    return false;
+  }
+  const capabilities = scheduleActionCapabilities();
+  return (elements.schedulePowerEnabled.checked && !capabilities.Power)
+    || (elements.scheduleModeEnabled.checked && !capabilities.Mode)
+    || (elements.scheduleSpeedEnabled.checked && !capabilities.Speed)
+    || (elements.scheduleSetTempEnabled.checked && !capabilities.SetTemp);
 }
 
 function updateScheduleDraftFromInputs() {
@@ -322,13 +383,15 @@ function updateScheduleDraftFromInputs() {
 }
 
 function updateScheduleEditorButtons() {
+  setScheduleActionAvailability();
   const hasDraft = Boolean(state.scheduleDraft);
   const connected = state.demo || state.connected;
   const schedulerAvailable = state.demo || ["ready", "executing", "warning"].includes(String(state.schedulerStatus?.state || ""));
-  elements.scheduleSaveButton.disabled = !hasDraft || !connected || state.scheduleSaving;
+  const unsupportedActions = scheduleHasUnsupportedActions();
+  elements.scheduleSaveButton.disabled = !hasDraft || !connected || state.scheduleSaving || unsupportedActions;
   elements.scheduleDeleteButton.disabled = !hasDraft || state.scheduleSaving || (state.scheduleDraftPersisted && !connected);
   elements.scheduleDuplicateButton.disabled = !hasDraft || state.scheduleSaving;
-  elements.scheduleRunButton.disabled = !hasDraft || !state.scheduleDraftPersisted || state.scheduleDirty || !connected || !schedulerAvailable || state.scheduleSaving;
+  elements.scheduleRunButton.disabled = !hasDraft || !state.scheduleDraftPersisted || state.scheduleDirty || !connected || !schedulerAvailable || state.scheduleSaving || unsupportedActions;
 }
 
 function renderScheduleTargetList() {
@@ -669,10 +732,20 @@ function renderGroupPanel() {
   }
   const selected = selectedGroupFans();
   elements.groupSelectedCount.textContent = String(selected.length);
-  elements.groupPowerValue.disabled = !elements.groupPowerEnabled.checked;
-  elements.groupModeValue.disabled = !elements.groupModeEnabled.checked;
-  elements.groupSpeedValue.disabled = !elements.groupSpeedEnabled.checked;
-  elements.groupSetTempValue.disabled = !elements.groupSetTempEnabled.checked;
+  const capabilities = commandCapabilitiesForFans(selected);
+  [
+    ["Power", elements.groupPowerEnabled, elements.groupPowerValue],
+    ["Mode", elements.groupModeEnabled, elements.groupModeValue],
+    ["Speed", elements.groupSpeedEnabled, elements.groupSpeedValue],
+    ["SetTemp", elements.groupSetTempEnabled, elements.groupSetTempValue],
+  ].forEach(([control, checkbox, input]) => {
+    const supported = selected.some((fan) => capabilities.get(fanDeviceKey(fan.bus, fan.address))?.[control] === true);
+    if (!supported) {
+      checkbox.checked = false;
+    }
+    checkbox.disabled = !supported;
+    input.disabled = !supported || !checkbox.checked;
+  });
   const hasControl = [
     elements.groupPowerEnabled,
     elements.groupModeEnabled,
@@ -946,6 +1019,8 @@ function renderControls(fan, fanState) {
   const deviceChanged = state.controlDeviceKey !== key;
   state.controlDeviceKey = key;
   const available = canSendFanCommands(state.connected, fanState);
+  const capabilities = commandCapabilitiesForFan(fan);
+  const hasSupportedCommand = Object.values(capabilities).some(Boolean);
   const offline = Number(fanState.Status) === 7 || Number(fanState.Alarm) === 2;
 
   if (!state.connected) {
@@ -954,17 +1029,19 @@ function renderControls(fan, fanState) {
     elements.controlAvailability.textContent = "Ожидание данных";
   } else if (offline) {
     elements.controlAvailability.textContent = "Устройство offline";
+  } else if (!hasSupportedCommand) {
+    elements.controlAvailability.textContent = "Команды профилем не поддерживаются";
   } else {
     elements.controlAvailability.textContent = "Управление доступно";
   }
-  elements.controlAvailability.className = `control-availability ${available ? "control-available" : "control-unavailable"}`;
+  elements.controlAvailability.className = `control-availability ${available && hasSupportedCommand ? "control-available" : "control-unavailable"}`;
 
-  elements.powerCommandState.textContent = commandStateText("Power", binaryLabel(fanState.Power));
-  elements.modeCommandState.textContent = commandStateText("Mode", modeLabel(fanState.Mode));
-  elements.speedCommandState.textContent = commandStateText("Speed", speedLabel(fanState.Speed));
-  elements.setTempCommandState.textContent = commandStateText("SetTemp", temperatureLabel(fanState.SetTemp));
+  elements.powerCommandState.textContent = capabilities.Power ? commandStateText("Power", binaryLabel(fanState.Power)) : "Не поддерживается";
+  elements.modeCommandState.textContent = capabilities.Mode ? commandStateText("Mode", modeLabel(fanState.Mode)) : "Не поддерживается";
+  elements.speedCommandState.textContent = capabilities.Speed ? commandStateText("Speed", speedLabel(fanState.Speed)) : "Не поддерживается";
+  elements.setTempCommandState.textContent = capabilities.SetTemp ? commandStateText("SetTemp", temperatureLabel(fanState.SetTemp)) : "Не поддерживается";
 
-  setSegmentState("Power", fanState.Power, available);
+  setSegmentState("Power", fanState.Power, available && capabilities.Power);
 
   const modePending = selectedPending("Mode");
   const speedPending = selectedPending("Speed");
@@ -981,14 +1058,14 @@ function renderControls(fan, fanState) {
     elements.setTempCommand.value = String(Number.isInteger(actual) && actual >= 16 && actual <= 32 ? actual : 24);
   }
 
-  elements.modeCommand.disabled = !available || Boolean(modePending);
-  elements.modeApplyButton.disabled = !available || Boolean(modePending);
-  elements.speedCommand.disabled = !available || Boolean(speedPending);
-  elements.speedApplyButton.disabled = !available || Boolean(speedPending);
-  elements.setTempCommand.disabled = !available || Boolean(tempPending);
-  elements.setTempMinusButton.disabled = !available || Boolean(tempPending);
-  elements.setTempPlusButton.disabled = !available || Boolean(tempPending);
-  elements.setTempApplyButton.disabled = !available || Boolean(tempPending);
+  elements.modeCommand.disabled = !available || !capabilities.Mode || Boolean(modePending);
+  elements.modeApplyButton.disabled = !available || !capabilities.Mode || Boolean(modePending);
+  elements.speedCommand.disabled = !available || !capabilities.Speed || Boolean(speedPending);
+  elements.speedApplyButton.disabled = !available || !capabilities.Speed || Boolean(speedPending);
+  elements.setTempCommand.disabled = !available || !capabilities.SetTemp || Boolean(tempPending);
+  elements.setTempMinusButton.disabled = !available || !capabilities.SetTemp || Boolean(tempPending);
+  elements.setTempPlusButton.disabled = !available || !capabilities.SetTemp || Boolean(tempPending);
+  elements.setTempApplyButton.disabled = !available || !capabilities.SetTemp || Boolean(tempPending);
   setRowPending("Mode", Boolean(modePending));
   setRowPending("Speed", Boolean(speedPending));
   setRowPending("SetTemp", Boolean(tempPending));
@@ -1147,6 +1224,9 @@ function beginPendingCommand(fan, control, rawValue, batchId = null) {
   if (!canSendFanCommands(state.connected, fanState)) {
     throw new Error(`${fan.label}: команда недоступна — нет актуальной связи`);
   }
+  if (commandCapabilitiesForFan(fan)[control] !== true) {
+    throw new Error(`${fan.label}: команда ${control} не поддерживается профилем устройства`);
+  }
 
   const value = normalizeFanCommand(control, rawValue);
   const topic = fanCommandTopic(fan.bus, fan.address, control);
@@ -1221,6 +1301,7 @@ function applyGroupCommands() {
       state.connected,
       groupCommandInput(),
       new Set(state.pendingCommands.keys()),
+      commandCapabilitiesForFans(selectedGroupFans()),
     );
     if (!plan.operations.length) {
       const reason = plan.skipped.length
@@ -1289,6 +1370,21 @@ function confirmPendingCommand(deviceKey, control, fanState) {
 
 function handleMessage(topic, payload) {
   try {
+    if (topic === "/mdvwb/config") {
+      state.busConfiguration = normalizeConfiguration(parseJsonPayload(payload, "конфигурация шин"));
+      state.receivedBusConfiguration = true;
+      renderDashboard();
+      return;
+    }
+
+    if (topic === "/mdvwb/modbus/profiles") {
+      state.profileCatalog = normalizeModbusProfileCatalog(
+        parseJsonPayload(payload, "каталог Modbus-профилей"),
+      );
+      renderDashboard();
+      return;
+    }
+
     if (topic === "/mdvwb/dashboard/config") {
       const selection = dashboardSelectionFromPayload(payload, REQUESTED_PANEL_ID);
       state.dashboardCollection = selection.collection;
@@ -1714,6 +1810,8 @@ if (new URLSearchParams(window.location.search).get("demo") === "1") {
     reconnectDelayMs: 2000,
   });
   state.client.subscribe("/mdvwb/dashboard/config");
+  state.client.subscribe("/mdvwb/config");
+  state.client.subscribe("/mdvwb/modbus/profiles");
   state.client.subscribe("/mdvwb/dashboard/status");
   state.client.subscribe("/mdvwb/schedules/config");
   state.client.subscribe("/mdvwb/schedules/status");

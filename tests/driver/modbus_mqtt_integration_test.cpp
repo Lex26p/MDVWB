@@ -224,6 +224,18 @@ void TestModbusStateAndPowerCommandUseExistingMqttBoundary()
             "/devices/Fan-2_1/controls/AlarmCode", "0"),
         "initial Modbus AlarmCode was not published on the existing topic");
 
+    const auto beforeForcedSnapshot = mqtt.publications.size();
+    states.PublishDevice(driver.DeviceStateByAddress(1U), true);
+    for (const std::string_view control : {
+             "Mode", "Speed", "SetTemp", "Blinds", "Blok"}) {
+        Require(
+            mqtt.HasPublication(
+                "/devices/Fan-2_1/controls/" + std::string(control),
+                "",
+                beforeForcedSnapshot),
+            "forced Modbus snapshot did not clear an unsupported retained control");
+    }
+
     const auto requestsBeforeCommand = transport.requests.size();
     mqtt.Emit(
         "/devices/Fan-2_1/controls/Power/on1",

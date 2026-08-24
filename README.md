@@ -1,20 +1,24 @@
 # MDVWB
 
-MDVWB is a standalone C++20 system for polling, controlling, scheduling, and
-visualizing MDV XYE fan-coils through RS-485 and MQTT on Wiren Board.
+MDVWB is a C++20 extension for Wiren Board that polls, controls, schedules, and
+visualizes RS-485 climate equipment through the controller's MQTT and systemd
+environment. It supports the native MDV XYE protocol and profile-driven Modbus
+RTU devices; it is not a standalone automation platform.
 
 Current project version: **1.3.0**.
 
-MDVWB is not a `wb-mqtt-serial` module. Each physical RS-485 bus is owned by a
-separate `MDVWB` process and a separate systemd instance.
+MDVWB is built separately from `wb-mqtt-serial`, but extends Wiren Board and
+depends on its Mosquitto, systemd and web environment. Each physical RS-485 bus
+is owned by a separate protocol-specific process and systemd instance.
 
 ## Components
 
-The project builds four executables:
+The project builds five executables (one of them is an internal bus runtime):
 
 | Executable | Responsibility |
 |---|---|
 | `MDVWB` | Owns one serial port, polls one configured bus, executes commands, and publishes factual MQTT state |
+| `mdvwb-modbus` | Internal profile-driven Modbus RTU bus runtime selected by `mdvwb-run` |
 | `mdvwb-offline` | Publishes retained offline state after a bus process stops |
 | `mdvwb-manager` | Owns configuration, MQTT management APIs, systemd synchronization, dashboard uploads, and discovery |
 | `mdvwb-scheduler` | Executes weekly, one-time, and manual schedules and waits for factual confirmation |
@@ -49,10 +53,13 @@ Important invariants:
 - one driver process owns exactly one serial port;
 - bus count is not hardcoded;
 - separate buses operate independently;
-- control uses individual addresses `0..63`;
-- protocol broadcast `0xFF` is not used;
-- factual controls are updated only from valid C0 reads;
-- C3/CC/CD replies are validated but are not factual confirmation.
+- MDV uses individual addresses `0..63`; Modbus uses logical addresses `1..63`;
+- protocol broadcast is not used;
+- MDV factual controls are updated only from valid C0 reads;
+- the current Modbus runtime performs confirmed writes only for `Power`;
+- a Modbus control is writable only when both the selected profile and the
+  current runtime support it; unsupported controls are rejected before wire
+  traffic.
 
 ## Runtime files
 
@@ -63,6 +70,8 @@ Important invariants:
 /usr/local/bin/mdvwb-scheduler
 /usr/local/sbin/mdvwb-setup
 /usr/local/lib/mdvwb/
+/usr/local/lib/mdvwb/mdvwb-modbus
+/usr/local/lib/mdvwb/modbus-profiles/
 
 /etc/mdvwb/buses.json
 /etc/mdvwb/dashboard.json
@@ -107,8 +116,9 @@ cmake -S . -B build-release \
   -DMDVWB_REQUIRE_MOSQUITTO=ON
 ```
 
-CMake currently registers 20 C++ tests. Deployment lifecycle shell tests are
-kept under `tests/deploy/` and run in CI.
+CMake currently registers 42 C++ tests. Seven JavaScript model tests under
+`tests/web/` and deployment lifecycle shell tests under `tests/deploy/` also
+run in CI.
 
 ## Release assets
 

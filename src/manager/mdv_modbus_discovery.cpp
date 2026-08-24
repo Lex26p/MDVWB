@@ -1,6 +1,7 @@
 #include "mdv_modbus_discovery.h"
 
 #include "modbus_profile.h"
+#include "modbus_runtime_profile.h"
 #include "modbus_scan_execute.h"
 
 #include <algorithm>
@@ -260,6 +261,8 @@ constexpr std::string_view ManagedMarker =
             "selected Modbus discovery profile '" + runtime.profileId +
             "' is unavailable");
     }
+
+    mdv::modbus::ValidateModbusRuntimeProfile(*profile);
 
     const auto& expected = profile->transport;
     const auto& actual = runtime.serial;

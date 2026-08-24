@@ -46,12 +46,14 @@ git diff --check
 cmake --preset x64-debug
 cmake --build "out/build/x64-debug"
 ctest --test-dir "out/build/x64-debug" -C Debug --output-on-failure
+Get-ChildItem tests/web/*.mjs | Sort-Object Name | ForEach-Object { node $_.FullName; if ($LASTEXITCODE -ne 0) { throw "Web test failed: $($_.Name)" } }
 ```
 
 Ожидается:
 
 ```text
-20/20 C++ tests passed
+42/42 C++ tests passed
+7/7 web model tests passed
 ```
 
 ## 4. Validate workflow
@@ -69,8 +71,9 @@ deployment shell syntax
 7 deployment lifecycle test suites
 default JSON
 release contract
+7 web model tests
 Release C++ build
-20 C++ tests
+42 C++ tests
 binary smoke
 ```
 
@@ -100,7 +103,7 @@ machine: aarch64
 container: debian:bullseye
 full deployment tests
 Release configure/build
-20 C++ tests
+42 C++ tests
 binary smoke
 package manifest
 internal SHA256SUMS
@@ -296,7 +299,7 @@ no browser console errors
 
 ## 19. Hardware smoke
 
-Для test fan проверьте factual C0:
+Для MDV test fan проверьте factual C0:
 
 ```text
 Power
@@ -330,6 +333,23 @@ confirmation arrives on base topic after C0
 no broadcast
 ```
 
+Для Modbus test device проверяйте эффективные capabilities — пересечение
+подтверждённого профиля и текущей runtime-реализации:
+
+```text
+profile catalog and bus configuration loaded
+unsupported controls disabled in direct/group/schedule UI
+unsupported schedule rejected before any /on1 publication
+Power write confirmed only by factual read-back
+obsolete optional retained values cleared when unavailable
+no write traffic during discovery
+```
+
+Для текущего `vrf_add_controller` проверяется Power; Mode, Speed, SetTemp,
+Blinds и Blok не должны отправляться. `Status=5` у включённого online-устройства
+без Mode является намеренным compatibility fallback, но retained `Mode` должен
+оставаться пустым.
+
 ## 20. Group, schedule and discovery smoke
 
 Проверьте:
@@ -340,9 +360,11 @@ selected controls only
 weekly/once/manual schedules
 terminal schedule result
 controller local time
-three-pass discovery 0..63
+MDV three-pass discovery 0..63
+Modbus profile-driven read-only discovery 1..63
 selected bus remains stopped after discovery
 other buses remain independent
+start/restart and runtime-changing save rejected while that bus discovery runs
 ```
 
 ## 21. Rollback smoke

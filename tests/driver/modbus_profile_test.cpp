@@ -355,6 +355,36 @@ void TestTransportValidation()
             static_cast<void>(mdv::modbus::ParseProfile(text));
         },
         "parity");
+
+    RequireProfileError(
+        [] {
+            const auto text = ReplaceOnce(
+                std::string(kValidProfile),
+                R"json("baudRate": 9600)json",
+                R"json("baudRate": 4294976896)json");
+            static_cast<void>(mdv::modbus::ParseProfile(text));
+        },
+        "baud rate");
+
+    RequireProfileError(
+        [] {
+            const auto text = ReplaceOnce(
+                std::string(kValidProfile),
+                R"json("dataBits": 8)json",
+                R"json("dataBits": 264)json");
+            static_cast<void>(mdv::modbus::ParseProfile(text));
+        },
+        "data bits");
+
+    RequireProfileError(
+        [] {
+            const auto text = ReplaceOnce(
+                std::string(kValidProfile),
+                R"json("stopBits": 1)json",
+                R"json("stopBits": 257)json");
+            static_cast<void>(mdv::modbus::ParseProfile(text));
+        },
+        "stop bits");
 }
 
 void TestAddressingValidation()

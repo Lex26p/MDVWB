@@ -27,7 +27,8 @@ int main(int argc, char* argv[]) {
         std::cout
             << "MDVWB schedule executor\n\n"
             << "Configuration is read from MDVWB_SCHEDULES_CONFIG, MDVWB_BUSES_CONFIG,\n"
-            << "MDVWB_DASHBOARD_CONFIG and MDVWB_SCHEDULER_STATE.\n";
+            << "MDVWB_DASHBOARD_CONFIG, MDVWB_MODBUS_PROFILE_DIR and\n"
+            << "MDVWB_SCHEDULER_STATE.\n";
         return 0;
     }
     if (argc > 1) {
@@ -39,6 +40,9 @@ int main(int argc, char* argv[]) {
     paths.schedules = Env("MDVWB_SCHEDULES_CONFIG", "/etc/mdvwb/schedules.json");
     paths.buses = Env("MDVWB_BUSES_CONFIG", "/etc/mdvwb/buses.json");
     paths.dashboard = Env("MDVWB_DASHBOARD_CONFIG", "/etc/mdvwb/dashboard.json");
+    paths.modbusProfiles = Env(
+        "MDVWB_MODBUS_PROFILE_DIR",
+        "/usr/local/lib/mdvwb/modbus-profiles");
     paths.state = Env("MDVWB_SCHEDULER_STATE", "/var/lib/mdvwb/scheduler-state.tsv");
     paths.confirmationTimeoutSeconds = EnvInt("MDVWB_SCHEDULER_CONFIRM_TIMEOUT", 10);
     return mdvwb::RunSchedulerDaemon(paths, std::cout, std::cerr);

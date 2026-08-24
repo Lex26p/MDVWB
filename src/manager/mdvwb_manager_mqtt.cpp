@@ -81,6 +81,39 @@ const BusConfig* FindBus(const BusesConfig& config, int busId) {
     return iterator == config.buses.end() ? nullptr : &*iterator;
 }
 
+bool SameModbusSettings(
+    const std::optional<ModbusBusSettings>& left,
+    const std::optional<ModbusBusSettings>& right)
+{
+    if (left.has_value() != right.has_value()) {
+        return false;
+    }
+    if (!left.has_value()) {
+        return true;
+    }
+    return left->profileId == right->profileId &&
+        left->baudRate == right->baudRate &&
+        left->dataBits == right->dataBits &&
+        left->parity == right->parity &&
+        left->stopBits == right->stopBits;
+}
+
+bool SameBusRuntimeConfiguration(const BusConfig& left, const BusConfig& right)
+{
+    return left.id == right.id &&
+        left.enabled == right.enabled &&
+        left.port == right.port &&
+        left.addresses == right.addresses &&
+        left.protocol == right.protocol &&
+        SameModbusSettings(left.modbus, right.modbus);
+}
+
+bool IsServiceLifecycleAction(ServiceActionType type) noexcept
+{
+    return type != ServiceActionType::WriteConfig &&
+        type != ServiceActionType::RemoveConfig;
+}
+
 std::string DashboardIssueKey(const DashboardReferenceIssue& issue) {
     return std::to_string(static_cast<int>(issue.kind)) + "|" +
         issue.panelId + "|" + issue.placementId + "|" +
@@ -742,6 +775,37 @@ ManagerMqttResult ManagerMqttService::ProcessConfiguration(
                 false, false, detail, std::nullopt, {}};
         }
 
+        if (previousConfig.has_value()) {
+            for (const BusConfig& currentBus : previousConfig->buses) {
+                if (!DiscoveryBusy(currentBus.id)) {
+                    continue;
+                }
+                const BusConfig* submittedBus = FindBus(config, currentBus.id);
+                if (submittedBus == nullptr ||
+                    !SameBusRuntimeConfiguration(currentBus, *submittedBus)) {
+                    const std::string detail =
+                        "Configuration cannot change bus " +
+                        std::to_string(currentBus.id) +
+                        " while discovery is running";
+                    PublishResult(
+                        false,
+                        false,
+                        detail,
+                        previousConfig->buses.size(),
+                        EnabledCount(*previousConfig));
+                    client_.Publish(
+                        ConfigTopic,
+                        SerializeBusesConfig(*previousConfig),
+                        true);
+                    PublishReadyStatus(
+                        previousConfig->buses.size(),
+                        EnabledCount(*previousConfig));
+                    return ManagerMqttResult{
+                        false, false, detail, std::nullopt, {}};
+                }
+            }
+        }
+
         if (currentRevision == std::numeric_limits<int>::max()) {
             throw BusesConfigError(
                 "configuration revision limit has been reached");
@@ -803,8 +867,17 @@ ManagerMqttResult ManagerMqttService::ProcessConfiguration(
         config.revision = currentRevision + 1;
         const std::string canonical = SerializeBusesConfig(config);
         const std::size_t enabledCount = EnabledCount(config);
-        const ServiceSyncPlan plan =
-            BuildServiceSyncPlan(config, servicePaths_);
+        const auto preserveDiscoveryOwnedServices =
+            [this](ServiceSyncPlan& candidate) {
+                std::erase_if(
+                    candidate.actions,
+                    [this](const ServiceAction& action) {
+                        return IsServiceLifecycleAction(action.type) &&
+                            DiscoveryBusy(action.busId);
+                    });
+            };
+        ServiceSyncPlan plan = BuildServiceSyncPlan(config, servicePaths_);
+        preserveDiscoveryOwnedServices(plan);
         const TextFileSnapshot previousConfigFile =
             CaptureTextFile(configPath_);
         const std::filesystem::path stagedConfigPath =
@@ -824,8 +897,9 @@ ManagerMqttResult ManagerMqttService::ProcessConfiguration(
             try {
                 const BusesConfig rollbackConfig =
                     previousConfig.value_or(BusesConfig{});
-                const ServiceSyncPlan rollbackPlan =
+                ServiceSyncPlan rollbackPlan =
                     BuildServiceSyncPlan(rollbackConfig, servicePaths_);
+                preserveDiscoveryOwnedServices(rollbackPlan);
                 ApplyServiceSyncPlan(
                     rollbackPlan, servicePaths_, commandRunner_);
             } catch (const std::exception& rollbackError) {
@@ -1668,6 +1742,15 @@ ManagerMqttResult ManagerMqttService::ProcessBusCommand(
         return ManagerMqttResult{false, false, detail, busId, command};
     }
 
+    if ((type == IncomingType::BusStart ||
+         type == IncomingType::BusRestart) &&
+        DiscoveryBusy(busId)) {
+        const std::string detail =
+            "Discovery is running for this bus";
+        PublishBusResult(busId, command, false, detail);
+        return ManagerMqttResult{false, false, detail, busId, command};
+    }
+
     try {
         const BusesConfig config = LoadBusesConfig(configPath_);
         const BusConfig* bus = FindBus(config, busId);
@@ -2343,7 +2426,9 @@ void ManagerMqttService::PublishDiscoveryResult(
 
 void ManagerMqttService::PublishDiscoveryIdleStatuses(const BusesConfig& config) {
     for (const BusConfig& bus : config.buses) {
-        PublishDiscoveryStatus(bus.id, "idle", bus.port);
+        if (!DiscoveryBusy(bus.id)) {
+            PublishDiscoveryStatus(bus.id, "idle", bus.port);
+        }
     }
 }
 

@@ -14,6 +14,7 @@ assert.deepEqual(model.busFromEditorValues({
 }), {
   id: 2,
   enabled: true,
+  protocol: "mdv",
   port: "/dev/ttyUSB0",
   addresses: [1, 2, 3],
 });

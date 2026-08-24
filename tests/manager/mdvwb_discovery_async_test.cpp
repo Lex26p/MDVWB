@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
@@ -288,6 +289,17 @@ bool HasCommand(
     return false;
 }
 
+bool HasCommandSince(
+    const RecordingCommandRunner& runner,
+    std::size_t begin,
+    const std::vector<std::string>& expected)
+{
+    return std::any_of(
+        runner.commands.begin() + static_cast<std::ptrdiff_t>(begin),
+        runner.commands.end(),
+        [&](const auto& command) { return command == expected; });
+}
+
 std::optional<mdvwb::ManagerMqttResult> WaitForDiscoveryCompletion(
     mdvwb::ManagerMqttService& service,
     int busId)
@@ -374,6 +386,76 @@ void TestDiscoveryIsSerializedPerBusAndParallelAcrossBuses()
         discovery.WaitUntilStarted(
             "/dev/ttyRS485-1", std::chrono::milliseconds(500)),
         "first bus discovery worker did not start");
+
+    const auto beforeConfiguration = commands.commands.size();
+    mqtt.Inject(
+        "/mdvwb/config/set",
+        R"json({
+          "version":1,
+          "revision":0,
+          "buses":[
+            {"id":1,"enabled":true,"port":"/dev/ttyRS485-1","addresses":[1]},
+            {"id":2,"enabled":true,"port":"/dev/ttyRS485-2","addresses":[2,3]}
+          ]
+        })json");
+    const auto configuration = service.ProcessOne();
+    const bool configurationStartedDiscoveredBus =
+        HasCommandSince(
+            commands,
+            beforeConfiguration,
+            {"fake-systemctl", "enable", "--now", "mdvwb@1.service"}) ||
+        HasCommandSince(
+            commands,
+            beforeConfiguration,
+            {"fake-systemctl", "start", "mdvwb@1.service"}) ||
+        HasCommandSince(
+            commands,
+            beforeConfiguration,
+            {"fake-systemctl", "restart", "mdvwb@1.service"});
+    const auto* discoveryStatusAfterConfiguration = mqtt.Last(
+        "/mdvwb/buses/1/discovery/status");
+    const bool discoveryStayedRunning =
+        discoveryStatusAfterConfiguration != nullptr &&
+        discoveryStatusAfterConfiguration->payload.find(
+            "\"state\":\"running\"") != std::string::npos;
+
+    mqtt.Inject("/mdvwb/buses/1/start", "1");
+    const auto startDuringDiscovery = service.ProcessOne();
+    mqtt.Inject("/mdvwb/buses/1/restart", "1");
+    const auto restartDuringDiscovery = service.ProcessOne();
+
+    mqtt.Inject(
+        "/mdvwb/config/set",
+        R"json({
+          "version":1,
+          "revision":1,
+          "buses":[
+            {"id":1,"enabled":true,"port":"/dev/ttyRS485-changed","addresses":[1]},
+            {"id":2,"enabled":true,"port":"/dev/ttyRS485-2","addresses":[2,3]}
+          ]
+        })json");
+    const auto changedDiscoveryBus = service.ProcessOne();
+
+    Require(
+        configuration.has_value() && configuration->success &&
+            !configurationStartedDiscoveredBus,
+        "unrelated configuration save started the bus owned by discovery");
+    Require(
+        discoveryStayedRunning,
+        "configuration save replaced the active discovery status with idle");
+    Require(
+        startDuringDiscovery.has_value() && !startDuringDiscovery->success &&
+            startDuringDiscovery->message.find("Discovery") != std::string::npos,
+        "bus start was not rejected while discovery owned the serial port");
+    Require(
+        restartDuringDiscovery.has_value() && !restartDuringDiscovery->success &&
+            restartDuringDiscovery->message.find("Discovery") != std::string::npos,
+        "bus restart was not rejected while discovery owned the serial port");
+    Require(
+        changedDiscoveryBus.has_value() && !changedDiscoveryBus->success &&
+            changedDiscoveryBus->message.find("while discovery is running") !=
+                std::string::npos,
+        "configuration changed the bus owned by discovery");
 
     mqtt.Inject("/mdvwb/buses/1/discovery/start", "1");
     const auto duplicate = service.ProcessOne();

@@ -130,6 +130,8 @@ struct TestEnvironment {
         paths.schedules = root / "schedules.json";
         paths.buses = root / "buses.json";
         paths.dashboard = root / "dashboard.json";
+        paths.modbusProfiles =
+            std::filesystem::path(MDVWB_SOURCE_DIR) / "profiles/modbus";
         paths.state = root / "scheduler-state.tsv";
         paths.confirmationTimeoutSeconds = 10;
         WriteFiles();
@@ -144,6 +146,18 @@ struct TestEnvironment {
     void WriteSchedules(std::string_view contents) const
     {
         Write(paths.schedules, contents);
+    }
+
+    void WriteBuses(std::string_view contents) const
+    {
+        Write(paths.buses, contents);
+    }
+
+    void WriteModbusProfile(std::string_view contents)
+    {
+        paths.modbusProfiles = root / "modbus-profiles";
+        std::filesystem::create_directories(paths.modbusProfiles);
+        Write(paths.modbusProfiles / "mode_write_profile.json", contents);
     }
 
 private:
@@ -274,6 +288,92 @@ void TestManualRunIsAcknowledgedByScheduler()
     Require(result->payload.find("\"controllerEpoch\":1784534400") !=
             std::string::npos,
         "manual acknowledgement should contain controller heartbeat epoch");
+}
+
+void TestUnsupportedModbusScheduleActionIsRejected()
+{
+    TestEnvironment environment;
+    environment.WriteModbusProfile(R"json({
+      "schemaVersion":1,
+      "id":"mode_write_profile",
+      "name":"Mode write profile",
+      "registerAddressing":"pdu_zero_based",
+      "transport":{"baudRate":9600,"dataBits":8,"parity":"none","stopBits":1},
+      "addressing":{"type":"direct_slave","logicalMin":1,"logicalMax":63,"registerOffset":0},
+      "capabilities":{
+        "power":false,
+        "mode":true,
+        "fanSpeed":false,
+        "setTemperature":false,
+        "roomTemperature":false,
+        "alarm":false,
+        "blinds":false,
+        "blocked":false
+      },
+      "probe":{
+        "read":{"space":"holding_register","address":1},
+        "quantity":1,
+        "presence":"any_response"
+      },
+      "points":{
+        "mode":{
+          "type":"enum",
+          "read":{"space":"holding_register","address":2},
+          "write":{"space":"holding_register","address":3},
+          "readMap":{"0":"cool","1":"heat"},
+          "writeMap":{"cool":0,"heat":1}
+        }
+      }
+    })json");
+    environment.WriteBuses(R"json({
+      "version":1,
+      "buses":[{
+        "id":1,
+        "enabled":true,
+        "protocol":"modbus_rtu",
+        "port":"/dev/ttyRS485-1",
+        "modbus":{
+          "profileId":"mode_write_profile",
+          "baudRate":9600,
+          "dataBits":8,
+          "parity":"none",
+          "stopBits":1
+        },
+        "addresses":[1,2]
+      }]
+    })json");
+    environment.WriteSchedules(R"json({
+      "version":1,
+      "revision":1,
+      "schedules":[{
+        "id":"modbus-mode",
+        "name":"Unsupported Modbus mode",
+        "panelId":"main",
+        "enabled":false,
+        "kind":"once",
+        "days":[],
+        "date":"2026-07-21",
+        "time":"18:00",
+        "targets":[{"bus":1,"address":1}],
+        "actions":{"mode":0}
+      }]
+    })json");
+
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+
+    mqtt.Inject("/mdvwb/schedules/modbus-mode/execute", "1", false);
+    const auto result = service.ProcessOne();
+    Require(
+        result.has_value() && !result->success &&
+            result->message.find("not supported") != std::string::npos,
+        "scheduler accepted a profile write not implemented by the Modbus runtime");
+    Require(
+        mqtt.CountTopic(
+            "/devices/Fan-1_1/controls/Mode/on1") == 0U,
+        "scheduler published a command not implemented by the Modbus runtime");
 }
 
 void TestStatusPublishesControllerClockEveryMinute()
@@ -717,6 +817,7 @@ int main()
 {
     try {
         TestManualRunIsAcknowledgedByScheduler();
+        TestUnsupportedModbusScheduleActionIsRejected();
         TestStatusPublishesControllerClockEveryMinute();
         TestSentCommandsRequireFreshLiveFacts();
         TestMatchingRetainedStateStillRequiresCommandAndFreshConfirmation();

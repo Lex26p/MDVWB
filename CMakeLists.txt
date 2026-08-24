@@ -317,7 +317,8 @@ target_compile_features(mdvwb_scheduler PUBLIC cxx_std_20)
 target_include_directories(mdvwb_scheduler
     PUBLIC ${MDVWB_SCHEDULER_DIR} ${MDVWB_MANAGER_DIR} ${MDVWB_DRIVER_DIR})
 target_link_libraries(mdvwb_scheduler
-    PUBLIC mdvwb_schedules_config mdvwb_mosquitto_transport)
+    PUBLIC mdvwb_schedules_config mdvwb_mosquitto_transport
+           mdvwb_modbus_profile)
 
 add_executable(mdvwb-scheduler
     ${MDVWB_SCHEDULER_DIR}/mdvwb_scheduler_main.cpp
@@ -550,6 +551,8 @@ add_executable(mdvwb_scheduler_test
     ${MDVWB_SCHEDULER_TEST_DIR}/mdvwb_scheduler_test.cpp
 )
 target_link_libraries(mdvwb_scheduler_test PRIVATE mdvwb_scheduler)
+target_compile_definitions(mdvwb_scheduler_test
+    PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(mdvwb_scheduler_freshness_test
     ${MDVWB_SCHEDULER_TEST_DIR}/mdvwb_scheduler_freshness_test.cpp

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -283,6 +284,40 @@ void TestSerialMismatchRejectedBeforeTraffic()
         "serial mismatch generated Modbus traffic");
 }
 
+void TestIncompatibleProfileRejectedBeforeTraffic()
+{
+    TemporaryDirectory temporary;
+    const auto source = std::filesystem::path(MDVWB_SOURCE_DIR) /
+        "profiles/modbus/vrf_add_controller.json";
+    std::ifstream input(source, std::ios::binary);
+    std::string profile{
+        std::istreambuf_iterator<char>(input),
+        std::istreambuf_iterator<char>()};
+    Require(!profile.empty(), "could not read production Modbus profile");
+
+    const std::string holding = R"json("space": "holding_register")json";
+    const auto position = profile.find(holding);
+    Require(position != std::string::npos, "probe space fixture was not found");
+    profile.replace(
+        position,
+        holding.size(),
+        R"json("space": "input_register")json");
+    Write(temporary.Path() / "vrf_add_controller.json", profile);
+
+    auto runtime = ProductionRuntime();
+    runtime.profileDirectory = temporary.Path();
+    ScanTransport transport;
+    RequireThrows(
+        [&] {
+            static_cast<void>(
+                mdvwb::ExecuteModbusDiscovery(runtime, transport));
+        },
+        "unsupported discovery probe");
+    Require(
+        transport.requests.empty(),
+        "incompatible profile generated Modbus discovery traffic");
+}
+
 } // namespace
 
 int main()
@@ -293,6 +328,7 @@ int main()
         TestProfileDrivenScan();
         TestTransportErrorRejectsPartialResult();
         TestSerialMismatchRejectedBeforeTraffic();
+        TestIncompatibleProfileRejectedBeforeTraffic();
 
         std::cout << "MDVWB Modbus discovery tests: OK\n";
         return 0;

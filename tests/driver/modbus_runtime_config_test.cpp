@@ -3,7 +3,9 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -42,6 +44,58 @@ void ExpectInvalid(Function&& function, std::string_view expected)
 }
 
 using Environment = std::map<std::string, std::string, std::less<>>;
+
+class TemporaryProfileDirectory final {
+public:
+    TemporaryProfileDirectory()
+    {
+        const auto token = std::chrono::steady_clock::now()
+            .time_since_epoch()
+            .count();
+        path_ = std::filesystem::temp_directory_path() /
+            ("mdvwb-runtime-profile-validation-" + std::to_string(token));
+        std::filesystem::create_directories(path_);
+    }
+
+    ~TemporaryProfileDirectory()
+    {
+        std::error_code error;
+        std::filesystem::remove_all(path_, error);
+    }
+
+    void WriteUnsupportedProbeProfile() const
+    {
+        const auto source = std::filesystem::path(MDVWB_SOURCE_DIR) /
+            "profiles/modbus/vrf_add_controller.json";
+        std::ifstream input(source, std::ios::binary);
+        std::string profile{
+            std::istreambuf_iterator<char>(input),
+            std::istreambuf_iterator<char>()};
+        Require(!profile.empty(), "could not read production Modbus profile");
+
+        const std::string holding = R"json("space": "holding_register")json";
+        const auto position = profile.find(holding);
+        Require(position != std::string::npos, "probe space fixture was not found");
+        profile.replace(
+            position,
+            holding.size(),
+            R"json("space": "input_register")json");
+
+        std::ofstream output(
+            path_ / "vrf_add_controller.json",
+            std::ios::binary | std::ios::trunc);
+        output << profile;
+        Require(static_cast<bool>(output), "could not write invalid runtime profile");
+    }
+
+    [[nodiscard]] const std::filesystem::path& Path() const noexcept
+    {
+        return path_;
+    }
+
+private:
+    std::filesystem::path path_;
+};
 
 mdv::modbus::EnvironmentLookup Lookup(const Environment& environment)
 {
@@ -259,6 +313,23 @@ void TestProfileSelectionAndTransportRevalidated()
         "do not match");
 }
 
+void TestRuntimeCompatibilityIsRevalidatedAtLoad()
+{
+    TemporaryProfileDirectory directory;
+    directory.WriteUnsupportedProbeProfile();
+
+    auto environment = ValidEnvironment();
+    environment["MDVWB_MODBUS_PROFILE_DIR"] = directory.Path().string();
+    const auto config = mdv::modbus::ParseModbusRuntimeConfig(
+        Lookup(environment));
+
+    ExpectInvalid(
+        [&] {
+            static_cast<void>(mdv::modbus::LoadModbusRuntimeProfile(config));
+        },
+        "unsupported discovery probe");
+}
+
 } // namespace
 
 int main()
@@ -269,6 +340,7 @@ int main()
         TestInvalidTuningRejected();
         TestInvalidEnvironmentRejected();
         TestProfileSelectionAndTransportRevalidated();
+        TestRuntimeCompatibilityIsRevalidatedAtLoad();
         std::cout << "MDVWB Modbus runtime configuration tests: OK\n";
         return 0;
     }

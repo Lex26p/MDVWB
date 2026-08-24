@@ -456,35 +456,47 @@ void MqttStatePublisher::PublishDevice(
         PublishInteger(
             address, "Mode", ModeToMqtt(*state.mode), previous.mode, force);
     }
+    else {
+        PublishUnavailableInteger(address, "Mode", previous.mode, force);
+    }
     if (state.fanSpeed.has_value()) {
         PublishInteger(
             address, "Speed", SpeedToMqtt(*state.fanSpeed), previous.speed, force);
+    }
+    else {
+        PublishUnavailableInteger(address, "Speed", previous.speed, force);
     }
     if (state.setTemperature.has_value()) {
         PublishNumber(
             address, "SetTemp", *state.setTemperature,
             previous.setTemperature, force);
     }
+    else {
+        PublishUnavailableNumber(
+            address, "SetTemp", previous.setTemperature, force);
+    }
     if (state.roomTemperature.has_value()) {
         PublishNumber(
             address, "Temp", *state.roomTemperature,
             previous.roomTemperature, force);
     }
-    else if (mqtt_detail::ShouldPublishUnavailableNumber(
-                 previous.roomTemperature, force)) {
-        // An empty retained payload removes the obsolete numeric state from the
-        // broker. Current subscribers also receive the empty payload and render
-        // the room temperature as unavailable instead of keeping an old value.
-        client_.Publish(Topic(address, "Temp"), "", true);
-        previous.roomTemperature = mqtt_detail::UnavailableNumberMarker();
+    else {
+        PublishUnavailableNumber(
+            address, "Temp", previous.roomTemperature, force);
     }
     if (state.blinds.has_value()) {
         PublishInteger(
             address, "Blinds", *state.blinds ? 1 : 0, previous.blinds, force);
     }
+    else {
+        PublishUnavailableInteger(address, "Blinds", previous.blinds, force);
+    }
     if (state.blocked.has_value()) {
         PublishInteger(
             address, "Blok", *state.blocked ? 1 : 0, previous.blocked, force);
+    }
+    else {
+        PublishUnavailableInteger(address, "Blok", previous.blocked, force);
     }
     PublishInteger(address, "Alarm", alarm, previous.alarm, force);
     PublishInteger(
@@ -530,6 +542,34 @@ void MqttStatePublisher::PublishNumber(
     }
     client_.Publish(Topic(address, control), FormatNumber(value), true);
     previous = value;
+}
+
+void MqttStatePublisher::PublishUnavailableInteger(
+    std::uint8_t address,
+    std::string_view control,
+    std::optional<int>& previous,
+    bool force)
+{
+    if (!mqtt_detail::ShouldPublishUnavailableInteger(previous, force)) {
+        return;
+    }
+    client_.Publish(Topic(address, control), "", true);
+    previous = mqtt_detail::UnavailableIntegerMarker();
+}
+
+void MqttStatePublisher::PublishUnavailableNumber(
+    std::uint8_t address,
+    std::string_view control,
+    std::optional<double>& previous,
+    bool force)
+{
+    if (!mqtt_detail::ShouldPublishUnavailableNumber(previous, force)) {
+        return;
+    }
+    // An empty retained payload removes the obsolete state from the broker.
+    // Current subscribers also receive it and discard an old displayed value.
+    client_.Publish(Topic(address, control), "", true);
+    previous = mqtt_detail::UnavailableNumberMarker();
 }
 
 std::string MqttStatePublisher::Topic(

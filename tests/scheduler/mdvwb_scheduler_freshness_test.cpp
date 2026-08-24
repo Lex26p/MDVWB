@@ -106,6 +106,7 @@ public:
         paths.schedules = root / "schedules.json";
         paths.buses = root / "buses.json";
         paths.dashboard = root / "dashboard.json";
+        paths.modbusProfiles = root / "modbus-profiles";
         paths.state = root / "scheduler-state.tsv";
         paths.confirmationTimeoutSeconds = 10;
         WriteValidBuses();

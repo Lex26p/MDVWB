@@ -1,6 +1,6 @@
 # Конфигурация и выполнение расписаний MDVWB
 
-> Самостоятельный контракт `schedules.json`, MQTT API manager и runtime `mdvwb-scheduler` для MDVWB 1.2.0.
+> Самостоятельный контракт `schedules.json`, MQTT API manager и runtime `mdvwb-scheduler` для MDVWB 1.3.0.
 
 ## 1. Runtime files
 
@@ -242,6 +242,7 @@ Unit использует `Restart=on-failure` и environment file `/etc/default
 MDVWB_SCHEDULES_CONFIG=/etc/mdvwb/schedules.json
 MDVWB_BUSES_CONFIG=/etc/mdvwb/buses.json
 MDVWB_DASHBOARD_CONFIG=/etc/mdvwb/dashboard.json
+MDVWB_MODBUS_PROFILE_DIR=/usr/local/lib/mdvwb/modbus-profiles
 MDVWB_SCHEDULER_STATE=/var/lib/mdvwb/scheduler-state.tsv
 MDVWB_SCHEDULER_CONFIRM_TIMEOUT=10
 ```
@@ -348,9 +349,22 @@ key = scheduleId
 - schedule exists;
 - automatic enabled;
 - references valid;
-- buses enabled.
+- buses enabled;
+- Modbus profile доступен и проходит runtime validation;
+- каждая action для каждой Modbus target имеет включённую capability, writable
+  point и реализованную runtime write capability.
 
 Stale queued request отклоняется.
+
+Проверка профиля выполняется перед каждым manual/automatic run. Если хотя бы
+одна target не поддерживает заданную action, весь run отклоняется до публикации
+первой `/on1` команды. Поэтому прямой MQTT execute не может обойти ограничения
+web UI.
+
+В текущем production Modbus runtime подтверждённая запись реализована только
+для `Power`. Наличие `write` у `Mode`, `FanSpeed` или `SetTemperature` в
+schema-v1 профиле не разрешает соответствующую schedule action, пока её
+write/confirmation state machine не реализована в runtime.
 
 ## 29. Command order
 

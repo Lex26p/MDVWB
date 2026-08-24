@@ -57,6 +57,7 @@ jobs:
             cmake \
             libmosquitto-dev \
             ninja-build \
+            nodejs \
             python3 \
             python3-yaml
 
@@ -119,6 +120,15 @@ jobs:
           test -f www/fancoils/scheduler-status-ui.js
           test -f www/fancoils/scheduler-status-health.js
           test -f www/fancoils/styles.css
+
+      - name: Run web model tests
+        shell: bash
+        run: |
+          set -euxo pipefail
+          node --version
+          for test_file in tests/web/*.mjs; do
+            node "$test_file"
+          done
 
       - name: Configure Release build
         shell: bash
