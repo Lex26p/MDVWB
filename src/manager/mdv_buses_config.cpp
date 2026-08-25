@@ -300,6 +300,16 @@ int MinimumAddress(BusProtocol protocol) noexcept
     return protocol == BusProtocol::ModbusRtu ? 1 : 0;
 }
 
+int MinimumPollPeriodMilliseconds(BusProtocol) noexcept
+{
+    return 150;
+}
+
+int DefaultPollPeriodMilliseconds(BusProtocol protocol) noexcept
+{
+    return protocol == BusProtocol::ModbusRtu ? 300 : 150;
+}
+
 void ValidateBus(
     BusConfig& bus,
     std::set<int>& usedIds,
@@ -342,6 +352,21 @@ void ValidateBus(
         ValidateModbusSettings(
             *bus.modbus,
             std::string(path) + ".modbus");
+    }
+
+    if (bus.pollPeriodMs == 0) {
+        bus.pollPeriodMs = DefaultPollPeriodMilliseconds(bus.protocol);
+    }
+    const int minimumPollPeriod =
+        MinimumPollPeriodMilliseconds(bus.protocol);
+    if (bus.pollPeriodMs < minimumPollPeriod ||
+        bus.pollPeriodMs > 60000) {
+        Fail(
+            std::string(path) +
+            ".pollPeriodMs must be in range " +
+            std::to_string(minimumPollPeriod) +
+            "..60000 for protocol " +
+            std::string(BusProtocolName(bus.protocol)));
     }
 
     std::sort(bus.addresses.begin(), bus.addresses.end());
@@ -464,6 +489,7 @@ BusesConfig ValidateAndConvert(const Value& rootValue)
                 "enabled",
                 "protocol",
                 "port",
+                "pollPeriodMs",
                 "addresses",
                 "modbus",
             },
@@ -492,6 +518,17 @@ BusesConfig ValidateAndConvert(const Value& rootValue)
                     iterator->second,
                     path + ".protocol"),
                 path + ".protocol");
+        }
+
+        if (const auto iterator = object.find("pollPeriodMs");
+            iterator != object.end()) {
+            bus.pollPeriodMs = CheckedInt(
+                RequireInteger(
+                    iterator->second,
+                    path + ".pollPeriodMs"),
+                1,
+                60000,
+                path + ".pollPeriodMs");
         }
 
         if (const auto iterator = object.find("modbus");
@@ -656,7 +693,9 @@ std::string SerializeBusesConfig(
             << "\",\n"
             << "      \"port\": \""
             << EscapeJson(bus.port)
-            << "\",\n";
+            << "\",\n"
+            << "      \"pollPeriodMs\": "
+            << bus.pollPeriodMs << ",\n";
 
         if (bus.protocol == BusProtocol::ModbusRtu) {
             const auto& modbus = *bus.modbus;

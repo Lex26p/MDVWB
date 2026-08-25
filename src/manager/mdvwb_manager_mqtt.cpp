@@ -104,6 +104,7 @@ bool SameBusRuntimeConfiguration(const BusConfig& left, const BusConfig& right)
         left.enabled == right.enabled &&
         left.port == right.port &&
         left.addresses == right.addresses &&
+        left.pollPeriodMs == right.pollPeriodMs &&
         left.protocol == right.protocol &&
         SameModbusSettings(left.modbus, right.modbus);
 }

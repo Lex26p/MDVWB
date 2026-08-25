@@ -89,6 +89,15 @@ const placement = createFanPlacement(
 assert.equal(placement.id, "fan-2-18");
 assert.equal(placement.number, 1);
 assert.equal(placement.markerScale, 1);
+const zeroPlacement = createFanPlacement(
+  { bus: 2, address: 18, number: 0, label: "Нулевой номер" },
+  dashboard.fans,
+);
+assert.equal(zeroPlacement.number, 0);
+assert.throws(
+  () => createFanPlacement({ bus: 2, address: 18, number: "" }, dashboard.fans),
+  /0–200/,
+);
 assert.throws(
   () => createFanPlacement({ bus: 1, address: 3 }, dashboard.fans),
   /уже размещено/,
@@ -104,6 +113,11 @@ const legacy = normalizeDashboardConfiguration({
   fans: [{ ...dashboard.fans[0], number: undefined, label: "Фанкойл №17" }],
 });
 assert.equal(legacy.fans[0].number, 17);
+const zeroNumber = normalizeDashboardConfiguration({
+  ...dashboard,
+  fans: [{ ...dashboard.fans[0], number: 0 }],
+});
+assert.equal(zeroNumber.fans[0].number, 0);
 assert.throws(() => normalizeDashboardConfiguration({
   ...dashboard,
   fans: [dashboard.fans[0], { ...dashboard.fans[0], id: "other", bus: 2, address: 18 }],

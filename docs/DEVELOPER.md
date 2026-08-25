@@ -108,11 +108,13 @@ FC03. В `vrf_add_controller` так читается `RoomTemperature`: raw `ui
 Это field-validation mapping; половинная часть и дополнительное преобразование
 к нему не применяются.
 
-Штатный нижний предел между началами операций Modbus — `300 ms`. Он применяется
-не только к обычному poll следующего logical address, но и после FC10 write,
-confirmation read и ошибки. Настройки command/retry могут увеличить интервал,
-но не уменьшить его ниже `MDVWB_MODBUS_POLL_PERIOD_MS`. Отдельная переменная не
-меняет период `150 ms` родного MDV-драйвера.
+Период задаётся отдельно для каждой шины полем `pollPeriodMs` в `buses.json`.
+Для Modbus RTU допустимы `150..60000 ms`, значение по умолчанию — `300 ms`.
+Оно применяется не только к обычному poll следующего logical address, но и
+после FC10 write, confirmation read и ошибки. Настройки command/retry могут
+увеличить интервал, но не уменьшить его ниже
+`MDVWB_MODBUS_POLL_PERIOD_MS`. Для MDV допустимы `150..60000 ms`, значение по
+умолчанию — `150 ms`; manager передаёт его через `MDVWB_PERIOD_MS`.
 
 ## 3. Карта исходников драйвера
 
@@ -1549,6 +1551,7 @@ Schema version:
       "enabled": true,
       "protocol": "mdv",
       "port": "/dev/ttyRS485-1",
+      "pollPeriodMs": 150,
       "addresses": [1, 2, 3]
     },
     {
@@ -1556,6 +1559,7 @@ Schema version:
       "enabled": true,
       "protocol": "modbus_rtu",
       "port": "/dev/ttyRS485-2",
+      "pollPeriodMs": 300,
       "modbus": {
         "profileId": "vrf_add_controller",
         "baudRate": 9600,
@@ -1584,6 +1588,7 @@ id
 enabled
 protocol
 port
+pollPeriodMs
 modbus (только для modbus_rtu)
 addresses
 ```
@@ -1640,7 +1645,19 @@ Port:
 /dev/serial/by-id/usb-adapter_1
 ```
 
-### 39.4. Addresses
+### 39.4. Poll period
+
+`pollPeriodMs` — integer-период между началами операций конкретной шины:
+
+```text
+MDV:        150..60000 ms, default 150 ms
+Modbus RTU: 150..60000 ms, default 300 ms
+```
+
+Поле необязательно при чтении старой конфигурации. Parser подставляет protocol
+default, а canonical serializer всегда записывает эффективное значение.
+
+### 39.5. Addresses
 
 Каждый address:
 
@@ -1653,7 +1670,7 @@ Addresses уникальны внутри bus.
 
 Canonical serializer сортирует их по возрастанию.
 
-### 39.5. Enabled bus
+### 39.6. Enabled bus
 
 Для:
 
@@ -1669,7 +1686,7 @@ Disabled bus может иметь:
 "addresses": []
 ```
 
-### 39.6. Modbus settings
+### 39.7. Modbus settings
 
 `profileId` должен быть canonical profile ID. `baudRate`, `dataBits`, `parity`
 и `stopBits` проходят строгую schema-проверку, а при построении service plan
@@ -1677,7 +1694,7 @@ Disabled bus может иметь:
 профиля. Неизвестный, malformed или runtime-непригодный профиль блокирует запуск
 и discovery до открытия serial port.
 
-### 39.7. Canonical order
+### 39.8. Canonical order
 
 Serializer сортирует buses по `id`.
 
@@ -1863,13 +1880,31 @@ Manager заменяет или добавляет:
 MDVWB_BUS
 MDVWB_PORT
 MDVWB_ADDRESSES
+MDVWB_PROTOCOL
 ```
 
-Другие переменные template сохраняются, например:
+Для MDV manager записывает настроенный `pollPeriodMs` в:
+
+```text
+MDVWB_PERIOD_MS
+```
+
+Для Modbus RTU он записывает профиль, serial settings и настроенный
+`pollPeriodMs`, включая:
+
+```text
+MDVWB_MODBUS_PROFILE
+MDVWB_MODBUS_BAUD_RATE
+MDVWB_MODBUS_DATA_BITS
+MDVWB_MODBUS_PARITY
+MDVWB_MODBUS_STOP_BITS
+MDVWB_MODBUS_POLL_PERIOD_MS
+```
+
+Остальные переменные template сохраняются, например:
 
 ```text
 MDVWB_MASTER_ID
-MDVWB_PERIOD_MS
 MDVWB_RESPONSE_TIMEOUT_MS
 MDVWB_MQTT_HOST
 MDVWB_MQTT_PORT
@@ -2981,7 +3016,7 @@ visible
 
 ```text
 id length = 1..64 bytes
-number = 1..200
+number = 0..200
 bus = 1..999
 address = 0..63
 label length = 1..120 bytes
@@ -3256,7 +3291,7 @@ Editor поддерживает:
 - отдельную background;
 - выбор устройств из `buses.json`;
 - включение и скрытие placements;
-- пользовательский номер `1..200`;
+- пользовательский номер `0..200`;
 - label;
 - drag marker;
 - координаты в процентах;
@@ -3840,7 +3875,7 @@ result before current retained dashboard
 - independent background;
 - 0..4096 placements per panel;
 - placement ID;
-- number 1..200;
+- number 0..200;
 - bus/address range;
 - per-panel duplicate device;
 - x/y `0..1`;

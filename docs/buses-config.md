@@ -18,6 +18,7 @@
       "enabled": true,
       "protocol": "mdv",
       "port": "/dev/ttyRS485-1",
+      "pollPeriodMs": 150,
       "addresses": [0, 1, 2]
     },
     {
@@ -25,6 +26,7 @@
       "enabled": true,
       "protocol": "modbus_rtu",
       "port": "/dev/ttyRS485-2",
+      "pollPeriodMs": 300,
       "modbus": {
         "profileId": "vrf_add_controller",
         "baudRate": 9600,
@@ -46,6 +48,9 @@
 - `port` — уникальный безопасный абсолютный путь, начинающийся с `/dev/`;
 - допустимы только протоколы `mdv` и `modbus_rtu`; отсутствие `protocol` в
   legacy-конфигурации означает `mdv`, но canonical output пишет поле явно;
+- `pollPeriodMs` задаётся отдельно для каждой шины: `150..60000` для MDV и
+  `150..60000` для Modbus RTU; при отсутствии поля используются соответственно
+  `150` и `300`, а canonical output всегда пишет эффективное значение;
 - адреса MDV находятся в диапазоне `0..63`, Modbus RTU — `1..63`;
 - адреса уникальны внутри шины, а enabled-шина должна содержать хотя бы один
   адрес;

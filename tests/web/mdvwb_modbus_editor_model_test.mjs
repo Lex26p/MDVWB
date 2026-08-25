@@ -9,7 +9,9 @@ import {
   cloneConfiguration,
   configurationToJson,
   configurationWithDiscoveryAddresses,
+  defaultBusPollPeriodMs,
   findModbusProfile,
+  minimumBusPollPeriodMs,
   normalizeBus,
   normalizeConfiguration,
   normalizeModbusProfileCatalog,
@@ -127,6 +129,7 @@ function testModbusBusIsDerivedFromCatalog() {
     protocol: "modbus_rtu",
     profileId: "vrf_add_controller",
     port: "/dev/ttyRS485-2",
+    pollPeriodMs: "750",
     addresses: "3, 1, 2",
   }, catalog);
 
@@ -135,6 +138,7 @@ function testModbusBusIsDerivedFromCatalog() {
     enabled: true,
     protocol: "modbus_rtu",
     port: "/dev/ttyRS485-2",
+    pollPeriodMs: 750,
     modbus: {
       profileId: "vrf_add_controller",
       baudRate: 9600,
@@ -147,6 +151,36 @@ function testModbusBusIsDerivedFromCatalog() {
 }
 
 function testProtocolAddressBoundaries() {
+  assert.equal(defaultBusPollPeriodMs("mdv"), 150);
+  assert.equal(defaultBusPollPeriodMs("modbus_rtu"), 300);
+  assert.equal(minimumBusPollPeriodMs("mdv"), 150);
+  assert.equal(minimumBusPollPeriodMs("modbus_rtu"), 150);
+
+  expectThrows(() => normalizeBus({
+    id: 1,
+    enabled: true,
+    protocol: "mdv",
+    port: "/dev/ttyRS485-1",
+    pollPeriodMs: 149,
+    addresses: [1],
+  }), "150–60000");
+
+  expectThrows(() => normalizeBus({
+    id: 2,
+    enabled: true,
+    protocol: "modbus_rtu",
+    port: "/dev/ttyRS485-2",
+    pollPeriodMs: 149,
+    modbus: {
+      profileId: "vrf_add_controller",
+      baudRate: 9600,
+      dataBits: 8,
+      parity: "none",
+      stopBits: 1,
+    },
+    addresses: [0],
+  }), "150–60000");
+
   expectThrows(() => normalizeBus({
     id: 2,
     enabled: true,
@@ -217,13 +251,17 @@ function testCanonicalConfigurationAndClone() {
   const serialized = configurationToJson(config);
   const parsed = JSON.parse(serialized);
   assert.equal(parsed.buses[0].protocol, "mdv");
+  assert.equal(parsed.buses[0].pollPeriodMs, 150);
   assert.equal("modbus" in parsed.buses[0], false);
   assert.equal(parsed.buses[1].modbus.profileId, "vrf_add_controller");
+  assert.equal(parsed.buses[1].pollPeriodMs, 300);
 
   const clone = cloneConfiguration(config);
   clone.buses[1].modbus.baudRate = 19200;
+  clone.buses[1].pollPeriodMs = 900;
   clone.buses[1].addresses.push(3);
   assert.equal(config.buses[1].modbus.baudRate, 9600);
+  assert.equal(config.buses[1].pollPeriodMs, 300);
   assert.deepEqual(config.buses[1].addresses, [1, 2]);
 }
 
@@ -303,6 +341,7 @@ function testProtocolAwareDiscoveryAndAddressSelection() {
     productionCatalog(),
   );
   assert.deepEqual(selected.buses[0].addresses, [1, 5, 18]);
+  assert.equal(selected.buses[0].pollPeriodMs, 300);
   assert.deepEqual(configuration.buses[0].addresses, [1]);
 
   expectThrows(
@@ -321,11 +360,23 @@ function testApplicationWiring() {
     path.join(repositoryRoot, "www/mdvwb/app.js"),
     "utf8",
   );
+  const protocolEditor = fs.readFileSync(
+    path.join(repositoryRoot, "www/mdvwb/modbus-profile-ui.js"),
+    "utf8",
+  );
+  const page = fs.readFileSync(
+    path.join(repositoryRoot, "www/mdvwb/index.html"),
+    "utf8",
+  );
   assert.match(app, /subscribe\("\/mdvwb\/modbus\/profiles"\)/);
   assert.match(app, /topic === "\/mdvwb\/modbus\/profiles"/);
   assert.match(app, /new ModbusBusEditor/);
   assert.match(app, /bus-use-discovery/);
   assert.match(app, /configurationWithDiscoveryAddresses/);
+  assert.match(app, /pollPeriodMs: protocolValues\.pollPeriodMs/);
+  assert.match(protocolEditor, /busPollPeriodMsInput/);
+  assert.match(protocolEditor, /Период опроса, мс/);
+  assert.match(page, /bus-poll-period/);
   assert.doesNotMatch(app, /if\s*\([^)]*profileId\s*===\s*["']/);
 }
 

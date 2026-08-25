@@ -66,7 +66,7 @@ function normalizeFan(input, index) {
   }
   return {
     id,
-    number: integer(inferredFanNumber(fan, index), 1, 200, `Номер фанкойла ${index + 1}`),
+    number: integer(inferredFanNumber(fan, index), 0, 200, `Номер фанкойла ${index + 1}`),
     bus: integer(fan.bus, 1, 999, `Шина маркера ${index + 1}`),
     address: integer(fan.address, 0, 63, `Адрес маркера ${index + 1}`),
     label: text(fan.label, 1, 120, `Подпись маркера ${index + 1}`),
@@ -602,7 +602,7 @@ export function createFanPlacement({ bus, address, number, label, x = 0.5, y = 0
   }
   const assignedNumber = number === undefined || number === null
     ? nextAvailableFanNumber(existingFans)
-    : integer(Number(number), 1, 200, "Номер фанкойла");
+    : integer(number === "" ? Number.NaN : Number(number), 0, 200, "Номер фанкойла");
   if ((existingFans || []).some((fan) => Number(fan.number) === assignedNumber)) {
     throw new Error(`Номер фанкойла ${assignedNumber} уже используется`);
   }

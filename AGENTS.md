@@ -327,6 +327,8 @@ ctest --test-dir out/build/x64-debug -C Debug --output-on-failure
 - manager is the writer and source-of-truth owner;
 - canonical manager output includes `revision`;
 - missing `protocol` is accepted as legacy `mdv`, while canonical output writes it explicitly;
+- `pollPeriodMs` is configured per bus; missing values default to `150` for
+  MDV and `300` for Modbus RTU, while canonical output writes the effective value;
 - `modbus_rtu` buses require validated profile and serial settings and logical addresses `1..63`;
 - generated `/etc/default/mdvwb-<bus>` files are derivatives;
 - changes may start, restart, stop, or remove only affected service instances;
@@ -364,7 +366,8 @@ This file prevents an automatic schedule from executing twice after a scheduler 
 - bytes outside a response are ignored until `0xAA`;
 - a payload `0x55` does not terminate response collection early;
 - all C0/C3/CC/CD transactions share one start-to-start pacer;
-- default period is 150 ms and response timeout is 130 ms;
+- the managed per-bus period defaults to 150 ms, is configurable in the
+  `150..60000 ms` range, and the response timeout remains 130 ms;
 - command address is individual `0..63`; broadcast `0xFF` is not used;
 - Power is independent from Mode;
 - an outgoing C3 has exactly one Mode and one Speed selection;
@@ -393,9 +396,9 @@ This file prevents an automatic schedule from executing twice after a scheduler 
 - an already-online device becomes offline only after three consecutive failed
   complete polling attempts; one complete successful poll resets the counter
   and restores online state;
-- the default Modbus logical-device operation period is 300 ms and is a lower
-  bound for ordinary polls, writes, confirmations and retry scheduling; this
-  does not change the native MDV 150 ms transaction period;
+- the managed per-bus Modbus logical-device operation period defaults to
+  300 ms, is configurable in the `150..60000 ms` range, and is a lower bound
+  for ordinary polls, writes, confirmations and retry scheduling;
 - write and confirmation failures do not change availability by themselves;
   runtime failure diagnostics identify the logical address, stage, Slave ID
   and register or register range;

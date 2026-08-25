@@ -1,5 +1,7 @@
 import {
+  defaultBusPollPeriodMs,
   findModbusProfile,
+  minimumBusPollPeriodMs,
   normalizeModbusProfileCatalog,
 } from "./model.js";
 
@@ -100,6 +102,19 @@ export class ModbusBusEditor {
       '<option value="modbus_rtu">Modbus RTU</option>';
     const protocolField = createField("Протокол", this.protocolInput);
 
+    this.pollPeriodInput = document.createElement("input");
+    this.pollPeriodInput.id = "busPollPeriodMsInput";
+    this.pollPeriodInput.type = "number";
+    this.pollPeriodInput.step = "1";
+    this.pollPeriodInput.max = "60000";
+    this.pollPeriodInput.value = String(defaultBusPollPeriodMs("mdv"));
+    this.pollPeriodField = createField(
+      "Период опроса, мс",
+      this.pollPeriodInput,
+    );
+    this.pollPeriodHint = document.createElement("small");
+    this.pollPeriodField.append(this.pollPeriodHint);
+
     this.profileInput = document.createElement("select");
     this.profileInput.id = "busModbusProfileInput";
     this.profileField = createField("Профиль Modbus", this.profileInput);
@@ -141,6 +156,7 @@ export class ModbusBusEditor {
     this.catalogStatus.id = "busModbusCatalogStatus";
 
     grid.insertBefore(protocolField, addressField);
+    grid.insertBefore(this.pollPeriodField, addressField);
     grid.insertBefore(this.profileField, addressField);
     grid.insertBefore(this.transportPanel, addressField);
     grid.insertBefore(this.capabilitySummary, addressField);
@@ -148,8 +164,21 @@ export class ModbusBusEditor {
 
     this.addressHint = addressInput.parentElement?.querySelector("small") || null;
 
+    this.previousProtocol = this.protocolInput.value;
     this.protocolInput.addEventListener("change", () => {
+      const previousDefault = defaultBusPollPeriodMs(this.previousProtocol);
+      const currentPeriod = Number(this.pollPeriodInput.value);
+      const nextMinimum = minimumBusPollPeriodMs(this.protocolInput.value);
+      if (currentPeriod === previousDefault || currentPeriod < nextMinimum) {
+        this.pollPeriodInput.value = String(
+          defaultBusPollPeriodMs(this.protocolInput.value),
+        );
+      }
+      this.previousProtocol = this.protocolInput.value;
       this.render();
+      this.notifyChange();
+    });
+    this.pollPeriodInput.addEventListener("input", () => {
       this.notifyChange();
     });
     this.profileInput.addEventListener("change", () => {
@@ -182,6 +211,10 @@ export class ModbusBusEditor {
     this.protocolInput.value = bus?.protocol === "modbus_rtu"
       ? "modbus_rtu"
       : "mdv";
+    this.previousProtocol = this.protocolInput.value;
+    this.pollPeriodInput.value = String(
+      bus?.pollPeriodMs ?? defaultBusPollPeriodMs(this.protocolInput.value),
+    );
     this.fallbackSettings = bus?.modbus ? { ...bus.modbus } : null;
     this.populateProfiles(bus?.modbus?.profileId || "");
     this.render();
@@ -189,6 +222,8 @@ export class ModbusBusEditor {
 
   reset() {
     this.protocolInput.value = "mdv";
+    this.previousProtocol = "mdv";
+    this.pollPeriodInput.value = String(defaultBusPollPeriodMs("mdv"));
     this.fallbackSettings = null;
     this.populateProfiles("");
     this.render();
@@ -197,6 +232,7 @@ export class ModbusBusEditor {
   values() {
     return {
       protocol: this.protocolInput.value,
+      pollPeriodMs: this.pollPeriodInput.value,
       profileId: this.protocolInput.value === "modbus_rtu"
         ? this.profileInput.value
         : "",
@@ -236,6 +272,10 @@ export class ModbusBusEditor {
 
   render() {
     const modbus = this.protocolInput.value === "modbus_rtu";
+    const minimumPeriod = minimumBusPollPeriodMs(this.protocolInput.value);
+    this.pollPeriodInput.min = String(minimumPeriod);
+    this.pollPeriodHint.textContent =
+      `Допустимо ${minimumPeriod}–60000 мс. Изменение перезапускает только эту шину.`;
     this.profileField.hidden = !modbus;
     this.transportPanel.hidden = !modbus;
     this.capabilitySummary.hidden = !modbus;

@@ -26,6 +26,8 @@ assert.match(placement, /setDeviceVisible/);
 assert.match(placement, /snapCoordinate/);
 assert.match(placement, /dashboard\.fans\.filter\(\(fan\) => fan\.visible\)/);
 assert.match(placement, /fan-marker-number/);
+assert.match(placement, /number < 0/);
+assert.match(html, /id="dashboardMarkerNumber"[^>]*min="0"/);
 assert.doesNotMatch(placement, /const FAN_ICON/);
 assert.match(css, /dashboard-grid-enabled::after/);
 assert.match(css, /background-size: 1% 100%, 100% 1%, 5% 100%, 100% 5%/);

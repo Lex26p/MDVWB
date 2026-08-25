@@ -1,5 +1,6 @@
 #include "mdvwb_service_sync.h"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -123,6 +124,8 @@ void TestCreateAndApply() {
             "generated port is wrong");
     Require(bus1.find("MDVWB_BUS=\"1\"") != std::string::npos,
             "generated bus id is wrong");
+    Require(bus1.find("MDVWB_PERIOD_MS=\"150\"") != std::string::npos,
+            "generated MDV default poll period is wrong");
 
     Require(ContainsCommand(
                 runner.commands,
@@ -132,6 +135,54 @@ void TestCreateAndApply() {
                 runner.commands,
                 {"fake-systemctl", "disable", "--now", "mdvwb@2.service"}),
             "disabled bus was not stopped");
+}
+
+void TestPollPeriodChangeRestartsOnlyChangedBus() {
+    TemporaryDirectory temporary;
+    const auto defaults = temporary.Path() / "defaults";
+    const auto environmentTemplate = temporary.Path() / "mdvwb.env";
+    std::filesystem::create_directories(defaults);
+    WriteTemplate(environmentTemplate);
+
+    mdvwb::ServiceSyncPaths paths;
+    paths.defaultDirectory = defaults;
+    paths.environmentTemplate = environmentTemplate;
+    paths.systemctlProgram = "fake-systemctl";
+
+    RecordingRunner initialRunner;
+    mdvwb::ApplyServiceSyncPlan(
+        mdvwb::BuildServiceSyncPlan(InitialConfig(), paths), paths, initialRunner);
+
+    const auto changed = mdvwb::ParseBusesConfig(R"json({
+      "version": 1,
+      "buses": [
+        {"id": 1, "enabled": true, "port": "/dev/ttyRS485-1", "pollPeriodMs": 500, "addresses": [3,1,2]},
+        {"id": 2, "enabled": false, "port": "/dev/serial/by-id/mdv-bus-2", "addresses": []}
+      ]
+    })json");
+
+    const auto plan = mdvwb::BuildServiceSyncPlan(changed, paths);
+    std::ostringstream printed;
+    mdvwb::PrintServiceSyncPlan(plan, printed);
+    Require(
+        printed.str().find("ENABLE_RESTART bus=1") != std::string::npos,
+        "MDV poll period change did not restart the changed bus");
+    Require(
+        printed.str().find("WRITE_CONFIG bus=2") == std::string::npos,
+        "MDV poll period change rewrote an unrelated bus");
+
+    const auto write = std::find_if(
+        plan.actions.begin(),
+        plan.actions.end(),
+        [](const mdvwb::ServiceAction& action) {
+            return action.busId == 1 &&
+                action.type == mdvwb::ServiceActionType::WriteConfig;
+        });
+    Require(write != plan.actions.end(), "poll period plan omitted config write");
+    Require(
+        write->configContent.find("MDVWB_PERIOD_MS=\"500\"") !=
+            std::string::npos,
+        "configured MDV poll period was not rendered");
 }
 
 void TestChangedAndRemovedBuses() {
@@ -210,6 +261,7 @@ int main() {
     try {
         TestCreateAndApply();
         TestChangedAndRemovedBuses();
+        TestPollPeriodChangeRestartsOnlyChangedBus();
         TestSystemctlFailure();
         std::cout << "MDVWB service synchronization tests: OK\n";
         return 0;

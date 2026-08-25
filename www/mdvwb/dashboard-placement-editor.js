@@ -235,12 +235,13 @@ export class DashboardPlacementEditor {
     });
 
     this.elements.numberInput.addEventListener("change", () => {
-      const number = Number(this.elements.numberInput.value);
+      const rawNumber = this.elements.numberInput.value.trim();
+      const number = Number(rawNumber);
       const dashboard = this.getDashboard();
       const duplicate = dashboard.fans.some((fan) => fan.id !== this.selectedId && Number(fan.number) === number);
-      if (!Number.isInteger(number) || number < 1 || number > 200 || duplicate) {
+      if (rawNumber === "" || !Number.isInteger(number) || number < 0 || number > 200 || duplicate) {
         this.elements.numberInput.setCustomValidity(
-          duplicate ? `Номер ${number} уже используется` : "Введите целое число от 1 до 200",
+          duplicate ? `Номер ${number} уже используется` : "Введите целое число от 0 до 200",
         );
         this.elements.numberInput.reportValidity();
         const selected = dashboard.fans.find((fan) => fan.id === this.selectedId);

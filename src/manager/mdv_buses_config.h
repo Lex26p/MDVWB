@@ -34,6 +34,10 @@ struct BusConfig {
     std::string port;
     std::vector<int> addresses;
 
+    // Zero is an internal "use the protocol default" sentinel. Parsed and
+    // canonical configurations always contain the effective positive value.
+    int pollPeriodMs = 0;
+
     // Backward compatibility: an old buses.json without "protocol" remains MDV.
     BusProtocol protocol = BusProtocol::Mdv;
     std::optional<ModbusBusSettings> modbus;

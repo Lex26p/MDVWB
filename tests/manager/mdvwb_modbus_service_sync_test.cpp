@@ -137,6 +137,7 @@ mdvwb::BusesConfig ModbusConfig(std::string_view profileId)
         "\"enabled\":true,"
         "\"protocol\":\"modbus_rtu\","
         "\"port\":\"/dev/ttyRS485-2\","
+        "\"pollPeriodMs\":750,"
         "\"modbus\":{"
         "\"profileId\":\"" + std::string(profileId) + "\","
         "\"baudRate\":9600,"
@@ -184,11 +185,11 @@ void TestModbusRuntimeEnvironment()
         "runtime environment omitted stop bits");
     Require(
         content.find("MDVWB_PERIOD_MS=\"150\"") != std::string::npos &&
-            content.find("MDVWB_MODBUS_POLL_PERIOD_MS=\"300\"") !=
+            content.find("MDVWB_MODBUS_POLL_PERIOD_MS=\"750\"") !=
                 std::string::npos &&
             content.find("MDVWB_MODBUS_COMMAND_PERIOD_MS=\"300\"") !=
                 std::string::npos,
-        "Modbus timing changed the MDV period or omitted the 300 ms bounds");
+        "Modbus timing changed the MDV period or omitted the configured poll period");
     Require(
         content.find("MDVWB_ADDRESSES=\"1,2,63\"") != std::string::npos,
         "runtime environment omitted logical addresses");

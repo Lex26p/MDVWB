@@ -362,17 +362,28 @@ Power/Mode/Speed/SetTemp доступны только после первого
 online. Ошибки записи и отдельного confirmation read сами по себе offline не
 публикуют.
 
-Штатный Modbus-интервал задаётся отдельно:
+Период опроса задаётся в редакторе каждой шины и сохраняется в верхнеуровневом
+поле `pollPeriodMs` объекта шины. Для MDV допустимы `150..60000 ms` с default
+`150 ms`, для Modbus RTU — `150..60000 ms` с default `300 ms`. Изменение
+перезапускает только затронутую шину.
+
+Manager переносит значение в соответствующий generated environment:
 
 ```text
-MDVWB_MODBUS_POLL_PERIOD_MS="300"
+MDV:        MDVWB_PERIOD_MS
+Modbus RTU: MDVWB_MODBUS_POLL_PERIOD_MS
+```
+
+Остальные штатные Modbus-интервалы остаются в template:
+
+```text
 MDVWB_MODBUS_COMMAND_PERIOD_MS="300"
 MDVWB_MODBUS_RETRY_PERIOD_MS="500"
 ```
 
 `MDVWB_MODBUS_POLL_PERIOD_MS` является нижней границей и для обычного опроса,
 и для write/confirmation. Поэтому команда больше не создаёт ускоренный цикл
-`20 ms`. `MDVWB_PERIOD_MS="150"` продолжает относиться к родному MDV-протоколу.
+`20 ms`. `MDVWB_PERIOD_MS` относится только к родному MDV-протоколу.
 
 Web:
 

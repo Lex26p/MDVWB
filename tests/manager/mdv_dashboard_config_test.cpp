@@ -44,7 +44,7 @@ const char* kValidConfig = R"JSON({
   "fans": [
     {
       "id": "fan-2-18",
-      "number": 18,
+      "number": 0,
       "bus": 2,
       "address": 18,
       "label": "Переговорная",
@@ -75,10 +75,12 @@ void TestParseAndCanonicalSerialize() {
     Expect(config.revision == 4, "revision");
     Expect(config.background.naturalWidth == 2400, "background width");
     Expect(config.fans.size() == 2U, "fan count");
-    Expect(config.fans[0].number == 18, "user number");
+    Expect(config.fans[0].number == 0, "zero user number");
     Expect(config.fans[0].bus == 2, "input order remains available after parse");
 
     const std::string serialized = mdvwb::SerializeDashboardConfig(config);
+    Expect(serialized.find("\"number\": 0") != std::string::npos,
+           "canonical serializer lost zero user number");
     const std::size_t first = serialized.find("\"id\": \"fan-1-3\"");
     const std::size_t second = serialized.find("\"id\": \"fan-2-18\"");
     Expect(first != std::string::npos && second != std::string::npos && first < second,
@@ -131,6 +133,14 @@ void TestEmptyBackground() {
 }
 
 void TestStrictValidation() {
+    ExpectConfigError([] {
+        mdvwb::ParseDashboardConfig(R"JSON({
+          "version": 1, "revision": 0, "title": "X",
+          "background": {"file":"","naturalWidth":0,"naturalHeight":0,"defaultScale":1,"fit":"contain"},
+          "fans": [{"id":"a","number":-1,"bus":1,"address":1,"label":"A","x":0,"y":0,"markerScale":1,"rotation":0,"visible":true}]
+        })JSON");
+    }, "0..200");
+
     ExpectConfigError([] {
         mdvwb::ParseDashboardConfig(R"JSON({
           "version": 1, "revision": 0, "title": "X",

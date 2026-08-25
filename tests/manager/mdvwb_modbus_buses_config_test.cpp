@@ -64,6 +64,7 @@ void TestLegacyBusDefaultsToMdv()
     Require(
         bus.addresses == std::vector<int>({0, 1, 63}),
         "legacy MDV addresses changed");
+    Require(bus.pollPeriodMs == 150, "legacy MDV poll period changed");
 
     const auto serialized =
         mdvwb::SerializeBusesConfig(config);
@@ -84,6 +85,7 @@ void TestExplicitMdvBus()
       "enabled": true,
       "protocol": "mdv",
       "port": "/dev/ttyUSB0",
+      "pollPeriodMs": 450,
       "addresses": [5, 0]
     }
   ]
@@ -98,6 +100,9 @@ void TestExplicitMdvBus()
         config.buses.front().addresses ==
             std::vector<int>({0, 5}),
         "explicit MDV addresses were not normalized");
+    Require(
+        config.buses.front().pollPeriodMs == 450,
+        "explicit MDV poll period mismatch");
 }
 
 void TestValidModbusBus()
@@ -112,6 +117,7 @@ void TestValidModbusBus()
       "enabled": true,
       "protocol": "modbus_rtu",
       "port": "/dev/ttyRS485-2",
+      "pollPeriodMs": 150,
       "modbus": {
         "profileId": "vrf_add_controller",
         "baudRate": 9600,
@@ -141,6 +147,7 @@ void TestValidModbusBus()
         bus.modbus->parity == mdvwb::BusParity::None,
         "Modbus parity mismatch");
     Require(bus.modbus->stopBits == 1, "Modbus stop bits mismatch");
+    Require(bus.pollPeriodMs == 150, "Modbus poll period mismatch");
     Require(
         bus.addresses == std::vector<int>({1, 2, 63}),
         "Modbus addresses were not normalized");
@@ -157,10 +164,44 @@ void TestValidModbusBus()
         roundTrip.buses.front().modbus->profileId ==
             "vrf_add_controller",
         "round trip changed profile id");
+    Require(
+        roundTrip.buses.front().pollPeriodMs == 150,
+        "round trip changed poll period");
 }
 
 void TestProtocolSpecificValidation()
 {
+    ExpectError(R"json({
+      "version": 1,
+      "buses": [{
+        "id": 1,
+        "enabled": true,
+        "protocol": "mdv",
+        "port": "/dev/a",
+        "pollPeriodMs": 149,
+        "addresses": [1]
+      }]
+    })json", "150..60000 for protocol mdv");
+
+    ExpectError(R"json({
+      "version": 1,
+      "buses": [{
+        "id": 1,
+        "enabled": true,
+        "protocol": "modbus_rtu",
+        "port": "/dev/a",
+        "pollPeriodMs": 149,
+        "modbus": {
+          "profileId": "vrf_add_controller",
+          "baudRate": 9600,
+          "dataBits": 8,
+          "parity": "none",
+          "stopBits": 1
+        },
+        "addresses": [1]
+      }]
+    })json", "150..60000 for protocol modbus_rtu");
+
     ExpectError(R"json({
       "version": 1,
       "buses": [{

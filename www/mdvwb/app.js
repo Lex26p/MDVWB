@@ -206,6 +206,7 @@ function createBusCard(bus) {
   fragment.querySelector(".bus-title").textContent = protocolDisplayName(bus, state.profileCatalog);
   fragment.querySelector(".bus-port").textContent = bus.port;
   fragment.querySelector(".bus-addresses").textContent = formatAddresses(bus.addresses);
+  fragment.querySelector(".bus-poll-period").textContent = `${bus.pollPeriodMs} мс`;
   fragment.querySelector(".bus-enabled").textContent = bus.enabled ? "Активна" : "Отключена";
   fragment.querySelector(".bus-autostart").textContent =
     typeof status.autostart === "boolean" ? (status.autostart ? "Включён" : "Выключен") : "Нет данных";
@@ -301,6 +302,7 @@ function saveEditorToDraft() {
     protocol: protocolValues.protocol,
     profileId: protocolValues.profileId,
     port: elements.busPortInput.value,
+    pollPeriodMs: protocolValues.pollPeriodMs,
     addresses: elements.busAddressesInput.value,
   }, state.profileCatalog);
 

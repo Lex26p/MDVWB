@@ -16,6 +16,7 @@ assert.deepEqual(model.busFromEditorValues({
   enabled: true,
   protocol: "mdv",
   port: "/dev/ttyUSB0",
+  pollPeriodMs: 150,
   addresses: [1, 2, 3],
 });
 
@@ -47,6 +48,7 @@ const config = model.normalizeConfiguration({
 assert.equal(config.revision, 17);
 assert.deepEqual(config.buses.map((bus) => bus.id), [1, 3]);
 assert.deepEqual(config.buses[0].addresses, [1, 2, 3]);
+assert.equal(config.buses[0].pollPeriodMs, 150);
 assert.equal(model.nextAvailableBusId(config), 2);
 assert.equal(model.configurationsEqual(config, model.cloneConfiguration(config)), true);
 assert.equal(model.cloneConfiguration(config).revision, 17);

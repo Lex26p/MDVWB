@@ -148,7 +148,15 @@ std::string RenderBusEnvironment(
             result,
             "MDVWB_MODBUS_STOP_BITS",
             std::to_string(settings.stopBits));
+        result = ReplaceEnvironmentValue(
+            result,
+            "MDVWB_MODBUS_POLL_PERIOD_MS",
+            std::to_string(bus.pollPeriodMs));
     } else {
+        result = ReplaceEnvironmentValue(
+            result,
+            "MDVWB_PERIOD_MS",
+            std::to_string(bus.pollPeriodMs));
         // A common template may already contain Modbus fields. Clear them for
         // MDV so switching a bus back to MDV cannot leave stale runtime data.
         result = ReplaceEnvironmentValue(result, "MDVWB_MODBUS_PROFILE", "");

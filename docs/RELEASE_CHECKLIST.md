@@ -358,9 +358,11 @@ SetTemp и factual Temp. Temp должен совпадать с темпера�
 online. В `journalctl -u mdvwb@<bus>.service` каждая ошибка должна содержать
 устройство, stage, Slave ID, register/range и счётчик `N/3`.
 
-Runtime startup для Modbus должен показывать `cadence=300/300/500 ms`. После
-одиночной команды write, confirmation и следующий ordinary poll не должны
-использовать прежний ускоренный интервал `20 ms`; MDV period остаётся `150 ms`.
+Runtime startup для Modbus должен показывать первым cadence настроенный для
+шины `pollPeriodMs` (`300 ms` по умолчанию). После одиночной команды write,
+confirmation и следующий ordinary poll не должны запускаться раньше этого
+периода. Для MDV проверьте выбранный период (`150 ms` по умолчанию). В обоих
+случаях изменение настройки должно перезапускать только затронутую шину.
 
 ## 20. Group, schedule and discovery smoke
 

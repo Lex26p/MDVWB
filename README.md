@@ -65,8 +65,9 @@ Important invariants:
 - transient Modbus read failures preserve an established online state; the
   device changes to offline after three consecutive failed complete polls and
   recovers after the first complete successful poll;
-- Modbus starts the next logical-device operation no sooner than 300 ms by
-  default, including after a write or confirmation; native MDV remains 150 ms.
+- each bus has its own `pollPeriodMs`: MDV defaults to `150 ms` and accepts
+  `150..60000 ms`, while Modbus RTU defaults to `300 ms` and accepts
+  `150..60000 ms`; the Modbus value also limits writes and confirmations.
 
 The shipped `vrf_add_controller` enables Mode, FanSpeed, integer
 SetTemperature and integer RoomTemperature as field-validation mappings from

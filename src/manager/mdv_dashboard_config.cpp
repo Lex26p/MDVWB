@@ -544,7 +544,7 @@ DashboardFanPlacement ParsePlacement(const JsonValue& value, std::size_t index) 
     const auto number = object.find("number");
     result.number = number == object.end()
         ? static_cast<int>(index + 1U)
-        : RequireIntegerInRange(number->second, 1, 200, path + ".number");
+        : RequireIntegerInRange(number->second, 0, 200, path + ".number");
     result.bus = RequireIntegerInRange(RequireField(object, "bus", path), 1, 999, path + ".bus");
     result.address = RequireIntegerInRange(
         RequireField(object, "address", path), 0, 63, path + ".address");
@@ -611,8 +611,8 @@ void ValidateConfig(const DashboardConfig& config) {
             throw DashboardConfigError(
                 "dashboard fan id may contain only letters, digits, '_' and '-'");
         }
-        if (fan.number < 1 || fan.number > 200) {
-            throw DashboardConfigError("dashboard fan number must be in range 1..200");
+        if (fan.number < 0 || fan.number > 200) {
+            throw DashboardConfigError("dashboard fan number must be in range 0..200");
         }
         if (fan.bus < 1 || fan.bus > 999) {
             throw DashboardConfigError("dashboard fan bus must be in range 1..999");

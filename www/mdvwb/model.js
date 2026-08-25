@@ -53,6 +53,15 @@ function normalizeProtocol(value) {
   return protocol;
 }
 
+export function defaultBusPollPeriodMs(protocol) {
+  return normalizeProtocol(protocol) === "modbus_rtu" ? 300 : 150;
+}
+
+export function minimumBusPollPeriodMs(protocol) {
+  normalizeProtocol(protocol);
+  return 150;
+}
+
 function normalizeAddresses(values, enabled, minimum = 0, maximum = 63) {
   if (!Array.isArray(values)) {
     throw new Error("Список адресов должен быть массивом");
@@ -258,11 +267,20 @@ export function normalizeBus(value) {
 
   const enabled = value.enabled;
   const protocol = normalizeProtocol(value.protocol);
+  const pollPeriodMs = value.pollPeriodMs === undefined
+    ? defaultBusPollPeriodMs(protocol)
+    : requireInteger(
+      value.pollPeriodMs,
+      minimumBusPollPeriodMs(protocol),
+      60000,
+      "Период опроса",
+    );
   const result = {
     id: requireInteger(value.id, 1, 999, "Номер шины"),
     enabled,
     protocol,
     port: normalizePort(value.port),
+    pollPeriodMs,
   };
 
   if (protocol === "modbus_rtu") {
@@ -315,16 +333,20 @@ export function normalizeConfiguration(value) {
 }
 
 export function busFromEditorValues(
-  { id, enabled, protocol = "mdv", port, addresses, profileId },
+  { id, enabled, protocol = "mdv", port, pollPeriodMs, addresses, profileId },
   profileCatalog = { schemaVersion: 1, profiles: [], issues: [] },
 ) {
   const numericId = typeof id === "number" ? id : Number(String(id).trim());
   const normalizedProtocol = normalizeProtocol(protocol);
+  const numericPollPeriod = pollPeriodMs === undefined
+    ? defaultBusPollPeriodMs(normalizedProtocol)
+    : Number(String(pollPeriodMs).trim());
   const value = {
     id: numericId,
     enabled: enabled === true,
     protocol: normalizedProtocol,
     port,
+    pollPeriodMs: numericPollPeriod,
     addresses: parseAddressesInput(addresses),
   };
 

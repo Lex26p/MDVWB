@@ -276,17 +276,19 @@ Milestone 11 now provides:
 - write/confirmation failures do not independently change device availability;
 - journal diagnostics identify the logical device, failing stage, Slave ID,
   register or register range, and the ordinary-poll failure counter;
-- a protocol-specific 300 ms start-to-start lower bound for logical-device
-  operations; successful writes/confirmations and retries cannot accelerate
-  scheduling below the configured poll period;
+- a per-bus `pollPeriodMs` start-to-start lower bound of `150..60000 ms`
+  (`300 ms` by default) for logical-device operations; successful
+  writes/confirmations and retries cannot accelerate scheduling below it;
 - bounded configurable write attempts, confirmation attempts and priority burst before an ordinary poll;
 - retry backoff that reduces repeated traffic after timeout, I/O or invalid-response outcomes.
 
 Default behavior uses three write attempts, three confirmation attempts and at
 most four priority operations before polling. The Modbus logical-device period
-is 300 ms; command/confirmation work is also bounded to 300 ms and failed work
-uses 500 ms. Native MDV retains its independent 150 ms period. The serial
-transport still enforces Modbus RTU inter-frame timing independently.
+defaults to 300 ms and is configurable per bus up to 60000 ms;
+command/confirmation work uses the configured poll period as its lower bound,
+and failed work keeps the larger configured retry interval. Native MDV has its
+own per-bus `150..60000 ms` period. The serial transport still enforces Modbus
+RTU inter-frame timing independently.
 
 For the current `vrf_add_controller` profile, Power, Mode, FanSpeed and integer
 SetTemperature occupy adjacent registers `40028..40031` and are read in one
