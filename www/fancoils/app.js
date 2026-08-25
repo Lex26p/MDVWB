@@ -858,8 +858,11 @@ function centerMap(behavior = "auto") {
 }
 
 function markerNumber(fan) {
-  const configured = Number(fan?.number);
-  if (Number.isInteger(configured) && configured >= 1 && configured <= 200) {
+  const value = fan?.number;
+  const configured = value === undefined || value === null || value === ""
+    ? Number.NaN
+    : Number(value);
+  if (Number.isInteger(configured) && configured >= 0 && configured <= 200) {
     return String(configured);
   }
   const label = String(fan?.label || "").trim();

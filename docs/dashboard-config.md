@@ -130,8 +130,9 @@ is no permanent image-upload block in the editor.
 Rules:
 
 - `id`: unique inside the panel, 1–64 characters, `[A-Za-z0-9_-]`;
-- `number`: unique user number `0..200` inside the panel; automatic numbering
-  still selects the first free value in `1..200`;
+- `number`: unique user number `0..200` inside the panel; a new placement uses
+  its configured bus address as the initial number, or the first free value in
+  `0..200` when that number is already occupied on the panel;
 - `bus`: `1..999`;
 - `address`: `0..63`;
 - one placement per `bus/address` inside the panel;

@@ -11,6 +11,7 @@ import {
   deviceKey,
   findDashboardPanel,
   inspectDashboardPlacement,
+  nextAvailableFanNumber,
   nextPanelIdentifier,
   normalizeDashboardCollection,
   normalizeDashboardConfiguration,
@@ -87,8 +88,27 @@ const placement = createFanPlacement(
   dashboard.fans,
 );
 assert.equal(placement.id, "fan-2-18");
-assert.equal(placement.number, 1);
+assert.equal(placement.number, 18);
 assert.equal(placement.markerScale, 1);
+assert.equal(nextAvailableFanNumber([]), 0);
+assert.equal(nextAvailableFanNumber([{ number: 0 }]), 1);
+const configuredAddresses = [3, 5, 7, 8, 12, 13];
+const configuredPlacements = [];
+for (const address of configuredAddresses) {
+  configuredPlacements.push(createFanPlacement(
+    { bus: 1, address },
+    configuredPlacements,
+  ));
+}
+assert.deepEqual(
+  configuredPlacements.map((fan) => fan.number),
+  configuredAddresses,
+);
+const duplicateAddressNumber = createFanPlacement(
+  { bus: 2, address: 3 },
+  configuredPlacements,
+);
+assert.equal(duplicateAddressNumber.number, 0);
 const zeroPlacement = createFanPlacement(
   { bus: 2, address: 18, number: 0, label: "Нулевой номер" },
   dashboard.fans,

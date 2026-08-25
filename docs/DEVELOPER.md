@@ -3330,7 +3330,7 @@ rotation
 
 ```text
 id = fan-<bus>-<address>
-number = первый свободный 1..200
+number = address, при конфликте первый свободный 0..200
 label = Fan-<bus>_<address>
 markerScale = текущий общий scale
 visible = true

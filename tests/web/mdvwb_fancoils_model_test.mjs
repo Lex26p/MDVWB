@@ -227,6 +227,7 @@ assert.match(pageCss, /user-select:\s*none/);
 assert.match(pageApp, /subscribe\("\/mdvwb\/config"\)/);
 assert.match(pageApp, /subscribe\("\/mdvwb\/modbus\/profiles"\)/);
 assert.match(pageApp, /fanCommandMatchesState\(control, value, fanState\)/);
+assert.match(pageApp, /configured >= 0 && configured <= 200/);
 assert.match(pageApp, /status: "unchanged"/);
 assert.match(pageApp, /Команда не отправлялась/);
 assert.match(pageApp, /operation\.timedOut > 0 \|\| operation\.failed > 0/);

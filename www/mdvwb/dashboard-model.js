@@ -586,12 +586,12 @@ function uniquePlacementId(base, existingFans) {
 
 export function nextAvailableFanNumber(existingFans = []) {
   const used = new Set((existingFans || []).map((fan) => Number(fan.number)).filter(Number.isInteger));
-  for (let number = 1; number <= 200; number += 1) {
+  for (let number = 0; number <= 200; number += 1) {
     if (!used.has(number)) {
       return number;
     }
   }
-  throw new Error("Все пользовательские номера 1–200 уже заняты");
+  throw new Error("Все пользовательские номера 0–200 уже заняты");
 }
 
 export function createFanPlacement({ bus, address, number, label, x = 0.5, y = 0.5 }, existingFans = []) {
@@ -600,8 +600,11 @@ export function createFanPlacement({ bus, address, number, label, x = 0.5, y = 0
   if ((existingFans || []).some((fan) => Number(fan.bus) === normalizedBus && Number(fan.address) === normalizedAddress)) {
     throw new Error(`Устройство Fan-${normalizedBus}_${normalizedAddress} уже размещено`);
   }
+  const addressNumberIsFree = !(existingFans || []).some(
+    (fan) => Number(fan.number) === normalizedAddress,
+  );
   const assignedNumber = number === undefined || number === null
-    ? nextAvailableFanNumber(existingFans)
+    ? (addressNumberIsFree ? normalizedAddress : nextAvailableFanNumber(existingFans))
     : integer(number === "" ? Number.NaN : Number(number), 0, 200, "Номер фанкойла");
   if ((existingFans || []).some((fan) => Number(fan.number) === assignedNumber)) {
     throw new Error(`Номер фанкойла ${assignedNumber} уже используется`);
