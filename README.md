@@ -77,8 +77,8 @@ Two Modbus profiles are shipped:
   mappings still require target-equipment confirmation; half-degree setpoints
   are not enabled.
 - `thermostat` uses direct Slave IDs, `9600 8N1`, FC03 reads and FC06 writes.
-  It exposes Power, cooling/heating, four fan speeds, whole-degree room
-  temperature and whole-degree setpoints `16..34 °C`. Its exact register map is
+  It exposes Power, cooling/heating, four fan speeds, room temperature from
+  raw tenths and whole-degree setpoints `16..34 °C`. Its exact register map is
   documented in `docs/modbus/THERMOSTAT_PROTOCOL.md` and still requires the
   listed Wiren Board hardware smoke test.
 

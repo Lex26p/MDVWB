@@ -155,14 +155,14 @@ void TestProfileFacts()
         "RoomTemperature type mismatch");
     Require(
         roomTemperature.read.has_value() &&
-            roomTemperature.read->address == 0x2064U,
-        "RoomTemperature must use the integer register");
+            roomTemperature.read->address == 0x2063U,
+        "RoomTemperature must use the raw-tenths register");
     Require(
         !roomTemperature.write.has_value(),
         "RoomTemperature must remain read-only");
     Require(
         roomTemperature.transform.has_value() &&
-            roomTemperature.transform->scale == 1.0 &&
+            roomTemperature.transform->scale == 0.1 &&
             roomTemperature.transform->offset == 0.0,
         "RoomTemperature transform mismatch");
 
@@ -223,7 +223,7 @@ void TestSemanticReadAndWriteMappings()
     mdv::modbus::ApplySemanticRead(state, profile, "mode", 1U);
     mdv::modbus::ApplySemanticRead(state, profile, "fanSpeed", 3U);
     mdv::modbus::ApplySemanticRead(
-        state, profile, "roomTemperature", 23U);
+        state, profile, "roomTemperature", 230U);
     mdv::modbus::ApplySemanticRead(
         state, profile, "setTemperature", 210U);
 
@@ -343,7 +343,6 @@ private:
         case 0x2061U: return 3U;
         case 0x2062U: return 1U;
         case 0x2063U: return 230U;
-        case 0x2064U: return 23U;
         case 0x2065U: return setTemperatureRaw;
         default:
             throw std::runtime_error(

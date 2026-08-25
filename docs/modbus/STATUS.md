@@ -488,10 +488,10 @@ equipment mapping without a manufacturer branch in the common driver:
 - Power `1=off`, `2=on` at `0x2060`;
 - FanSpeed `1=low`, `2=medium`, `3=high`, `4=auto` at `0x2061`;
 - Mode `1=cool`, `2=heat` at `0x2062`;
-- integer RoomTemperature at read-only `0x2064`;
+- RoomTemperature at read-only `0x2063`, converted from raw tenths;
 - SetTemperature at `0x2065`, raw scale `0.1`, limits `16..34` and step `1`.
 
-The alternative room-temperature register `0x2063`, integer setpoint register
+The integer room-temperature register `0x2064`, integer setpoint register
 `0x2066`, the second source-table block and advanced settings are intentionally
 not exposed. Automated tests cover parsing, direct resolution, semantic
 conversion, the FC06 frame and driver-level FC06 write followed by FC03
@@ -612,7 +612,7 @@ Power/Mode/FanSpeed/integer-SetTemperature round trips, offline/recovery behavio
 and multiple configured devices on one bus. Record the observed raw/factual
 values before treating the three newly enabled mappings as hardware-confirmed.
 
-Integer RoomTemperature must be compared with the physical inlet-air
+RoomTemperature from raw-tenths register `0x2063` must be compared with the physical inlet-air
 temperature and checked for invalid/sensor-error values. Half-degree
 SetTemperature remains disabled until its composite behavior is implemented
 and verified.

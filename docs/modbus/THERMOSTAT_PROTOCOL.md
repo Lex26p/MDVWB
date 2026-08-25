@@ -41,7 +41,7 @@ All active points use Holding Registers.
 | `0x2060` | `8288` | R/W | Unit power | `power`: `1=off`, `2=on` |
 | `0x2061` | `8289` | R/W | Unit speed | `fanSpeed`: `1=low`, `2=medium`, `3=high`, `4=auto` |
 | `0x2062` | `8290` | R/W | Unit mode | `mode`: `1=cool`, `2=heat` |
-| `0x2064` | `8292` | R | Integer room temperature | `roomTemperature`: raw value in whole degrees Celsius |
+| `0x2063` | `8291` | R | Room temperature with one decimal place | `roomTemperature`: `physical = raw × 0.1` |
 | `0x2065` | `8293` | R/W | Temperature setpoint with one decimal place | `setTemperature`: `physical = raw × 0.1` |
 
 The exposed setpoint range is `16..34 °C` with a user-facing step of `1 °C`.
@@ -62,7 +62,7 @@ The first source block also contains two alternative representations:
 
 | HEX | DEC | Source meaning | Reason not exposed |
 |---:|---:|---|---|
-| `0x2063` | `8291` | Room temperature with one decimal place | `0x2064` is the selected whole-degree factual value |
+| `0x2064` | `8292` | Integer part of room temperature | Field verification showed that the factual temperature must be read from `0x2063` |
 | `0x2066` | `8294` | Integer part of the setpoint | It is read-only; `0x2065` is required for confirmed read/write control |
 
 The following source data is excluded completely:
@@ -89,7 +89,7 @@ Discovery never sends FC06 and never changes thermostat settings.
 - profile identity, `9600 8N1` and direct Slave addressing;
 - literal addresses `0x2060..0x2065` without an offset;
 - all Power, Mode and FanSpeed mappings;
-- integer room temperature from `0x2064`;
+- room temperature from `0x2063`, including `raw 230 -> 23 °C` conversion;
 - `21 °C <-> raw 210` and limits `16..34 °C`;
 - FC06 request selection by the driver;
 - factual confirmation through FC03.

@@ -110,11 +110,11 @@
       "rawType": "uint16",
       "read": {
         "space": "holding_register",
-        "address": 8292,
-        "reference": "0x2064 (integer part)"
+        "address": 8291,
+        "reference": "0x2063 (0.1 degree)"
       },
       "transform": {
-        "scale": 1,
+        "scale": 0.1,
         "offset": 0
       }
     },

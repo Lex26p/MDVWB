@@ -419,9 +419,10 @@ This file prevents an automatic schedule from executing twice after a scheduler 
   mapping, `9600 8N1`, literal PDU addresses `0x2060..0x2065`, FC03 reads and
   explicit FC06 writes;
 - `thermostat` exposes Power `1/2`, Cool/Heat `1/2`, FanSpeed
-  Low/Medium/High/Auto `1/2/3/4`, integer RoomTemperature from `0x2064`, and
+  Low/Medium/High/Auto `1/2/3/4`, RoomTemperature from raw-tenths register
+  `0x2063`, and
   whole-degree SetTemperature `16..34` through raw-tenths register `0x2065`;
-- the second spreadsheet block, advanced settings, `0x2063` and `0x2066` are
+- the second spreadsheet block, advanced settings, `0x2064` and `0x2066` are
   intentionally not exposed by `thermostat`; its live hardware behavior is not
   yet recorded as confirmed;
 - unsupported controls produce no Modbus wire traffic;
