@@ -56,6 +56,10 @@ verify_modbus_payload()
         echo "Shipped Modbus profile is missing: $SCRIPT_DIR/modbus-profiles/vrf_add_controller.json" >&2
         exit 2
     }
+    [ -r "$SCRIPT_DIR/modbus-profiles/thermostat.json" ] || {
+        echo "Shipped Modbus profile is missing: $SCRIPT_DIR/modbus-profiles/thermostat.json" >&2
+        exit 2
+    }
 }
 
 contains_argument()
@@ -97,16 +101,22 @@ install_modbus_payload()
     install -d -m 0755 "$lib_dir" "$profile_dir"
 
     runtime_tmp=$lib_dir/.mdvwb-modbus.tmp.$$
-    profile_tmp=$profile_dir/.vrf_add_controller.json.tmp.$$
-    trap 'rm -f "$runtime_tmp" "$profile_tmp"' HUP INT TERM
+    vrf_profile_tmp=$profile_dir/.vrf_add_controller.json.tmp.$$
+    thermostat_profile_tmp=$profile_dir/.thermostat.json.tmp.$$
+    trap 'rm -f "$runtime_tmp" "$vrf_profile_tmp" "$thermostat_profile_tmp"' HUP INT TERM
 
     install -m 0755 "$SCRIPT_DIR/mdvwb-modbus" "$runtime_tmp"
     mv -f "$runtime_tmp" "$lib_dir/mdvwb-modbus"
 
     install -m 0644 \
         "$SCRIPT_DIR/modbus-profiles/vrf_add_controller.json" \
-        "$profile_tmp"
-    mv -f "$profile_tmp" "$profile_dir/vrf_add_controller.json"
+        "$vrf_profile_tmp"
+    mv -f "$vrf_profile_tmp" "$profile_dir/vrf_add_controller.json"
+
+    install -m 0644 \
+        "$SCRIPT_DIR/modbus-profiles/thermostat.json" \
+        "$thermostat_profile_tmp"
+    mv -f "$thermostat_profile_tmp" "$profile_dir/thermostat.json"
 
     trap - HUP INT TERM
 }

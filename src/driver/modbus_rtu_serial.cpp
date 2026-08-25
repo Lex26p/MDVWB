@@ -47,6 +47,13 @@ struct RequestMetadata {
             return std::nullopt;
         }
         break;
+    case static_cast<std::uint8_t>(Function::WriteSingleRegister):
+        function = Function::WriteSingleRegister;
+        if (request.size() != 8) {
+            error = "Modbus FC06 request must contain exactly 8 bytes";
+            return std::nullopt;
+        }
+        break;
     case static_cast<std::uint8_t>(Function::WriteMultipleRegisters):
         function = Function::WriteMultipleRegisters;
         if (request.size() < 11) {

@@ -85,17 +85,23 @@ require_text "$BUILD_WORKFLOW" 'out/build/arm64-release/mdvwb-modbus'
 require_text "$BUILD_WORKFLOW" 'dist/MDVWB-arm64/mdvwb-modbus'
 require_text "$BUILD_WORKFLOW" 'profiles/modbus/vrf_add_controller.json'
 require_text "$BUILD_WORKFLOW" 'dist/MDVWB-arm64/modbus-profiles/vrf_add_controller.json'
+require_text "$BUILD_WORKFLOW" 'profiles/modbus/thermostat.json'
+require_text "$BUILD_WORKFLOW" 'dist/MDVWB-arm64/modbus-profiles/thermostat.json'
+require_text "$BUILD_WORKFLOW" 'dist/MDVWB-arm64/docs/THERMOSTAT_PROTOCOL.md'
 require_text "$BUILD_WORKFLOW" 'test -x ./mdvwb-modbus'
 require_text "$BUILD_WORKFLOW" 'test -r ./modbus-profiles/vrf_add_controller.json'
+require_text "$BUILD_WORKFLOW" 'test -r ./modbus-profiles/thermostat.json'
 
 require_text "$SOURCE_INSTALLER" '"$BUILD_DIR/mdvwb-modbus" "$STAGING/mdvwb-modbus"'
 require_text "$SOURCE_INSTALLER" '"$SOURCE_DIR/profiles/modbus/vrf_add_controller.json"'
+require_text "$SOURCE_INSTALLER" '"$SOURCE_DIR/profiles/modbus/thermostat.json"'
 require_text "$SOURCE_INSTALLER" 'MDVWB_INSTALL_METHOD=source sh "$STAGING/offline-install.sh"'
 
 require_text "$OFFLINE" 'verify_modbus_payload'
 require_text "$OFFLINE" 'install_modbus_payload'
 require_text "$OFFLINE" 'patch_setup_backup'
 require_text "$OFFLINE" 'modbus-profiles/vrf_add_controller.json'
+require_text "$OFFLINE" 'modbus-profiles/thermostat.json'
 require_text "$VALIDATE_WORKFLOW" 'tests/deploy/mdvwb_modbus_runtime_handoff_test.sh'
 require_text "$VALIDATE_WORKFLOW" 'tests/deploy/mdvwb_modbus_hardware_readonly_test.sh'
 require_text "$BUILD_WORKFLOW" 'tests/deploy/mdvwb_modbus_runtime_handoff_test.sh'
@@ -140,6 +146,8 @@ RUNTIME_EOF
     chmod 0755 "$package/mdvwb-modbus"
     printf '{"new":true}\n' \
         >"$package/modbus-profiles/vrf_add_controller.json"
+    printf '{"new_thermostat":true}\n' \
+        >"$package/modbus-profiles/thermostat.json"
 
     cat >"$package/mdvwb-setup" <<'SETUP_EOF'
 #!/bin/sh
@@ -181,6 +189,9 @@ OLD_EOF
     grep -Fq 'new runtime' \
         "$root/usr/local/lib/mdvwb/mdvwb-modbus" ||
         fail "Modbus runtime payload was not installed"
+    grep -Fq '"new_thermostat":true' \
+        "$root/usr/local/lib/mdvwb/modbus-profiles/thermostat.json" ||
+        fail "Thermostat profile payload was not installed"
     grep -Fq 'old runtime' \
         "$root/var/backups/mdvwb/fake-backup/files/usr/local/lib/mdvwb/mdvwb-modbus" ||
         fail "lifecycle backup did not preserve the previous Modbus runtime"

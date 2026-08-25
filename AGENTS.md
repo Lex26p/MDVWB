@@ -273,7 +273,7 @@ All targets compile as C++20. MSVC uses `/W4 /permissive- /utf-8`; other compile
 
 ## 8. CTest ownership
 
-CMake currently registers 42 tests:
+CMake currently registers 43 tests:
 
 | Test | Primary ownership |
 |---|---|
@@ -287,6 +287,7 @@ CMake currently registers 42 tests:
 | `mdvwb_modbus_resolver_test`, `mdvwb_modbus_scan_test`, `mdvwb_modbus_scan_execute_test` | Logical addressing and safe discovery probes |
 | `mdvwb_modbus_poll_plan_test`, `mdvwb_modbus_driver_test`, `mdvwb_modbus_runtime_cadence_test` | Poll plans, driver behavior, retry and cadence policy |
 | `mdvwb_modbus_vrf_reference_test`, `mdvwb_modbus_vrf_profile_test` | First production profile and preserved equipment facts |
+| `mdvwb_modbus_thermostat_profile_test` | Direct-Slave Thermostat profile, mappings, FC06 writes and FC03 confirmation |
 | `mdvwb_modbus_runtime_config_test`, `mdvwb_modbus_mqtt_integration_test` | Managed runtime validation and end-to-end MQTT semantics |
 | `mdv_buses_config_test` | Bus schema and canonicalization |
 | `mdvwb_modbus_buses_config_test`, `mdvwb_modbus_bus_profile_test` | Protocol-aware bus configuration and profile compatibility |
@@ -387,6 +388,9 @@ This file prevents an automatic schedule from executing twice after a scheduler 
 - effective write capability is the intersection of the profile declaration and
   the current runtime implementation; the production runtime currently performs
   confirmed writes for `Power`, `Mode`, `FanSpeed` and `SetTemperature`;
+- scalar Holding Register writes use the function declared by each write point:
+  FC10 by default or explicit FC06 `write_single_register`; both require factual
+  FC03 read-back;
 - a valid profile may declare other future writes without making them
   available to the UI or scheduler;
 - profiles and managed runtime settings are strictly validated before serial I/O or discovery;
@@ -411,6 +415,15 @@ This file prevents an automatic schedule from executing twice after a scheduler 
 - that profile exposes read-only integer RoomTemperature from the existing
   presence-probe register `40039 + 91*Y`; polling must reuse the validated
   probe response instead of adding a second read of that register;
+- the shipped `thermostat` profile uses direct logical-address-to-Slave-ID
+  mapping, `9600 8N1`, literal PDU addresses `0x2060..0x2065`, FC03 reads and
+  explicit FC06 writes;
+- `thermostat` exposes Power `1/2`, Cool/Heat `1/2`, FanSpeed
+  Low/Medium/High/Auto `1/2/3/4`, integer RoomTemperature from `0x2064`, and
+  whole-degree SetTemperature `16..34` through raw-tenths register `0x2065`;
+- the second spreadsheet block, advanced settings, `0x2063` and `0x2066` are
+  intentionally not exposed by `thermostat`; its live hardware behavior is not
+  yet recorded as confirmed;
 - unsupported controls produce no Modbus wire traffic;
 - when an optional factual value becomes unavailable, its old retained MQTT value is cleared with an empty retained payload;
 - for compatibility, an online powered device without a factual Mode still maps to `Status=5` (Auto); this does not create a factual `Mode` value.
@@ -488,7 +501,8 @@ The offline installer:
 - requires root and architecture `arm64`;
 - requires `libmosquitto.so.1`;
 - emits package format `2`; format `1` remains accepted for legacy archives,
-  while format `2` requires the internal Modbus runtime and production profile;
+  while format `2` requires the internal Modbus runtime and both shipped
+  production profiles;
 - validates all required package files and `SHA256SUMS`;
 - installs all five executables (including internal `mdvwb-modbus`) and three systemd unit types;
 - installs both static web applications;

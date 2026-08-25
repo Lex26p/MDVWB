@@ -137,14 +137,22 @@ bool TestInvalidTimingRejected()
 bool TestClosedPortResult()
 {
     mdv::modbus::RtuSerialTransport transport;
-    const auto request = mdv::modbus::BuildReadHoldingRegistersRequest(1, 0x006B, 3);
-    const auto result = transport.Execute(request);
+    const auto readRequest =
+        mdv::modbus::BuildReadHoldingRegistersRequest(1, 0x006B, 3);
+    const auto readResult = transport.Execute(readRequest);
+    const auto writeSingleRequest =
+        mdv::modbus::BuildWriteSingleRegisterRequest(1, 0x2065, 210);
+    const auto writeSingleResult = transport.Execute(writeSingleRequest);
 
     return Check(
-               result.status == mdv::modbus::TransactionStatus::IoError,
+               readResult.status == mdv::modbus::TransactionStatus::IoError,
                "closed port reports I/O error") &&
-        Check(!result.error.empty(), "closed-port error text") &&
-        Check(!result.response.has_value(), "closed port has no response");
+        Check(!readResult.error.empty(), "closed-port error text") &&
+        Check(!readResult.response.has_value(), "closed port has no response") &&
+        Check(
+            writeSingleResult.status ==
+                mdv::modbus::TransactionStatus::IoError,
+            "valid FC06 request was rejected before serial I/O");
 }
 
 bool TestInvalidRequestRejectedBeforeIo()

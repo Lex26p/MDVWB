@@ -19,10 +19,13 @@ Read in this order:
 3. [`modbus/REFERENCE_VRF_ADD_CONTROLLER.md`](modbus/REFERENCE_VRF_ADD_CONTROLLER.md)  
    Analysis of the first supplied real Modbus equipment table. Contains confirmed information and explicitly marked unknowns that must not be guessed.
 
-4. [`modbus/ROADMAP.md`](modbus/ROADMAP.md)  
-   Original implementation sequence and the remaining hardware/second-profile stages. Completion is recorded only in `STATUS.md`.
+4. [`modbus/THERMOSTAT_PROTOCOL.md`](modbus/THERMOSTAT_PROTOCOL.md)
+   Exact direct-Slave Thermostat mapping, FC03/FC06 behavior, intentionally ignored registers and the required hardware smoke test.
 
-5. [`modbus/STATUS.md`](modbus/STATUS.md)  
+5. [`modbus/ROADMAP.md`](modbus/ROADMAP.md)
+   Original implementation sequence and remaining hardware stages. Completion is recorded only in `STATUS.md`.
+
+6. [`modbus/STATUS.md`](modbus/STATUS.md)
    Actual development state. Read this before starting work. Do not infer completion from the roadmap.
 
 ### MDV protocol research

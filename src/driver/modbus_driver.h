@@ -31,8 +31,9 @@ struct ModbusDriverPolicy {
 // Profile-driven Modbus implementation of the protocol-neutral device boundary.
 //
 // Polling builds atomic factual snapshots. Supported commands are encoded by
-// the selected profile, written through FC10 and become factual only after a
-// read-back from the profile's read location confirms the requested value.
+// the selected profile, written through its declared FC06/FC10 function and
+// become factual only after a read-back from the profile's read location
+// confirms the requested value.
 class ModbusDriver final : public IDeviceDriver {
 public:
     ModbusDriver(
@@ -62,6 +63,7 @@ private:
         std::uint16_t rawValue = 0;
         std::uint8_t slaveId = 1;
         std::uint16_t writeAddress = 0;
+        WriteFunction writeFunction = WriteFunction::WriteMultipleRegisters;
         ResolvedRegisterLocation readLocation;
         std::uint64_t revision = 0;
         std::uint32_t writeAttempts = 0;

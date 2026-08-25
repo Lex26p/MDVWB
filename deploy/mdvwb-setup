@@ -851,6 +851,7 @@ EOF
         cat <<'EOF'
 mdvwb-modbus
 modbus-profiles/vrf_add_controller.json
+modbus-profiles/thermostat.json
 EOF
     fi
 }

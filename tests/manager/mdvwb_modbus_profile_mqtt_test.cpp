@@ -84,6 +84,10 @@ void TestProductionCatalogIsPublishedRetained()
             std::string::npos,
         "profile catalog omitted the production profile");
     Require(
+        client.payload_.find("\"id\":\"thermostat\"") !=
+            std::string::npos,
+        "profile catalog omitted the Thermostat profile");
+    Require(
         client.payload_.find("\"power\":{\"supported\":true") !=
             std::string::npos,
         "profile catalog omitted Power capability metadata");

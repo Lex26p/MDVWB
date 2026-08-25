@@ -287,13 +287,31 @@ void RejectUnknownFields(
     Fail(std::string(path) + " must be one of uint16, int16");
 }
 
+[[nodiscard]] WriteFunction ParseWriteFunction(
+    std::string_view value,
+    std::string_view path)
+{
+    if (value == "write_multiple_registers") {
+        return WriteFunction::WriteMultipleRegisters;
+    }
+    if (value == "write_single_register") {
+        return WriteFunction::WriteSingleRegister;
+    }
+    Fail(
+        std::string(path) +
+        " must be one of write_multiple_registers, write_single_register");
+}
+
 [[nodiscard]] RegisterLocation ParseLocation(
     const Value& value,
     std::string_view path,
     bool writable)
 {
     const auto& object = RequireObject(value, path);
-    RejectUnknownFields(object, {"space", "address", "reference"}, path);
+    RejectUnknownFields(
+        object,
+        {"space", "address", "reference", "function"},
+        path);
 
     RegisterLocation result;
     result.space = ParseRegisterSpace(
@@ -318,6 +336,20 @@ void RejectUnknownFields(
                 ".reference must contain 1..64 characters");
         }
         result.reference = reference;
+    }
+
+    if (const auto iterator = object.find("function");
+        iterator != object.end()) {
+        if (!writable) {
+            Fail(
+                std::string(path) +
+                ".function is allowed only for write locations");
+        }
+        result.writeFunction = ParseWriteFunction(
+            RequireString(
+                iterator->second,
+                std::string(path) + ".function"),
+            std::string(path) + ".function");
     }
 
     if (writable &&

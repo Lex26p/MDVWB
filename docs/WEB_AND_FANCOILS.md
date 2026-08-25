@@ -786,6 +786,11 @@ production Modbus runtime поддерживает подтверждённую 
 `FanSpeed` и `SetTemperature`. Неизвестный профиль или ещё не полученная bus
 configuration дают безопасный результат «команды недоступны».
 
+Для `thermostat` каталог показывает только Cool/Heat, скорости
+Low/Medium/High/Auto и уставку `16..34 °C` с шагом `1 °C`. RoomTemperature
+доступна только для чтения; Alarm, Blinds и Blocked этим профилем не
+объявляются.
+
 ## 36. Когда управление отключено
 
 Browser не отправляет команду, если:

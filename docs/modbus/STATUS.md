@@ -314,8 +314,8 @@ is crossed.
 
 ## Verification status
 
-The current tree completes a clean Windows build (160 Ninja build steps), all
-42 registered CTest tests and all seven JavaScript model tests. `validate.yml` now executes
+The current tree completes a clean Windows build, all 43 registered CTest tests
+and all seven JavaScript model tests. `validate.yml` now executes
 the web tests in addition to its Release build and CTest gate.
 
 Profile-loader tests cover valid schema-v1 profiles, all three current addressing declarations, transport/register/probe validation, numeric and enum declaration validation, file loading, isolated invalid files, deterministic diagnostics and duplicate-ID rejection.
@@ -335,6 +335,7 @@ Milestone 2 now provides:
 
 - Modbus CRC16 calculation and validation;
 - FC03 Read Holding Registers request/response handling;
+- FC06 Write Single Register request/response handling;
 - FC10 Write Multiple Registers request/response handling;
 - Modbus exception-response handling;
 - variable-length RTU response collection;
@@ -364,7 +365,9 @@ Milestone 3 now provides:
 - isolation of malformed/invalid files from unrelated valid profiles;
 - rejection of every member of a duplicate profile-ID group.
 
-No production profile is shipped yet, and no profile field is currently used to perform live semantic conversion or bus I/O.
+At that loader-only milestone no production profile was shipped and no profile
+field performed live semantic conversion or bus I/O. Later sections record the
+current production profiles and runtime integration.
 
 The exact installed profile directory remains open until the packaging/configuration milestones.
 
@@ -426,7 +429,11 @@ Milestone 6 now provides:
 - profile-declared presence validation with `any_response` and `any_nonzero`;
 - `PresenceMismatch -> NotFound` for valid responses that do not satisfy the profile's presence rule.
 
-The current RTU core implements FC03 and FC10 only. Therefore the scan executor currently performs live probes only when the profile probe uses `holding_register`. `input_register`, `coil` and `discrete_input` probes are reported as unsupported and generate no request until the corresponding standard read functions are added.
+The current RTU core implements FC03 reads plus FC06 and FC10 writes. Therefore
+the scan executor currently performs live probes only when the profile probe
+uses `holding_register`. `input_register`, `coil` and `discrete_input` probes
+are reported as unsupported and generate no request until the corresponding
+standard read functions are added.
 
 The scan layer does not configure serial ports, select bus profiles, persist discovered devices or perform normal polling/control. Those remain later milestones.
 
@@ -467,6 +474,30 @@ Milestone 7 tests load the production JSON, verify literal addresses and stride 
 Normal profile-driven Modbus polling and confirmed Power, Mode, FanSpeed and
 scalar SetTemperature control are implemented by `ModbusDriver`.
 
+## Thermostat production profile implemented
+
+The shipped `profiles/modbus/thermostat.json` adds the second production
+equipment mapping without a manufacturer branch in the common driver:
+
+- direct logical-address-to-Slave-ID mapping for `1..63`;
+- `9600 8N1`;
+- literal PDU addresses with `0x2060 == 8288` and no subtraction;
+- FC03 discovery and factual reads;
+- explicit FC06 scalar writes, while profiles without the new field retain
+  FC10;
+- Power `1=off`, `2=on` at `0x2060`;
+- FanSpeed `1=low`, `2=medium`, `3=high`, `4=auto` at `0x2061`;
+- Mode `1=cool`, `2=heat` at `0x2062`;
+- integer RoomTemperature at read-only `0x2064`;
+- SetTemperature at `0x2065`, raw scale `0.1`, limits `16..34` and step `1`.
+
+The alternative room-temperature register `0x2063`, integer setpoint register
+`0x2066`, the second source-table block and advanced settings are intentionally
+not exposed. Automated tests cover parsing, direct resolution, semantic
+conversion, the FC06 frame and driver-level FC06 write followed by FC03
+confirmation. Live thermostat behavior remains to be recorded with the smoke
+test in `docs/modbus/THERMOSTAT_PROTOCOL.md`.
+
 ## Protocol-aware bus/service configuration implemented
 
 Milestone 8 now provides:
@@ -493,13 +524,13 @@ Milestone 9 now provides:
 - factual publication through the existing `Power`, `Mode`, `Speed`, `SetTemp`,
   `Alarm`, `AlarmCode` and derived `Status` topics;
 - existing `/devices/Fan-<bus>_<logical>/controls/<Control>/on1` command routing without manufacturer-specific MQTT topics;
-- profile-driven FC10 writes to the selected control register;
+- profile-driven FC06 or FC10 writes to the selected control register;
 - FC03 factual read-back before any commanded state is updated or published;
 - bounded write/confirmation retry and ordinary-poll fairness;
 - rejection of profile-disabled controls before any Modbus write traffic;
 - strict managed-environment parsing and runtime profile/serial revalidation before the port is opened;
 - an internal packaged `mdvwb-modbus` executable selected by `mdvwb-run`;
-- ARM64/source package staging for the internal runtime and the shipped `vrf_add_controller` JSON profile;
+- ARM64/source package staging for the internal runtime and both shipped JSON profiles;
 - backward-compatible installer handoff that keeps old package-format fixtures valid, rejects torn Modbus payloads, and preserves the previous runtime/profile inside lifecycle backups;
 - regression tests proving that MDV launch behavior remains unchanged and that Modbus uses the same MQTT semantic contract.
 
@@ -507,7 +538,7 @@ For the first production profile, normal polling reads the safe presence point,
 the adjacent Power/Mode/FanSpeed/integer-SetTemperature block, and AlarmCode. A
 zero presence value contributes one failed complete poll; three consecutive
 failed complete polls publish the ordinary existing offline representation
-(`Alarm=2`, `Status=7`). A successful FC10 response alone never changes factual
+(`Alarm=2`, `Status=7`). A successful write response alone never changes factual
 state; only matching FC03 read-back does.
 
 The confirmed command state machine supports Power, Mode, Speed and SetTemp as

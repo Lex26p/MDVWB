@@ -227,6 +227,8 @@ EOF
 chmod 0755 "$STRICT_PACKAGE/mdvwb-modbus"
 printf '{"schemaVersion":1}\n' \
     >"$STRICT_PACKAGE/modbus-profiles/vrf_add_controller.json"
+printf '{"schemaVersion":1}\n' \
+    >"$STRICT_PACKAGE/modbus-profiles/thermostat.json"
 (
     cd "$STRICT_PACKAGE"
     find . -type f ! -name SHA256SUMS -print0 | sort -z |

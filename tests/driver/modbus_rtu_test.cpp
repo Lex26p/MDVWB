@@ -58,6 +58,16 @@ bool TestWriteRequest()
         Check(mdv::modbus::HasValidCrc(actual), "FC10 request CRC");
 }
 
+bool TestWriteSingleRequest()
+{
+    const std::vector<std::uint8_t> expected{
+        0x01, 0x06, 0x20, 0x65, 0x00, 0xD2, 0x12, 0x48};
+    const auto actual = mdv::modbus::BuildWriteSingleRegisterRequest(
+        1, 0x2065, 210);
+    return CheckEqual(actual, expected, "FC06 request fixture") &&
+        Check(mdv::modbus::HasValidCrc(actual), "FC06 request CRC");
+}
+
 bool TestReadResponse()
 {
     const std::vector<std::uint8_t> response{
@@ -84,6 +94,19 @@ bool TestWriteResponse()
                  "FC10 response status") &&
         Check(parsed.startAddress == 0x0001, "FC10 echoed start address") &&
         Check(parsed.quantity == 2, "FC10 echoed quantity");
+}
+
+bool TestWriteSingleResponse()
+{
+    const std::vector<std::uint8_t> response{
+        0x01, 0x06, 0x20, 0x65, 0x00, 0xD2, 0x12, 0x48};
+    const auto parsed = mdv::modbus::ParseResponse(
+        response, 1, mdv::modbus::Function::WriteSingleRegister);
+
+    return Check(parsed.status == mdv::modbus::ResponseStatus::Success,
+                 "FC06 response status") &&
+        Check(parsed.startAddress == 0x2065, "FC06 echoed address") &&
+        Check(parsed.value == 210, "FC06 echoed value");
 }
 
 bool TestExceptionResponse()
@@ -174,10 +197,13 @@ bool TestResponseCollector()
         0x01, 0x03, 0x06, 0x02, 0x2B, 0x00, 0x00, 0x00, 0x64, 0x05, 0x7A};
     const std::vector<std::uint8_t> exceptionResponse{
         0x01, 0x83, 0x02, 0xC0, 0xF1};
+    const std::vector<std::uint8_t> writeSingleResponse{
+        0x01, 0x06, 0x20, 0x65, 0x00, 0xD2, 0x12, 0x48};
 
     mdv::modbus::ResponseCollector collector;
     std::optional<mdv::modbus::RtuAdu> first;
     std::optional<mdv::modbus::RtuAdu> second;
+    std::optional<mdv::modbus::RtuAdu> third;
 
     for (const auto byte : std::vector<std::uint8_t>{0x00, 0xFF, 0x00}) {
         static_cast<void>(collector.Push(byte));
@@ -192,11 +218,18 @@ bool TestResponseCollector()
             second = std::move(frame);
         }
     }
+    for (const auto byte : writeSingleResponse) {
+        if (auto frame = collector.Push(byte); frame.has_value()) {
+            third = std::move(frame);
+        }
+    }
 
     return Check(first.has_value(), "collector extracted FC03 response") &&
         CheckEqual(*first, readResponse, "collector FC03 bytes") &&
         Check(second.has_value(), "collector extracted exception response") &&
-        CheckEqual(*second, exceptionResponse, "collector exception bytes");
+        CheckEqual(*second, exceptionResponse, "collector exception bytes") &&
+        Check(third.has_value(), "collector extracted FC06 response") &&
+        CheckEqual(*third, writeSingleResponse, "collector FC06 bytes");
 }
 
 } // namespace
@@ -207,8 +240,10 @@ int main()
     ok = TestCrcVector() && ok;
     ok = TestReadRequest() && ok;
     ok = TestWriteRequest() && ok;
+    ok = TestWriteSingleRequest() && ok;
     ok = TestReadResponse() && ok;
     ok = TestWriteResponse() && ok;
+    ok = TestWriteSingleResponse() && ok;
     ok = TestExceptionResponse() && ok;
     ok = TestInvalidResponses() && ok;
     ok = TestRequestValidation() && ok;

@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "id": "thermostat",
+  "name": "Thermostat",
+  "registerAddressing": "pdu_zero_based",
+  "transport": {
+    "baudRate": 9600,
+    "dataBits": 8,
+    "parity": "none",
+    "stopBits": 1
+  },
+  "addressing": {
+    "type": "direct_slave",
+    "logicalMin": 1,
+    "logicalMax": 63,
+    "registerOffset": 0
+  },
+  "capabilities": {
+    "power": true,
+    "mode": true,
+    "fanSpeed": true,
+    "setTemperature": true,
+    "roomTemperature": true,
+    "alarm": false,
+    "blinds": false,
+    "blocked": false
+  },
+  "probe": {
+    "read": {
+      "space": "holding_register",
+      "address": 8288,
+      "reference": "0x2060"
+    },
+    "quantity": 1,
+    "presence": "any_response"
+  },
+  "points": {
+    "power": {
+      "type": "enum",
+      "read": {
+        "space": "holding_register",
+        "address": 8288,
+        "reference": "0x2060"
+      },
+      "write": {
+        "space": "holding_register",
+        "address": 8288,
+        "reference": "0x2060",
+        "function": "write_single_register"
+      },
+      "readMap": {
+        "1": "off",
+        "2": "on"
+      },
+      "writeMap": {
+        "off": 1,
+        "on": 2
+      }
+    },
+    "fanSpeed": {
+      "type": "enum",
+      "read": {
+        "space": "holding_register",
+        "address": 8289,
+        "reference": "0x2061"
+      },
+      "write": {
+        "space": "holding_register",
+        "address": 8289,
+        "reference": "0x2061",
+        "function": "write_single_register"
+      },
+      "readMap": {
+        "1": "low",
+        "2": "medium",
+        "3": "high",
+        "4": "auto"
+      },
+      "writeMap": {
+        "low": 1,
+        "medium": 2,
+        "high": 3,
+        "auto": 4
+      }
+    },
+    "mode": {
+      "type": "enum",
+      "read": {
+        "space": "holding_register",
+        "address": 8290,
+        "reference": "0x2062"
+      },
+      "write": {
+        "space": "holding_register",
+        "address": 8290,
+        "reference": "0x2062",
+        "function": "write_single_register"
+      },
+      "readMap": {
+        "1": "cool",
+        "2": "heat"
+      },
+      "writeMap": {
+        "cool": 1,
+        "heat": 2
+      }
+    },
+    "roomTemperature": {
+      "type": "number",
+      "rawType": "uint16",
+      "read": {
+        "space": "holding_register",
+        "address": 8292,
+        "reference": "0x2064 (integer part)"
+      },
+      "transform": {
+        "scale": 1,
+        "offset": 0
+      }
+    },
+    "setTemperature": {
+      "type": "number",
+      "rawType": "uint16",
+      "read": {
+        "space": "holding_register",
+        "address": 8293,
+        "reference": "0x2065 (0.1 degree)"
+      },
+      "write": {
+        "space": "holding_register",
+        "address": 8293,
+        "reference": "0x2065 (0.1 degree)",
+        "function": "write_single_register"
+      },
+      "transform": {
+        "scale": 0.1,
+        "offset": 0
+      },
+      "limits": {
+        "min": 16,
+        "max": 34,
+        "step": 1
+      },
+      "writeConversion": {
+        "rounding": "exact"
+      }
+    }
+  }
+}

@@ -97,6 +97,8 @@ install -m 0755 "$BUILD_DIR/mdvwb-scheduler" "$STAGING/mdvwb-scheduler"
 install -m 0755 "$BUILD_DIR/mdvwb-modbus" "$STAGING/mdvwb-modbus"
 install -m 0644 "$SOURCE_DIR/profiles/modbus/vrf_add_controller.json" \
     "$STAGING/modbus-profiles/vrf_add_controller.json"
+install -m 0644 "$SOURCE_DIR/profiles/modbus/thermostat.json" \
+    "$STAGING/modbus-profiles/thermostat.json"
 install -m 0755 "$SCRIPT_DIR/mdvwb-run" "$STAGING/mdvwb-run"
 install -m 0755 "$SCRIPT_DIR/mdvwb-setup" "$STAGING/mdvwb-setup"
 install -m 0755 "$SCRIPT_DIR/offline-install.sh" "$STAGING/offline-install.sh"

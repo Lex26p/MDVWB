@@ -45,6 +45,21 @@ double NumberField(
         : value.AsNumber();
 }
 
+const mdvwb::json::Object& ProfileById(
+    const mdvwb::json::Array& profiles,
+    std::string_view id)
+{
+    for (const auto& value : profiles) {
+        const auto& profile = value.AsObject();
+        if (profile.at("id").AsString() == id) {
+            return profile;
+        }
+    }
+
+    throw std::runtime_error(
+        "UI profile catalog is missing profile " + std::string(id));
+}
+
 void TestProductionProfilePresentation()
 {
     const auto jsonText = mdvwb::LoadModbusProfileUiCatalog(
@@ -56,9 +71,9 @@ void TestProductionProfilePresentation()
             "UI schema version mismatch");
 
     const auto& profiles = ArrayField(root, "profiles");
-    Require(profiles.size() == 1U, "production profile catalog size mismatch");
+    Require(profiles.size() == 2U, "production profile catalog size mismatch");
 
-    const auto& profile = profiles.front().AsObject();
+    const auto& profile = ProfileById(profiles, "vrf_add_controller");
     Require(profile.at("id").AsString() == "vrf_add_controller",
             "production profile ID mismatch");
     Require(profile.at("name").AsString() == "VRF Add Controller",
@@ -131,6 +146,66 @@ void TestProductionProfilePresentation()
 
     Require(ArrayField(root, "issues").empty(),
             "valid production directory reported profile issues");
+}
+
+void TestThermostatProfilePresentation()
+{
+    const auto document = mdvwb::json::Parse(
+        mdvwb::LoadModbusProfileUiCatalog(
+            std::filesystem::path(MDVWB_SOURCE_DIR) / "profiles/modbus"));
+    const auto& root = document.AsObject();
+    const auto& profile =
+        ProfileById(ArrayField(root, "profiles"), "thermostat");
+
+    Require(profile.at("name").AsString() == "Thermostat",
+            "Thermostat profile name mismatch");
+    Require(profile.at("addressingType").AsString() == "direct_slave",
+            "Thermostat addressing type mismatch");
+
+    const auto& transport = ObjectField(profile, "transport");
+    Require(transport.at("baudRate").AsInteger() == 9600 &&
+                transport.at("dataBits").AsInteger() == 8 &&
+                transport.at("parity").AsString() == "none" &&
+                transport.at("stopBits").AsInteger() == 1,
+            "Thermostat transport metadata mismatch");
+
+    const auto& capabilities = ObjectField(profile, "capabilities");
+    const auto& power = ObjectField(capabilities, "power");
+    Require(power.at("supported").AsBoolean() &&
+                power.at("readable").AsBoolean() &&
+                power.at("writable").AsBoolean() &&
+                power.at("type").AsString() == "enum",
+            "Thermostat Power metadata mismatch");
+
+    for (const std::string name : {
+             "mode", "fanSpeed", "setTemperature"}) {
+        const auto& capability = ObjectField(capabilities, name);
+        Require(capability.at("supported").AsBoolean() &&
+                    capability.at("readable").AsBoolean() &&
+                    capability.at("writable").AsBoolean(),
+                "Thermostat writable capability mismatch: " + name);
+    }
+
+    const auto& setTemperature =
+        ObjectField(capabilities, "setTemperature");
+    Require(NumberField(setTemperature, "minimum") == 16.0 &&
+                NumberField(setTemperature, "maximum") == 34.0 &&
+                NumberField(setTemperature, "step") == 1.0,
+            "Thermostat SetTemperature limits mismatch");
+
+    const auto& roomTemperature =
+        ObjectField(capabilities, "roomTemperature");
+    Require(roomTemperature.at("supported").AsBoolean() &&
+                roomTemperature.at("readable").AsBoolean() &&
+                !roomTemperature.at("writable").AsBoolean(),
+            "Thermostat RoomTemperature metadata mismatch");
+
+    for (const std::string name : {
+             "alarm", "blinds", "blocked"}) {
+        Require(
+            !ObjectField(capabilities, name).at("supported").AsBoolean(),
+            "unsupported Thermostat capability was exposed: " + name);
+    }
 }
 
 void TestEnumAndNumericUiMetadata()
@@ -313,6 +388,7 @@ int main()
 {
     try {
         TestProductionProfilePresentation();
+        TestThermostatProfilePresentation();
         TestEnumAndNumericUiMetadata();
         TestIncompatibleProfileIsNotPublished();
         TestIssuePathIsSanitizedAndSorted();

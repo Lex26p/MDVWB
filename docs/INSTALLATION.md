@@ -141,8 +141,9 @@ binary self-tests
 existing buses.json validation
 ```
 
-Текущий package format `2` требует встроенный `mdvwb-modbus` и production
-профиль `modbus-profiles/vrf_add_controller.json`. Старые архивы format `1`
+Текущий package format `2` требует встроенный `mdvwb-modbus` и оба production
+профиля: `modbus-profiles/vrf_add_controller.json` и
+`modbus-profiles/thermostat.json`. Старые архивы format `1`
 остаются читаемыми для совместимости, но новые неполные Modbus-пакеты preflight
 отклоняет.
 
@@ -333,6 +334,7 @@ sudo /usr/local/sbin/mdvwb-setup status --health
 /usr/local/bin/mdvwb-manager summary /etc/mdvwb/buses.json
 test -x /usr/local/lib/mdvwb/mdvwb-modbus
 test -r /usr/local/lib/mdvwb/modbus-profiles/vrf_add_controller.json
+test -r /usr/local/lib/mdvwb/modbus-profiles/thermostat.json
 systemctl --failed --no-pager
 journalctl -u mdvwb-manager.service -u mdvwb-scheduler.service -n 200 --no-pager
 ```
@@ -355,6 +357,13 @@ Power/Mode/Speed/SetTemp доступны только после первого
 подтверждаются чтением обратно. `Temp` берётся как целое значение из
 `40039 + 91*Y`, уже прочитанного presence probe, без дополнительной транзакции.
 Половинные градусы этим профилем не поддерживаются.
+
+Профиль `thermostat` использует собственный Slave ID каждого устройства,
+`9600 8N1`, FC03 для чтения и FC06 для записи. Он публикует factual `Power`,
+`Mode`, `Speed`, целые `SetTemp` и `Temp`; доступны только охлаждение/нагрев,
+скорости Low/Medium/High/Auto и уставки `16..34 °C` с шагом `1 °C`. Точное
+описание регистров и обязательная аппаратная проверка приведены в
+`docs/modbus/THERMOSTAT_PROTOCOL.md`.
 
 Для уже работающего Modbus-устройства одна или две последовательные ошибки
 полного опроса не меняют retained online-state. Третья ошибка подряд публикует

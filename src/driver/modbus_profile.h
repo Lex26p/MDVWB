@@ -54,6 +54,11 @@ enum class RawType {
     Int16,
 };
 
+enum class WriteFunction {
+    WriteMultipleRegisters,
+    WriteSingleRegister,
+};
+
 struct DirectSlaveAddressing {
     std::uint8_t logicalMin = kMinLogicalAddress;
     std::uint8_t logicalMax = kMaxLogicalAddress;
@@ -88,6 +93,7 @@ struct RegisterLocation {
     RegisterSpace space = RegisterSpace::HoldingRegister;
     std::uint16_t address = 0;
     std::optional<std::string> reference;
+    WriteFunction writeFunction = WriteFunction::WriteMultipleRegisters;
 };
 
 struct NumericTransform {

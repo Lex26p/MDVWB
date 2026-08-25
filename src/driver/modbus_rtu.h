@@ -17,6 +17,7 @@ inline constexpr std::uint16_t kMaxWriteRegisters = 123;
 
 enum class Function : std::uint8_t {
     ReadHoldingRegisters = 0x03,
+    WriteSingleRegister = 0x06,
     WriteMultipleRegisters = 0x10,
 };
 
@@ -35,6 +36,7 @@ struct ParsedResponse {
     std::vector<std::uint16_t> registers;
     std::optional<std::uint16_t> startAddress;
     std::optional<std::uint16_t> quantity;
+    std::optional<std::uint16_t> value;
     std::optional<std::uint8_t> exceptionCode;
     std::string error;
 };
@@ -51,6 +53,11 @@ struct ParsedResponse {
     std::uint8_t slaveId,
     std::uint16_t startAddress,
     std::span<const std::uint16_t> values);
+
+[[nodiscard]] RtuAdu BuildWriteSingleRegisterRequest(
+    std::uint8_t slaveId,
+    std::uint16_t address,
+    std::uint16_t value);
 
 [[nodiscard]] ParsedResponse ParseResponse(
     std::span<const std::uint8_t> adu,

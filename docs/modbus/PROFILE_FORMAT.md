@@ -413,11 +413,13 @@ Example:
 }
 ```
 
-The engine maps the data space and operation to the appropriate standard Modbus function.
+The engine maps a Holding Register read to FC03. A Holding Register write uses
+FC10 by default for backward compatibility with the first production profile.
 
 Profiles should not require users to memorize function numbers when the operation can be derived safely from the declared data space and read/write action.
 
-If a specific function choice is genuinely required, the schema may allow an explicit validated override.
+When a device requires FC06, the write location must declare the implemented
+explicit override described below.
 
 ## 14. Point model
 
@@ -444,6 +446,37 @@ Example:
 ```
 
 This explicitly supports equipment where status and control registers differ.
+
+### 14.1. Holding Register write function
+
+Schema v1 supports two scalar Holding Register write functions:
+
+```text
+write_multiple_registers -> FC10 (0x10), default
+write_single_register    -> FC06 (0x06)
+```
+
+Example for a device that requires FC06:
+
+```json
+{
+  "write": {
+    "space": "holding_register",
+    "address": 8288,
+    "reference": "0x2060",
+    "function": "write_single_register"
+  }
+}
+```
+
+`function` is allowed only inside a `write` location. An unknown value or a
+function placed in a `read` location fails profile validation. Omitting the
+field preserves `write_multiple_registers`.
+
+FC06 success must echo the requested Slave ID, register address and raw value.
+FC10 success must echo the requested start address and quantity. Neither write
+response is factual state; the runtime still requires a matching FC03
+read-back.
 
 ## 15. Read-only point
 
@@ -1271,6 +1304,17 @@ Boolean profile points may also be used for Power, Blinds and Blocked when the r
 
 Numeric `rawType` currently supports `uint16` and `int16`. Numeric conversion applies scale/offset on reads and validates min/max/step plus declared rounding before writes.
 
+Writable Holding Register locations may additionally declare:
+
+```text
+write.function = write_multiple_registers  # FC10, default
+write.function = write_single_register     # FC06
+```
+
+The RTU codec, serial transport and confirmed-write driver implement both
+choices. The function is selected per point; adding FC06 support does not
+change existing profiles that omit the field.
+
 The semantic bridge updates `DriverDeviceState` and converts `DriverCommandValue` into a profile base write location plus raw 16-bit value.
 
 Milestone 5 now resolves that base location for a logical MDVWB address using the profile's `direct_slave`, `fixed_slave_stride` or `explicit` addressing declaration. The resolver produces the physical Slave ID and effective zero-based PDU register address, with range and overflow checks.
@@ -1513,7 +1557,6 @@ The following details remain intentionally open:
 - exact profile directory names;
 - bus-level override rules for serial settings;
 - exact raw numeric types implemented in version 1;
-- exact Modbus write functions implemented in version 1;
 - adjacent-register read batching;
 - caching duplicate reads when several semantic points share one register;
 - exact unknown-enum state-update behavior;

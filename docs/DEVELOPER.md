@@ -92,13 +92,21 @@ scheduler разрешают только те из этих команд, дл�
 write-capabilities остаются недоступными до появления отдельной подтверждаемой
 реализации в driver.
 
+Holding Register write по умолчанию использует FC10. Профиль может выбрать для
+конкретного `write` point `function="write_single_register"`; тогда runtime
+формирует FC06 и проверяет, что ответ повторяет Slave ID, адрес и raw-значение.
+Новый `thermostat` использует FC06 для всех четырёх writable points, а
+`vrf_add_controller` сохраняет FC10. В обоих случаях factual state обновляется
+только после FC03 read-back.
+
 Доступность Modbus определяется только полным обычным poll: presence probe и
 все semantic reads должны завершиться успешно. Для уже online-устройства первая
 и вторая последовательные ошибки сохраняют последнее подтверждённое состояние
 и не публикуют `Alarm=2`/`Status=7`; третья переводит устройство в offline.
 Первый следующий полностью успешный poll сбрасывает счётчик и восстанавливает
-online. Ошибка FC10 или отдельного confirmation read сама по себе доступность не
-меняет. Каждая неуспешная операция пишется в journal с `Fan-<bus>_<address>`,
+online. Ошибка FC06/FC10 write или отдельного confirmation read сама по себе
+доступность не меняет. Каждая неуспешная операция пишется в journal с
+`Fan-<bus>_<address>`,
 этапом, исходом, Slave ID и регистром либо диапазоном регистров.
 
 Если semantic read попадает в диапазон уже выполненного presence probe, poll
@@ -111,8 +119,8 @@ FC03. В `vrf_add_controller` так читается `RoomTemperature`: raw `ui
 Период задаётся отдельно для каждой шины полем `pollPeriodMs` в `buses.json`.
 Для Modbus RTU допустимы `150..60000 ms`, значение по умолчанию — `300 ms`.
 Оно применяется не только к обычному poll следующего logical address, но и
-после FC10 write, confirmation read и ошибки. Настройки command/retry могут
-увеличить интервал, но не уменьшить его ниже
+после profile-selected FC06/FC10 write, confirmation read и ошибки. Настройки
+command/retry могут увеличить интервал, но не уменьшить его ниже
 `MDVWB_MODBUS_POLL_PERIOD_MS`. Для MDV допустимы `150..60000 ms`, значение по
 умолчанию — `150 ms`; manager передаёт его через `MDVWB_PERIOD_MS`.
 
@@ -940,7 +948,7 @@ Retained base topics:
 
 - publisher получает только фактический semantic snapshot драйвера;
 - для MDV публикация выполняется только после корректного C0 из `PollRead` или `ConfirmRead`;
-- для Modbus публикация выполняется после успешного profile-driven read; FC10 response сам по себе state не меняет;
+- для Modbus публикация выполняется после успешного profile-driven read; FC06/FC10 response сам по себе state не меняет;
 - C3/CC/CD и Modbus write responses не публикуются как state;
 - публикации retained;
 - без `force` публикуются только изменения;

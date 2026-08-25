@@ -113,6 +113,7 @@ jobs:
               python3 -m json.tool deploy/dashboard.default.json >/dev/null
               python3 -m json.tool deploy/schedules.default.json >/dev/null
               python3 -m json.tool profiles/modbus/vrf_add_controller.json >/dev/null
+              python3 -m json.tool profiles/modbus/thermostat.json >/dev/null
 
               rm -rf out/build/arm64-release
               cmake -S . -B out/build/arm64-release \
@@ -160,6 +161,8 @@ jobs:
             dist/MDVWB-arm64/mdvwb-modbus
           install -m 0644 profiles/modbus/vrf_add_controller.json \
             dist/MDVWB-arm64/modbus-profiles/vrf_add_controller.json
+          install -m 0644 profiles/modbus/thermostat.json \
+            dist/MDVWB-arm64/modbus-profiles/thermostat.json
 
           install -m 0755 deploy/mdvwb-run \
             dist/MDVWB-arm64/mdvwb-run
@@ -194,6 +197,8 @@ jobs:
             dist/MDVWB-arm64/docs/INSTALLATION.md
           install -m 0644 docs/RELEASE_CHECKLIST.md \
             dist/MDVWB-arm64/docs/RELEASE_CHECKLIST.md
+          install -m 0644 docs/modbus/THERMOSTAT_PROTOCOL.md \
+            dist/MDVWB-arm64/docs/THERMOSTAT_PROTOCOL.md
 
           PROJECT_COMMIT=$(git rev-parse HEAD)
           BUILT_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -266,6 +271,7 @@ jobs:
               sha256sum -c SHA256SUMS
               test -x ./mdvwb-modbus
               test -r ./modbus-profiles/vrf_add_controller.json
+              test -r ./modbus-profiles/thermostat.json
               ./mdvwb-modbus --version | grep -F "$PROJECT_VERSION"
               sh ./offline-install.sh verify --package-only
               sh ./offline-install.sh version |

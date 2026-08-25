@@ -348,6 +348,7 @@ void ModbusDriver::ApplyCommand(const DriverCommand& command)
         .rawValue = encoded.rawValue,
         .slaveId = location->slaveId,
         .writeAddress = location->address,
+        .writeFunction = encoded.location.writeFunction,
         .readLocation = *readLocation,
         .revision = revision,
         .writeAttempts = 0,
@@ -578,12 +579,22 @@ DriverResult ModbusDriver::ExecuteWrite(
     ++pending.writeAttempts;
 
     RtuAdu request;
+    Function expectedFunction = Function::WriteMultipleRegisters;
     try {
-        const std::array<std::uint16_t, 1> values{pending.rawValue};
-        request = BuildWriteMultipleRegistersRequest(
-            pending.slaveId,
-            pending.writeAddress,
-            std::span<const std::uint16_t>(values));
+        if (pending.writeFunction == WriteFunction::WriteSingleRegister) {
+            expectedFunction = Function::WriteSingleRegister;
+            request = BuildWriteSingleRegisterRequest(
+                pending.slaveId,
+                pending.writeAddress,
+                pending.rawValue);
+        }
+        else {
+            const std::array<std::uint16_t, 1> values{pending.rawValue};
+            request = BuildWriteMultipleRegistersRequest(
+                pending.slaveId,
+                pending.writeAddress,
+                std::span<const std::uint16_t>(values));
+        }
     }
     catch (const std::exception& error) {
         const auto slaveId = pending.slaveId;
@@ -626,11 +637,18 @@ DriverResult ModbusDriver::ExecuteWrite(
             accepted =
                 response.status == ResponseStatus::Success &&
                 response.slaveId == pending.slaveId &&
-                response.function == Function::WriteMultipleRegisters &&
+                response.function == expectedFunction &&
                 response.startAddress.has_value() &&
-                *response.startAddress == pending.writeAddress &&
-                response.quantity.has_value() &&
-                *response.quantity == 1U;
+                *response.startAddress == pending.writeAddress;
+            if (accepted &&
+                expectedFunction == Function::WriteSingleRegister) {
+                accepted = response.value.has_value() &&
+                    *response.value == pending.rawValue;
+            }
+            else if (accepted) {
+                accepted = response.quantity.has_value() &&
+                    *response.quantity == 1U;
+            }
             if (!accepted) {
                 error = "Modbus '" + pending.pointName +
                     "' write response does not match the request";

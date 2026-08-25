@@ -145,6 +145,23 @@ RtuAdu BuildWriteMultipleRegistersRequest(
     return adu;
 }
 
+RtuAdu BuildWriteSingleRegisterRequest(
+    std::uint8_t slaveId,
+    std::uint16_t address,
+    std::uint16_t value)
+{
+    ValidateSlaveId(slaveId);
+
+    RtuAdu adu;
+    adu.reserve(8U);
+    adu.push_back(slaveId);
+    adu.push_back(static_cast<std::uint8_t>(Function::WriteSingleRegister));
+    AppendU16(adu, address);
+    AppendU16(adu, value);
+    AppendCrc(adu);
+    return adu;
+}
+
 ParsedResponse ParseResponse(
     std::span<const std::uint8_t> adu,
     std::uint8_t expectedSlaveId,
@@ -237,6 +254,22 @@ ParsedResponse ParseResponse(
         return response;
     }
 
+    if (expectedFunction == Function::WriteSingleRegister) {
+        if (adu.size() != 8) {
+            return InvalidResponse(
+                expectedSlaveId, expectedFunction,
+                "Modbus FC06 response must contain exactly 8 bytes");
+        }
+
+        ParsedResponse response;
+        response.status = ResponseStatus::Success;
+        response.slaveId = expectedSlaveId;
+        response.function = expectedFunction;
+        response.startAddress = ReadU16(adu, 2);
+        response.value = ReadU16(adu, 4);
+        return response;
+    }
+
     return InvalidResponse(
         expectedSlaveId, expectedFunction, "unsupported Modbus function");
 }
@@ -262,9 +295,11 @@ std::optional<RtuAdu> ResponseCollector::Push(std::uint8_t byte)
         const auto function = buffer_[1];
         const auto normal =
             function == static_cast<std::uint8_t>(Function::ReadHoldingRegisters) ||
+            function == static_cast<std::uint8_t>(Function::WriteSingleRegister) ||
             function == static_cast<std::uint8_t>(Function::WriteMultipleRegisters);
         const auto exception =
             function == (static_cast<std::uint8_t>(Function::ReadHoldingRegisters) | 0x80U) ||
+            function == (static_cast<std::uint8_t>(Function::WriteSingleRegister) | 0x80U) ||
             function == (static_cast<std::uint8_t>(Function::WriteMultipleRegisters) | 0x80U);
         if (!normal && !exception) {
             buffer_.clear();
@@ -303,7 +338,8 @@ std::optional<std::size_t> ResponseCollector::ExpectedSize() const noexcept
     if ((function & 0x80U) != 0U) {
         return 5U;
     }
-    if (function == static_cast<std::uint8_t>(Function::WriteMultipleRegisters)) {
+    if (function == static_cast<std::uint8_t>(Function::WriteSingleRegister) ||
+        function == static_cast<std::uint8_t>(Function::WriteMultipleRegisters)) {
         return 8U;
     }
     if (function == static_cast<std::uint8_t>(Function::ReadHoldingRegisters)) {

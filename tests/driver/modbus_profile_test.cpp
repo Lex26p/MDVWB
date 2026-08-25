@@ -268,6 +268,52 @@ void TestDirectSlaveProfile()
     Require(addressing->logicalMax == 63, "direct logical max mismatch");
 }
 
+void TestWriteFunctionValidation()
+{
+    const auto singleWriteText = ReplaceOnce(
+        std::string(kValidProfile),
+        R"json("address": 77,
+        "reference": "40078")json",
+        R"json("address": 77,
+        "reference": "40078",
+        "function": "write_single_register")json");
+    const auto singleWrite = mdv::modbus::ParseProfile(singleWriteText);
+    Require(
+        singleWrite.points.at("power").write->writeFunction ==
+            mdv::modbus::WriteFunction::WriteSingleRegister,
+        "FC06 write function was not loaded");
+    Require(
+        singleWrite.points.at("mode").write->writeFunction ==
+            mdv::modbus::WriteFunction::WriteMultipleRegisters,
+        "default FC10 write function changed");
+
+    RequireProfileError(
+        [] {
+            const auto text = ReplaceOnce(
+                std::string(kValidProfile),
+                R"json("address": 77,
+        "reference": "40078")json",
+                R"json("address": 77,
+        "reference": "40078",
+        "function": "write_magic_register")json");
+            static_cast<void>(mdv::modbus::ParseProfile(text));
+        },
+        "write_multiple_registers, write_single_register");
+
+    RequireProfileError(
+        [] {
+            const auto text = ReplaceOnce(
+                std::string(kValidProfile),
+                R"json("address": 27,
+        "reference": "40028")json",
+                R"json("address": 27,
+        "reference": "40028",
+        "function": "write_single_register")json");
+            static_cast<void>(mdv::modbus::ParseProfile(text));
+        },
+        "allowed only for write locations");
+}
+
 void TestExplicitProfile()
 {
     auto text = ReplaceOnce(
@@ -843,6 +889,7 @@ int main()
     try {
         TestValidFixedStrideProfile();
         TestDirectSlaveProfile();
+        TestWriteFunctionValidation();
         TestExplicitProfile();
         TestSchemaAndIdentityValidation();
         TestTransportValidation();

@@ -58,7 +58,8 @@ Important invariants:
 - MDV factual controls are updated only from valid C0 reads;
 - the current Modbus runtime performs confirmed writes for `Power`, `Mode`,
   `FanSpeed` and integer `SetTemperature` when the selected profile exposes
-  matching read/write points;
+  matching read/write points; each write point selects FC06 or FC10, and the
+  existing VRF profile keeps FC10 as the default;
 - a Modbus control is writable only when both the selected profile and the
   current runtime support it; unsupported controls are rejected before wire
   traffic;
@@ -69,11 +70,17 @@ Important invariants:
   `150..60000 ms`, while Modbus RTU defaults to `300 ms` and accepts
   `150..60000 ms`; the Modbus value also limits writes and confirmations.
 
-The shipped `vrf_add_controller` enables Mode, FanSpeed, integer
-SetTemperature and integer RoomTemperature as field-validation mappings from
-the manufacturer table. They still require confirmation on the target
-equipment; half-degree setpoints are not enabled. RoomTemperature reuses the
-existing presence-probe value and does not add another Modbus transaction.
+Two Modbus profiles are shipped:
+
+- `vrf_add_controller` uses a fixed Slave ID and repeated register blocks. Its
+  table-derived Mode, FanSpeed, integer SetTemperature and RoomTemperature
+  mappings still require target-equipment confirmation; half-degree setpoints
+  are not enabled.
+- `thermostat` uses direct Slave IDs, `9600 8N1`, FC03 reads and FC06 writes.
+  It exposes Power, cooling/heating, four fan speeds, whole-degree room
+  temperature and whole-degree setpoints `16..34 °C`. Its exact register map is
+  documented in `docs/modbus/THERMOSTAT_PROTOCOL.md` and still requires the
+  listed Wiren Board hardware smoke test.
 
 ## Runtime files
 
