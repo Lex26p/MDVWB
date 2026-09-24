@@ -443,7 +443,7 @@ void TestAddressingValidation()
                 R"json("logicalMax": 64)json");
             static_cast<void>(mdv::modbus::ParseProfile(text));
         },
-        "1..63");
+        "0..63");
 
     RequireProfileError(
         [] {

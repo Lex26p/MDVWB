@@ -193,8 +193,22 @@ function testProtocolAddressBoundaries() {
       parity: "none",
       stopBits: 1,
     },
-    addresses: [0],
-  }), "1–63");
+    addresses: [64],
+  }), "0–63");
+
+  const gatewayCatalog = productionCatalog();
+  gatewayCatalog.profiles[0].id = "gw3_mod";
+  gatewayCatalog.profiles[0].logicalAddresses.minimum = 0;
+  gatewayCatalog.profiles[0].confirmationTimeoutMs = 330000;
+  const gatewayBus = busFromEditorValues({
+    id: 2, enabled: true, protocol: "modbus_rtu", profileId: "gw3_mod",
+    port: "/dev/ttyMOD2", addresses: "0,12",
+  }, gatewayCatalog);
+  assert.deepEqual(gatewayBus.addresses, [0, 12]);
+  expectThrows(() => busFromEditorValues({
+    id: 2, enabled: true, protocol: "modbus_rtu", profileId: "vrf_add_controller",
+    port: "/dev/ttyMOD2", addresses: "0",
+  }, productionCatalog()), "1–63");
 
   expectThrows(() => busFromEditorValues({
     id: 2,

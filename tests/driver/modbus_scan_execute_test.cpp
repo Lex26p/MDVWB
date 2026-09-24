@@ -279,7 +279,7 @@ void TestUnsupportedProbeSpaceCausesNoBusTraffic()
 {
     auto profile = DirectProfile(2U);
     profile.probe.read.space =
-        mdv::modbus::RegisterSpace::InputRegister;
+        mdv::modbus::RegisterSpace::Coil;
 
     AlwaysSuccessTransport transport;
 

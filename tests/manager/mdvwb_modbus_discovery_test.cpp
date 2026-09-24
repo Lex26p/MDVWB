@@ -301,7 +301,7 @@ void TestIncompatibleProfileRejectedBeforeTraffic()
     profile.replace(
         position,
         holding.size(),
-        R"json("space": "input_register")json");
+        R"json("space": "coil")json");
     Write(temporary.Path() / "vrf_add_controller.json", profile);
 
     auto runtime = ProductionRuntime();

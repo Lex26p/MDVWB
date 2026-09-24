@@ -71,7 +71,16 @@ void TestProductionProfilePresentation()
             "UI schema version mismatch");
 
     const auto& profiles = ArrayField(root, "profiles");
-    Require(profiles.size() == 2U, "production profile catalog size mismatch");
+    Require(profiles.size() == 3U, "production profile catalog size mismatch");
+    const auto& gateway = ProfileById(profiles, "gw3_mod");
+    Require(ObjectField(gateway, "logicalAddresses").at("minimum").AsInteger() == 0,
+            "GW3 catalog lost address zero");
+    Require(gateway.at("confirmationTimeoutMs").AsInteger() == 330000,
+            "GW3 catalog lost confirmation timeout");
+    for (const std::string name : {"power", "mode", "fanSpeed", "setTemperature"}) {
+        Require(ObjectField(ObjectField(gateway, "capabilities"), name).at("writable").AsBoolean(),
+                "GW3 control was hidden: " + name);
+    }
 
     const auto& profile = ProfileById(profiles, "vrf_add_controller");
     Require(profile.at("id").AsString() == "vrf_add_controller",

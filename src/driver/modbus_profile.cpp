@@ -151,8 +151,8 @@ void RejectUnknownFields(
     std::int64_t value,
     std::string_view path)
 {
-    if (value < kMinLogicalAddress || value > kMaxLogicalAddress) {
-        Fail(std::string(path) + " must be in range 1..63");
+    if (value < 0 || value > kMaxLogicalAddress) {
+        Fail(std::string(path) + " must be in range 0..63");
     }
     return static_cast<std::uint8_t>(value);
 }
@@ -310,10 +310,13 @@ void RejectUnknownFields(
     const auto& object = RequireObject(value, path);
     RejectUnknownFields(
         object,
-        {"space", "address", "reference", "function"},
+        {"space", "address", "reference", "function", "registerStride"},
         path);
 
     RegisterLocation result;
+    if (const auto it = object.find("registerStride"); it != object.end()) {
+        result.registerStride = CheckedU16(RequireInteger(it->second, path), path);
+    }
     result.space = ParseRegisterSpace(
         RequireString(
             RequireField(object, "space", path),
@@ -520,6 +523,7 @@ void RejectUnknownFields(
             "read",
             "write",
             "transform",
+            "writeTransform",
             "limits",
             "writeConversion",
             "readMap",
@@ -577,6 +581,13 @@ void RejectUnknownFields(
         result.transform = ParseTransform(
             iterator->second,
             std::string(path) + ".transform");
+    }
+
+    if (const auto it = object.find("writeTransform"); it != object.end()) {
+        if (result.type != PointType::Number || !result.write) {
+            Fail(std::string(path) + ".writeTransform requires a writable number point");
+        }
+        result.writeTransform = ParseTransform(it->second, std::string(path) + ".writeTransform");
     }
 
     if (const auto iterator = object.find("limits");
@@ -706,8 +717,8 @@ void RejectUnknownFields(
         parsed.ptr != text.data() + text.size()) {
         Fail(std::string(path) + " keys must be decimal logical addresses");
     }
-    if (value < kMinLogicalAddress || value > kMaxLogicalAddress) {
-        Fail(std::string(path) + " keys must be in range 1..63");
+    if (value > kMaxLogicalAddress) {
+        Fail(std::string(path) + " keys must be in range 0..63");
     }
     return static_cast<std::uint8_t>(value);
 }
@@ -731,6 +742,7 @@ void RejectUnknownFields(
             ParseLogicalRange(object, path);
 
         DirectSlaveAddressing result;
+        if (logicalMin == 0) Fail("direct_slave logicalMin must be in range 1..63");
         result.logicalMin = logicalMin;
         result.logicalMax = logicalMax;
 
@@ -1004,6 +1016,7 @@ void ValidateSemanticPointDefinition(
 
     for (const auto& [raw, semantic] : point.enumMappings.read) {
         static_cast<void>(raw);
+        if ((name == "mode" || name == "fanSpeed") && semantic == "unavailable") continue;
         if (!IsAllowedSemanticEnumValue(name, semantic)) {
             Fail(
                 "root.points." + std::string(name) +
@@ -1053,6 +1066,43 @@ void ValidateCapabilityPoints(const ModbusProfile& profile)
     }
 }
 
+[[nodiscard]] WriteBlock ParseWriteBlock(const Value& value)
+{
+    const auto& object = RequireObject(value, "writeBlock");
+    RejectUnknownFields(object, {"snapshot", "snapshotQuantity", "write", "fields"}, "writeBlock");
+    WriteBlock block;
+    block.snapshot = ParseLocation(RequireField(object, "snapshot", "writeBlock"), "writeBlock.snapshot", false);
+    block.write = ParseLocation(RequireField(object, "write", "writeBlock"), "writeBlock.write", true);
+    block.snapshotQuantity = CheckedU16(RequireInteger(
+        RequireField(object, "snapshotQuantity", "writeBlock"), "snapshotQuantity"), "snapshotQuantity");
+    if (block.snapshotQuantity == 0 || block.snapshotQuantity > 125) Fail("invalid snapshotQuantity");
+    const auto& fields = RequireField(object, "fields", "writeBlock");
+    if (!fields.IsArray() || fields.AsArray().empty() || fields.AsArray().size() > 123) {
+        Fail("writeBlock.fields must contain 1..123 fields");
+    }
+    for (const auto& valueField : fields.AsArray()) {
+        const auto& field = RequireObject(valueField, "writeBlock field");
+        RejectUnknownFields(field, {"sourceOffset", "encoding", "rawMap"}, "writeBlock field");
+        WriteBlockField parsed;
+        parsed.sourceOffset = CheckedU16(RequireInteger(RequireField(field, "sourceOffset", "field"), "sourceOffset"), "sourceOffset");
+        if (parsed.sourceOffset >= block.snapshotQuantity) Fail("sourceOffset outside snapshot");
+        if (const auto it = field.find("encoding"); it != field.end()) {
+            if (RequireString(it->second, "encoding") != "tenths_bit7") Fail("unknown writeBlock encoding");
+            parsed.tenthsBit7 = true;
+        }
+        if (const auto it = field.find("rawMap"); it != field.end()) {
+            for (const auto& [key, item] : RequireObject(it->second, "rawMap")) {
+                parsed.rawMap.emplace(ParseRawMapKey(key, "rawMap"), CheckedU16(RequireInteger(item, "rawMap"), "rawMap"));
+            }
+        }
+        if (parsed.tenthsBit7 == !parsed.rawMap.empty()) {
+            Fail("writeBlock field requires exactly one of encoding or non-empty rawMap");
+        }
+        block.fields.push_back(std::move(parsed));
+    }
+    return block;
+}
+
 [[nodiscard]] ModbusProfile Convert(const Value& rootValue)
 {
     const auto& root = RequireObject(rootValue, "root");
@@ -1068,10 +1118,20 @@ void ValidateCapabilityPoints(const ModbusProfile& profile)
             "capabilities",
             "probe",
             "points",
+            "writeBlock",
+            "confirmationTimeoutMs",
         },
         "root");
 
     ModbusProfile result;
+    if (const auto it = root.find("writeBlock"); it != root.end()) {
+        result.writeBlock = ParseWriteBlock(it->second);
+    }
+    if (const auto it = root.find("confirmationTimeoutMs"); it != root.end()) {
+        const auto value = RequireInteger(it->second, "confirmationTimeoutMs");
+        if (value < 0 || value > 600000) Fail("confirmationTimeoutMs must be in range 0..600000");
+        result.confirmationTimeoutMs = static_cast<std::uint32_t>(value);
+    }
 
     const auto schemaVersion = RequireInteger(
         RequireField(root, "schemaVersion", "root"),

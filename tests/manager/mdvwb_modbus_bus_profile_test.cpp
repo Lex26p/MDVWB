@@ -314,11 +314,7 @@ void TestRuntimeIncompatibleProfilesRejected()
             1,
             "[1]");
 
-        ExpectConfigError(
-            [&] {
-                mdvwb::ValidateModbusBusProfiles(config, catalog);
-            },
-            "unsupported discovery probe data space");
+        mdvwb::ValidateModbusBusProfiles(config, catalog);
     }
 }
 

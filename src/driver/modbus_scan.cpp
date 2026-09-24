@@ -51,13 +51,17 @@ ScanPlan BuildScanPlan(const ModbusProfile& profile)
     ValidateProbeQuantity(profile.probe);
 
     ScanPlan plan{};
+    const auto first = std::visit([](const auto& addressing) {
+        return addressing.logicalMin == 0 ? 0U : 1U;
+    }, profile.addressing);
+    plan.resize(64U - first);
 
-    for (std::uint16_t logical = kMinLogicalAddress;
+    for (std::uint16_t logical = static_cast<std::uint16_t>(first);
          logical <= kMaxLogicalAddress;
          ++logical) {
         const auto logicalAddress = static_cast<std::uint8_t>(logical);
         auto& candidate =
-            plan[static_cast<std::size_t>(logicalAddress - 1U)];
+            plan[static_cast<std::size_t>(logicalAddress - first)];
 
         candidate.logicalAddress = logicalAddress;
 

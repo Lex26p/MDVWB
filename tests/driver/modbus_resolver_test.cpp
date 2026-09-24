@@ -56,19 +56,15 @@ void TestGlobalLogicalBoundaries()
         .registerOffset = 0,
     };
 
-    RequireResolverError(
-        [&] {
-            static_cast<void>(
-                mdv::modbus::ResolveLogicalAddress(profile, 0));
-        },
-        "1..63");
+    Require(!mdv::modbus::ResolveLogicalAddress(profile, 0),
+        "direct_slave must not resolve logical zero to a broadcast");
 
     RequireResolverError(
         [&] {
             static_cast<void>(
                 mdv::modbus::ResolveLogicalAddress(profile, 64));
         },
-        "1..63");
+        "0..63");
 }
 
 void TestDirectSlaveResolver()

@@ -27,6 +27,7 @@ struct ModbusSemanticReadBatch {
     std::uint8_t slaveId = 1;
     std::uint16_t startAddress = 0;
     std::uint16_t quantity = 1;
+    RegisterSpace space = RegisterSpace::HoldingRegister;
 };
 
 struct ModbusDevicePollPlan {

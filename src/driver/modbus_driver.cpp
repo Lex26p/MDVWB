@@ -1,4 +1,5 @@
 #include "modbus_driver.h"
+#include "modbus_write_block.h"
 
 #include "modbus_resolver.h"
 #include "modbus_rtu.h"
@@ -239,6 +240,20 @@ ModbusDriver::ModbusDriver(
 
 DriverResult ModbusDriver::ProcessNext()
 {
+    for (auto& runtime : devices_) {
+        for (auto& pending : runtime.pendingWrites) {
+            if (pending && pending->confirmationDeadline &&
+                std::chrono::steady_clock::now() >= *pending->confirmationDeadline) {
+                const auto name = pending->pointName;
+                pending.reset();
+                return DriverResult{
+                    .address = runtime.logicalAddress, .operation = DriverOperation::SetState,
+                    .outcome = DriverOutcome::Timeout,
+                    .error = "gateway factual confirmation timed out for '" + name + "'",
+                };
+            }
+        }
+    }
     if (priorityOperations_ >= policy_.maxPriorityOperationsBeforePoll) {
         return ProcessPoll();
     }
@@ -324,19 +339,35 @@ void ModbusDriver::ApplyCommand(const DriverCommand& command)
         throw std::invalid_argument(error.what());
     }
     if (!readLocation.has_value() ||
-        readLocation->space != RegisterSpace::HoldingRegister) {
+        !IsReadableSpace(readLocation->space)) {
         throw std::invalid_argument(
-            "profile does not resolve a readable holding-register "
+            "profile does not resolve a readable "
             "confirmation point for '" + std::string(*pointName) + "'");
     }
 
     const auto revision = ++nextCommandRevision_;
     auto& pending = PendingByControl(runtime, command.control);
 
+    bool supersedesSent = pending && pending->writeAttempts != 0;
+    if (profile_.writeBlock) {
+        // Mode includes power-on in shared-register protocols. A following
+        // Power=on must not discard the requested mode; Power=off supersedes it.
+        for (auto& other : runtime.pendingWrites) {
+            if (other && other->writeAddress == location->address) {
+                const bool keepMode = command.control == DriverControl::Power &&
+                    std::get<bool>(command.value) && other->control == DriverControl::Mode;
+                if (keepMode) continue;
+                supersedesSent = supersedesSent || other->writeAttempts != 0;
+                other.reset();
+            }
+        }
+    }
+
     // A newer command matching the last factual state cancels any older
     // pending command. Queue entries carry revisions and become harmlessly
     // stale, so no old write can escape after this point.
-    if (FactualValueMatches(runtime.state, command.control, command.value)) {
+    if ((!profile_.writeBlock || !supersedesSent) &&
+        FactualValueMatches(runtime.state, command.control, command.value)) {
         pending.reset();
         return;
     }
@@ -545,6 +576,7 @@ DriverResult ModbusDriver::Poll(DeviceRuntime& runtime)
     // its revision becomes stale.
     for (auto& pending : runtime.pendingWrites) {
         if (pending.has_value() &&
+            (profile_.confirmationTimeoutMs == 0 || pending->confirmationDeadline.has_value()) &&
             FactualValueMatches(
                 runtime.state,
                 pending->control,
@@ -579,9 +611,53 @@ DriverResult ModbusDriver::ExecuteWrite(
     ++pending.writeAttempts;
 
     RtuAdu request;
+    std::uint16_t requestAddress = pending.writeAddress;
+    std::uint16_t requestQuantity = 1;
     Function expectedFunction = Function::WriteMultipleRegisters;
     try {
-        if (pending.writeFunction == WriteFunction::WriteSingleRegister) {
+        if (profile_.writeBlock) {
+            const auto online = ExecuteScanProbe(runtime.pollPlan.probe, transport_);
+            if (online.disposition != ScanDisposition::Found) {
+                throw std::invalid_argument("writeBlock device presence is not confirmed");
+            }
+            const auto& block = *profile_.writeBlock;
+            const auto source = ResolveRegisterLocation(profile_, runtime.logicalAddress, block.snapshot);
+            const auto target = ResolveRegisterLocation(profile_, runtime.logicalAddress, block.write);
+            if (!source || !target) throw std::invalid_argument("cannot resolve writeBlock");
+            const auto snapshot = ReadSemanticBatch(ModbusSemanticReadBatch{
+                .slaveId = source->slaveId, .startAddress = source->address,
+                .quantity = block.snapshotQuantity, .space = source->space,
+            });
+            if (!snapshot.success) throw std::invalid_argument("writeBlock snapshot: " + snapshot.error);
+            std::map<std::size_t, std::uint16_t> overrides;
+            for (const auto& other : runtime.pendingWrites) {
+                if (other) overrides[other->writeAddress - target->address] = other->rawValue;
+            }
+            // Preserve factual power even when an off unit still reports its
+            // previous mode. Replaying that mode alone would switch it on.
+            const auto powerPoint = profile_.points.find("power");
+            if (profile_.capabilities.power && powerPoint != profile_.points.end() &&
+                powerPoint->second.read && powerPoint->second.write) {
+                const auto powerWrite = ResolveRegisterLocation(profile_, runtime.logicalAddress, *powerPoint->second.write);
+                const auto powerRead = ResolveRegisterLocation(profile_, runtime.logicalAddress, *powerPoint->second.read);
+                if (!powerWrite || !powerRead) throw std::invalid_argument("cannot resolve writeBlock power");
+                const auto offset = static_cast<std::size_t>(powerWrite->address - target->address);
+                if (!overrides.contains(offset)) {
+                    const auto read = ReadSemanticRegister(*powerRead);
+                    if (!read.success) throw std::invalid_argument("writeBlock power snapshot: " + read.error);
+                    DriverDeviceState factual;
+                    ApplySemanticRead(factual, profile_, "power", read.value);
+                    if (!factual.power) {
+                        overrides[offset] = EncodeSemanticWrite(profile_, DriverControl::Power, false).rawValue;
+                    }
+                }
+            }
+            const auto values = EncodeWriteBlockSnapshot(block, snapshot.values, overrides);
+            requestAddress = target->address;
+            requestQuantity = static_cast<std::uint16_t>(values.size());
+            request = BuildWriteMultipleRegistersRequest(target->slaveId, requestAddress, values);
+        }
+        else if (pending.writeFunction == WriteFunction::WriteSingleRegister) {
             expectedFunction = Function::WriteSingleRegister;
             request = BuildWriteSingleRegisterRequest(
                 pending.slaveId,
@@ -639,7 +715,7 @@ DriverResult ModbusDriver::ExecuteWrite(
                 response.slaveId == pending.slaveId &&
                 response.function == expectedFunction &&
                 response.startAddress.has_value() &&
-                *response.startAddress == pending.writeAddress;
+                *response.startAddress == requestAddress;
             if (accepted &&
                 expectedFunction == Function::WriteSingleRegister) {
                 accepted = response.value.has_value() &&
@@ -647,7 +723,7 @@ DriverResult ModbusDriver::ExecuteWrite(
             }
             else if (accepted) {
                 accepted = response.quantity.has_value() &&
-                    *response.quantity == 1U;
+                    *response.quantity == requestQuantity;
             }
             if (!accepted) {
                 error = "Modbus '" + pending.pointName +
@@ -663,7 +739,21 @@ DriverResult ModbusDriver::ExecuteWrite(
 
     if (accepted) {
         pending.confirmationAttempts = 0;
-        EnqueueConfirmation(runtime, control);
+        if (profile_.confirmationTimeoutMs != 0) {
+            const auto deadline = std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(profile_.confirmationTimeoutMs);
+            if (profile_.writeBlock) {
+                // Every latest pending field was included in this one FC16 packet.
+                for (auto& other : runtime.pendingWrites) {
+                    if (!other) continue;
+                    if (!other->confirmationDeadline) other->confirmationDeadline = deadline;
+                    other->writeAttempts = std::max(1U, other->writeAttempts);
+                    other->revision = ++nextCommandRevision_; // invalidate queued duplicate sends
+                }
+            }
+            else pending.confirmationDeadline = deadline;
+        }
+        else EnqueueConfirmation(runtime, control);
         return DriverResult{
             .address = runtime.logicalAddress,
             .operation = DriverOperation::SetState,
@@ -815,7 +905,7 @@ ModbusDriver::RawBatchReadResult ModbusDriver::ReadSemanticBatch(
 {
     RtuAdu request;
     try {
-        request = BuildReadHoldingRegistersRequest(
+        request = BuildReadRequest(ReadFunction(batch.space),
             batch.slaveId,
             batch.startAddress,
             batch.quantity);
@@ -855,10 +945,14 @@ ModbusDriver::RawBatchReadResult ModbusDriver::ReadSemanticBatch(
             };
         }
 
-        const auto& response = *transaction.response;
+        auto response = *transaction.response;
+        if (batch.space == RegisterSpace::DiscreteInput &&
+            response.registers.size() == ((batch.quantity + 7U) / 8U) * 8U) {
+            response.registers.resize(batch.quantity);
+        }
         if (response.status != ResponseStatus::Success ||
             response.slaveId != batch.slaveId ||
-            response.function != Function::ReadHoldingRegisters ||
+            response.function != ReadFunction(batch.space) ||
             response.registers.size() != batch.quantity) {
             return RawBatchReadResult{
                 .outcome = DriverOutcome::InvalidResponse,
@@ -943,6 +1037,7 @@ ModbusDriver::RawReadResult ModbusDriver::ReadSemanticRegister(
         .slaveId = location.slaveId,
         .startAddress = location.address,
         .quantity = 1U,
+        .space = location.space,
     });
     if (!batch.success) {
         return RawReadResult{

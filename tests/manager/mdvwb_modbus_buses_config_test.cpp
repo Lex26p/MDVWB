@@ -245,9 +245,9 @@ void TestProtocolSpecificValidation()
           "parity": "none",
           "stopBits": 1
         },
-        "addresses": [0]
+        "addresses": [64]
       }]
-    })json", "1..63 for protocol modbus_rtu");
+    })json", "0..63");
 
     ExpectError(R"json({
       "version": 1,

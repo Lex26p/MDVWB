@@ -297,7 +297,8 @@ ModbusBusSettings ParseModbusSettings(
 
 int MinimumAddress(BusProtocol protocol) noexcept
 {
-    return protocol == BusProtocol::ModbusRtu ? 1 : 0;
+    static_cast<void>(protocol);
+    return 0; // The selected profile validates the actual Modbus logical range.
 }
 
 int MinimumPollPeriodMilliseconds(BusProtocol) noexcept

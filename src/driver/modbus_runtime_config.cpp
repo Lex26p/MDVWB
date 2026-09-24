@@ -112,9 +112,9 @@ namespace {
             : separator;
         const auto token = text.substr(begin, end - begin);
         const int address = ParseInteger(token, "MDVWB_ADDRESSES");
-        if (address < static_cast<int>(kMinLogicalAddress) ||
+        if (address < 0 ||
             address > static_cast<int>(kMaxLogicalAddress)) {
-            Fail("Modbus logical address must be in range 1..63");
+            Fail("Modbus logical address must be in range 0..63");
         }
         if (!unique.insert(address).second) {
             Fail("MDVWB_ADDRESSES contains duplicate logical address " +

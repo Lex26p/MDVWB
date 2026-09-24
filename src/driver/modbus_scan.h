@@ -7,6 +7,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace mdv::modbus {
 
@@ -34,11 +35,9 @@ struct ScanCandidate {
     }
 };
 
-using ScanPlan = std::array<
-    ScanCandidate,
-    static_cast<std::size_t>(kMaxLogicalAddress)>;
+using ScanPlan = std::vector<ScanCandidate>;
 
-// Builds a deterministic 1..63 scan plan from the selected profile.
+// Builds a deterministic 1..63 scan plan, including 0 when the profile allows it.
 //
 // Every MDVWB logical candidate is represented exactly once. Candidates that
 // the profile cannot resolve are retained with probe == nullopt so later scan

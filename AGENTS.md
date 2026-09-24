@@ -273,7 +273,7 @@ All targets compile as C++20. MSVC uses `/W4 /permissive- /utf-8`; other compile
 
 ## 8. CTest ownership
 
-CMake currently registers 43 tests:
+CMake currently registers 44 tests:
 
 | Test | Primary ownership |
 |---|---|
@@ -288,6 +288,7 @@ CMake currently registers 43 tests:
 | `mdvwb_modbus_poll_plan_test`, `mdvwb_modbus_driver_test`, `mdvwb_modbus_runtime_cadence_test` | Poll plans, driver behavior, retry and cadence policy |
 | `mdvwb_modbus_vrf_reference_test`, `mdvwb_modbus_vrf_profile_test` | First production profile and preserved equipment facts |
 | `mdvwb_modbus_thermostat_profile_test` | Direct-Slave Thermostat profile, mappings, FC06 writes and FC03 confirmation |
+| `mdvwb_modbus_gw3_profile_test` | GW3-MOD FC02/FC04, address zero, seven-register FC16 preservation and delayed confirmation |
 | `mdvwb_modbus_runtime_config_test`, `mdvwb_modbus_mqtt_integration_test` | Managed runtime validation and end-to-end MQTT semantics |
 | `mdv_buses_config_test` | Bus schema and canonicalization |
 | `mdvwb_modbus_buses_config_test`, `mdvwb_modbus_bus_profile_test` | Protocol-aware bus configuration and profile compatibility |
@@ -330,7 +331,7 @@ ctest --test-dir out/build/x64-debug -C Debug --output-on-failure
 - missing `protocol` is accepted as legacy `mdv`, while canonical output writes it explicitly;
 - `pollPeriodMs` is configured per bus; missing values default to `150` for
   MDV and `300` for Modbus RTU, while canonical output writes the effective value;
-- `modbus_rtu` buses require validated profile and serial settings and logical addresses `1..63`;
+- `modbus_rtu` buses require validated profile and serial settings; logical addresses are `0..63`, further restricted by the profile;
 - generated `/etc/default/mdvwb-<bus>` files are derivatives;
 - changes may start, restart, stop, or remove only affected service instances;
 - removed bus/device retained topics must be cleared.
@@ -383,14 +384,14 @@ This file prevents an automatic schedule from executing twice after a scheduler 
 
 ### Modbus runtime invariants
 
-- Modbus RTU uses logical addresses `1..63`; a logical address is not necessarily a Slave ID;
+- Modbus RTU uses profile-defined logical addresses within `0..63`; direct Slave IDs remain `1..63`, never broadcast;
 - all manufacturer register knowledge comes from a selected schema-v1 profile;
 - effective write capability is the intersection of the profile declaration and
   the current runtime implementation; the production runtime currently performs
   confirmed writes for `Power`, `Mode`, `FanSpeed` and `SetTemperature`;
 - scalar Holding Register writes use the function declared by each write point:
   FC10 by default or explicit FC06 `write_single_register`; both require factual
-  FC03 read-back;
+  profile-driven factual read-back (FC03, FC04 or FC02);
 - a valid profile may declare other future writes without making them
   available to the UI or scheduler;
 - profiles and managed runtime settings are strictly validated before serial I/O or discovery;
@@ -425,6 +426,11 @@ This file prevents an automatic schedule from executing twice after a scheduler 
 - the second spreadsheet block, advanced settings, `0x2064` and `0x2066` are
   intentionally not exposed by `thermostat`; its live hardware behavior is not
   yet recorded as confirmed;
+- `gw3_mod` uses gateway Slave 1, IDU addresses `0..63`, FC02 Online/Power and
+  FC04 state with independent register strides; FC16 writes all seven common
+  parameters from a validated snapshot, preserving native neighbor values;
+- GW3-MOD unknown neighbor values reject writes; no placeholder defaults are
+  invented. Its 330-second confirmation window also applies to UI/scheduler;
 - unsupported controls produce no Modbus wire traffic;
 - when an optional factual value becomes unavailable, its old retained MQTT value is cleared with an empty retained payload;
 - for compatibility, an online powered device without a factual Mode still maps to `Status=5` (Auto); this does not create a factual `Mode` value.
@@ -450,7 +456,7 @@ The driver serial loop remains sequential. Manager discovery is the intentional 
 ## 13. Discovery invariants
 
 - MDV scans addresses `0..63` in ascending order for three passes; one strictly valid C0 reply is enough to include an address;
-- Modbus scans logical addresses `1..63` with the selected validated profile and read-only probe;
+- Modbus scans logical addresses `1..63`, including `0` when the selected profile allows it, with a read-only probe;
 - stop only the selected `mdvwb@N.service`;
 - leave that service stopped after completion;
 - never apply discovered addresses automatically;
@@ -502,8 +508,9 @@ The offline installer:
 - requires root and architecture `arm64`;
 - requires `libmosquitto.so.1`;
 - emits package format `2`; format `1` remains accepted for legacy archives,
-  while format `2` requires the internal Modbus runtime and both shipped
-  production profiles;
+  while format `2` requires the internal Modbus runtime and the two original
+  production profiles; new packages also ship `gw3_mod`, installed when present
+  so older format-2 archives remain accepted;
 - validates all required package files and `SHA256SUMS`;
 - installs all five executables (including internal `mdvwb-modbus`) and three systemd unit types;
 - installs both static web applications;

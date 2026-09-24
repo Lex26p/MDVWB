@@ -11,7 +11,7 @@
 Read in this order:
 
 1. [`modbus/ARCHITECTURE.md`](modbus/ARCHITECTURE.md)  
-   Core architectural decisions: logical addresses `1..63`, profile-driven Modbus, scan model, separation of logical address / Slave ID / registers, common semantic state.
+   Core architecture: profile-driven Modbus, scan model, separation of logical address / Slave ID / registers, common semantic state. GW3-MOD extends the original address range to include zero.
 
 2. [`modbus/PROFILE_FORMAT.md`](modbus/PROFILE_FORMAT.md)  
    Implemented schema-v1 data-driven profile format: addressing models, read/write points, scaling, enum mappings, capabilities, composite values, validation and safe scan probes.
@@ -27,6 +27,10 @@ Read in this order:
 
 6. [`modbus/STATUS.md`](modbus/STATUS.md)
    Actual development state. Read this before starting work. Do not infer completion from the roadmap.
+
+7. [`modbus/GW3_MOD_PROTOCOL.md`](modbus/GW3_MOD_PROTOCOL.md)
+   GW3-MOD RTU mapping, logical addresses 0..63, preserved block writes,
+   delayed confirmation, safe-write limitations and hardware checks.
 
 ### MDV protocol research
 
@@ -67,7 +71,7 @@ The high-level model is:
 Important invariants:
 
 ```text
-MDVWB logical device address: 1..63
+MDVWB logical device address: profile-defined within 0..63 (direct Slave IDs: 1..63)
 ```
 
 A logical address is **not necessarily** the Modbus Slave ID.
@@ -87,7 +91,7 @@ one Slave ID + different register blocks
 Modbus scan always evaluates logical candidates:
 
 ```text
-1..63
+1..63, plus 0 when allowed by the selected profile
 ```
 
 using a **known profile and safe read-only probe**.

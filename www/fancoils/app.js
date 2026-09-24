@@ -1249,6 +1249,12 @@ function beginPendingCommand(fan, control, rawValue, batchId = null) {
 
   const topic = fanCommandTopic(fan.bus, fan.address, control);
 
+  const bus = state.busConfiguration.buses.find((candidate) => candidate.id === fan.bus);
+  const profile = bus?.protocol === "modbus_rtu"
+    ? state.profileCatalog.profiles.find((candidate) => candidate.id === bus.modbus?.profileId)
+    : null;
+  const confirmationTimeoutMs = Math.max(COMMAND_CONFIRM_TIMEOUT_MS, profile?.confirmationTimeoutMs || 0);
+
   const pending = {
     status: "pending",
     key,
@@ -1269,12 +1275,12 @@ function beginPendingCommand(fan, control, rawValue, batchId = null) {
       state.groupOperation.timedOut += 1;
       updateGroupOperationFeedback();
     } else {
-      setCommandFeedback(`${fan.label}: команда ${control} не подтверждена за 10 секунд. Фактическое состояние не изменено.`, "warning");
+      setCommandFeedback(`${fan.label}: команда ${control} не подтверждена за ${confirmationTimeoutMs / 1000} секунд. Проверьте фактическое состояние.`, "warning");
     }
     renderMarkers();
     renderDetails();
     renderGroupPanel();
-  }, COMMAND_CONFIRM_TIMEOUT_MS);
+  }, confirmationTimeoutMs);
   state.pendingCommands.set(key, pending);
 
   try {

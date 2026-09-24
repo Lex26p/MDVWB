@@ -123,8 +123,8 @@ function normalizeTransport(value) {
 
 function normalizeLogicalRange(value) {
   const range = requireObject(value, "Диапазон логических адресов профиля");
-  const minimum = requireInteger(range.minimum, 1, 63, "Минимальный логический адрес");
-  const maximum = requireInteger(range.maximum, 1, 63, "Максимальный логический адрес");
+  const minimum = requireInteger(range.minimum, 0, 63, "Минимальный логический адрес");
+  const maximum = requireInteger(range.maximum, 0, 63, "Максимальный логический адрес");
   if (minimum > maximum) {
     throw new Error("Минимальный логический адрес профиля больше максимального");
   }
@@ -194,6 +194,7 @@ function normalizeProfile(value) {
     transport: normalizeTransport(profile.transport),
     logicalAddresses: normalizeLogicalRange(profile.logicalAddresses),
     addressingType: requireString(profile.addressingType, `Тип адресации профиля ${id}`),
+    confirmationTimeoutMs: requireInteger(profile.confirmationTimeoutMs ?? 0, 0, 600000, "Ожидание подтверждения"),
     capabilities,
   };
 }
@@ -295,7 +296,7 @@ export function normalizeBus(value) {
   result.addresses = normalizeAddresses(
     value.addresses,
     enabled,
-    protocol === "modbus_rtu" ? 1 : 0,
+    0,
     63,
   );
   return result;
@@ -396,7 +397,7 @@ export function configurationWithDiscoveryAddresses(
     throw new Error(`Шина ${id} отсутствует в конфигурации`);
   }
 
-  let minimum = bus.protocol === "modbus_rtu" ? 1 : 0;
+  let minimum = 0;
   let maximum = 63;
   if (bus.protocol === "modbus_rtu") {
     const profile = findModbusProfile(profileCatalog, bus.modbus.profileId);
@@ -428,6 +429,25 @@ export function configurationWithDiscoveryAddresses(
 
 export function configurationsEqual(left, right) {
   return configurationToJson(left) === configurationToJson(right);
+}
+
+export function incomingConfigurationAction({
+  current,
+  incoming,
+  received,
+  dirty,
+  pending,
+}) {
+  if (!received) {
+    return "replace";
+  }
+  if (configurationsEqual(current, incoming)) {
+    return "ignore";
+  }
+  if (!dirty || pending) {
+    return "replace";
+  }
+  return "conflict";
 }
 
 export function configurationToJson(value) {

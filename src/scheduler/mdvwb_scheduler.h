@@ -174,7 +174,7 @@ private:
         bool& dependencyFailure,
         std::string* errorMessage) const;
     void BlockInvalidDependencies(std::string message);
-    void ValidateSelected(const ScheduleEntry& schedule) const;
+    std::uint32_t ValidateSelected(const ScheduleEntry& schedule) const;
     void QueueAutomaticSchedules(const SchedulerLocalMinute& minute);
     void QueueRun(
         std::string_view scheduleId,

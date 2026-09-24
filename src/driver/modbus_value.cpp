@@ -226,7 +226,7 @@ std::uint16_t EncodePointValue(
 
         ValidateNumberLimits(point, *physical);
 
-        const auto& transform = EffectiveTransform(point);
+        const auto& transform = point.writeTransform ? *point.writeTransform : EffectiveTransform(point);
         if (!std::isfinite(transform.scale) || transform.scale == 0.0 ||
             !std::isfinite(transform.offset)) {
             Fail("numeric point has an invalid transform");

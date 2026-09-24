@@ -140,6 +140,7 @@ void WriteEnumValues(
     std::map<std::string, std::pair<bool, bool>, std::less<>> values;
     for (const auto& [raw, semantic] : point.enumMappings.read) {
         static_cast<void>(raw);
+        if (semantic == "unavailable") continue;
         values[semantic].first = true;
     }
     for (const auto& [semantic, raw] : point.enumMappings.write) {
@@ -221,6 +222,7 @@ void WriteProfile(
     WriteString(output, profile.id);
     output << ",\"name\":";
     WriteString(output, profile.name);
+    output << ",\"confirmationTimeoutMs\":" << profile.confirmationTimeoutMs;
     output << ",\"transport\":{";
     output << "\"baudRate\":" << profile.transport.baudRate;
     output << ",\"dataBits\":" << static_cast<int>(profile.transport.dataBits);

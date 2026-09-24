@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "id": "gw3_mod",
+  "name": "MDV GW3-MOD",
+  "registerAddressing": "pdu_zero_based",
+  "transport": {"baudRate": 9600, "dataBits": 8, "parity": "none", "stopBits": 1},
+  "addressing": {
+    "type": "fixed_slave_stride", "logicalMin": 0, "logicalMax": 63,
+    "slaveId": 1, "firstLogicalAddress": 0, "registerStride": 32
+  },
+  "confirmationTimeoutMs": 330000,
+  "capabilities": {
+    "power": true, "mode": true, "fanSpeed": true, "setTemperature": true,
+    "roomTemperature": true, "alarm": true, "blinds": false, "blocked": false
+  },
+  "probe": {
+    "read": {"space": "discrete_input", "address": 2, "registerStride": 8, "reference": "10003 + 8*n: IDU Online"},
+    "quantity": 1, "presence": "any_nonzero"
+  },
+  "points": {
+    "power": {
+      "type": "enum",
+      "read": {"space": "discrete_input", "address": 0, "registerStride": 8, "reference": "10001 + 8*n"},
+      "write": {"space": "holding_register", "address": 1, "registerStride": 25, "reference": "40002 + 25*n"},
+      "readMap": {"0": "off", "1": "on"},
+      "writeMap": {"off": 159, "on": 223}
+    },
+    "mode": {
+      "type": "enum",
+      "read": {"space": "input_register", "address": 0, "reference": "30001 + 32*n"},
+      "write": {"space": "holding_register", "address": 1, "registerStride": 25, "reference": "40002 + 25*n"},
+      "readMap": {"0": "unavailable", "1": "fan", "2": "cool", "3": "heat", "4": "cool", "6": "dry", "128": "auto", "129": "auto", "130": "auto", "131": "auto", "132": "auto", "134": "auto"},
+      "writeMap": {"fan": 65, "cool": 66, "heat": 67, "dry": 70, "auto": 192}
+    },
+    "fanSpeed": {
+      "type": "enum",
+      "read": {"space": "input_register", "address": 1, "reference": "30002 + 32*n"},
+      "write": {"space": "holding_register", "address": 2, "registerStride": 25, "reference": "40003 + 25*n"},
+      "readMap": {"0": "unavailable", "1": "low", "2": "low", "3": "medium", "4": "medium", "5": "high", "6": "high", "7": "high", "128": "auto", "129": "auto", "130": "auto", "131": "auto", "132": "auto", "133": "auto", "134": "auto", "135": "auto"},
+      "writeMap": {"low": 1, "medium": 4, "high": 7, "auto": 128}
+    },
+    "setTemperature": {
+      "type": "number", "rawType": "uint16",
+      "read": {"space": "input_register", "address": 2, "reference": "30003 + 32*n, tenths"},
+      "write": {"space": "holding_register", "address": 3, "registerStride": 25, "reference": "40004 + 25*n, whole degrees"},
+      "transform": {"scale": 0.1, "offset": 0},
+      "writeTransform": {"scale": 1, "offset": 0},
+      "limits": {"min": 16, "max": 32, "step": 1},
+      "writeConversion": {"rounding": "exact"}
+    },
+    "roomTemperature": {
+      "type": "number", "rawType": "int16",
+      "read": {"space": "input_register", "address": 5, "reference": "30006 + 32*n, tenths"},
+      "transform": {"scale": 0.1, "offset": 0}
+    },
+    "alarmCode": {
+      "type": "number", "rawType": "uint16",
+      "read": {"space": "input_register", "address": 6, "reference": "30007 + 32*n"}
+    }
+  },
+  "writeBlock": {
+    "snapshot": {"space": "input_register", "address": 0, "reference": "30001..30009 + 32*n"},
+    "snapshotQuantity": 9,
+    "write": {"space": "holding_register", "address": 1, "registerStride": 25, "reference": "40002..40008 + 25*n"},
+    "fields": [
+      {"sourceOffset": 0, "rawMap": {"0": 159, "1": 65, "2": 66, "3": 67, "6": 70, "128": 192, "129": 192, "130": 192, "131": 192, "132": 192, "134": 192}},
+      {"sourceOffset": 1, "rawMap": {"1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "128": 128, "129": 128, "130": 128, "131": 128, "132": 128, "133": 128, "134": 128, "135": 128}},
+      {"sourceOffset": 2, "encoding": "tenths_bit7"},
+      {"sourceOffset": 3, "encoding": "tenths_bit7"},
+      {"sourceOffset": 4, "encoding": "tenths_bit7"},
+      {"sourceOffset": 7, "rawMap": {"1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "14": 14}},
+      {"sourceOffset": 8, "rawMap": {"1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "14": 14}}
+    ]
+  }
+}

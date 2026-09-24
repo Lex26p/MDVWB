@@ -51,7 +51,7 @@ FindDiscoveryRuntimeForPort(
 [[nodiscard]] std::filesystem::path DiscoveryDefaultDirectoryFromEnvironment();
 
 // Executes the selected profile's safe read-only probe for logical addresses
-// 1..63. Unsupported candidates generate no traffic. Any transport/protocol
+// 1..63 (also 0 when allowed). Unsupported candidates generate no traffic. Any transport/protocol
 // error rejects the whole result instead of returning a misleading partial set.
 [[nodiscard]] ModbusDiscoveryScanResult ExecuteModbusDiscovery(
     const ModbusDiscoveryRuntime& runtime,

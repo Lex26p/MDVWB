@@ -70,10 +70,14 @@ namespace {
                 transaction.elapsed);
         }
 
-        const auto& response = *transaction.response;
+        auto response = *transaction.response;
+        if (probe.space == RegisterSpace::DiscreteInput &&
+            response.registers.size() == ((probe.quantity + 7U) / 8U) * 8U) {
+            response.registers.resize(probe.quantity);
+        }
         if (response.status != ResponseStatus::Success ||
             response.slaveId != probe.slaveId ||
-            response.function != Function::ReadHoldingRegisters ||
+            response.function != ReadFunction(probe.space) ||
             response.registers.size() != probe.quantity) {
             return ErrorResult(
                 probe,
@@ -176,13 +180,13 @@ namespace {
     const ScanProbe& probe,
     ITransactionTransport& transport)
 {
-    if (probe.space != RegisterSpace::HoldingRegister) {
+    if (!IsReadableSpace(probe.space)) {
         return UnsupportedDataSpace(probe);
     }
 
     RtuAdu request;
     try {
-        request = BuildReadHoldingRegistersRequest(
+        request = BuildReadRequest(ReadFunction(probe.space),
             probe.slaveId,
             probe.address,
             probe.quantity);
@@ -212,7 +216,7 @@ ScanReport ExecuteScanPlan(
     const ScanPlan& plan,
     ITransactionTransport& transport)
 {
-    ScanReport report{};
+    ScanReport report(plan.size());
 
     for (std::size_t index = 0; index < plan.size(); ++index) {
         const auto& candidate = plan[index];

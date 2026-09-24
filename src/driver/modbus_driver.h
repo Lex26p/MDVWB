@@ -7,6 +7,7 @@
 #include "modbus_scan_execute.h"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -68,6 +69,7 @@ private:
         std::uint64_t revision = 0;
         std::uint32_t writeAttempts = 0;
         std::uint32_t confirmationAttempts = 0;
+        std::optional<std::chrono::steady_clock::time_point> confirmationDeadline;
     };
 
     struct DeviceRuntime {

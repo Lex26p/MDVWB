@@ -408,6 +408,10 @@ target_link_libraries(mdvwb_modbus_thermostat_profile_test
 target_compile_definitions(mdvwb_modbus_thermostat_profile_test
     PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 
+add_executable(mdvwb_modbus_gw3_profile_test ${MDVWB_DRIVER_TEST_DIR}/modbus_gw3_profile_test.cpp)
+target_link_libraries(mdvwb_modbus_gw3_profile_test PRIVATE mdvwb_modbus_driver)
+target_compile_definitions(mdvwb_modbus_gw3_profile_test PRIVATE MDVWB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+
 add_executable(mdvwb_modbus_poll_plan_test
     ${MDVWB_DRIVER_TEST_DIR}/modbus_poll_plan_test.cpp
 )
@@ -602,6 +606,7 @@ set(MDVWB_PROJECT_TARGETS
     mdvwb_modbus_vrf_reference_test
     mdvwb_modbus_vrf_profile_test
     mdvwb_modbus_thermostat_profile_test
+    mdvwb_modbus_gw3_profile_test
     mdvwb_modbus_driver_test
     mdvwb_modbus_runtime_cadence_test
     mdvwb_modbus_runtime_config_test
@@ -675,6 +680,7 @@ add_test(NAME mdvwb_modbus_poll_plan_test COMMAND mdvwb_modbus_poll_plan_test)
 add_test(NAME mdvwb_modbus_vrf_reference_test COMMAND mdvwb_modbus_vrf_reference_test)
 add_test(NAME mdvwb_modbus_vrf_profile_test COMMAND mdvwb_modbus_vrf_profile_test)
 add_test(NAME mdvwb_modbus_thermostat_profile_test COMMAND mdvwb_modbus_thermostat_profile_test)
+add_test(NAME mdvwb_modbus_gw3_profile_test COMMAND mdvwb_modbus_gw3_profile_test)
 add_test(NAME mdvwb_modbus_driver_test COMMAND mdvwb_modbus_driver_test)
 add_test(NAME mdvwb_modbus_runtime_cadence_test COMMAND mdvwb_modbus_runtime_cadence_test)
 add_test(NAME mdvwb_modbus_runtime_config_test COMMAND mdvwb_modbus_runtime_config_test)

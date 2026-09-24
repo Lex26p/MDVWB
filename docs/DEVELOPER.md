@@ -85,7 +85,7 @@ parser отклоняет; их добавление требует расшир
 Наличие `write` в JSON-профиле означает, что профиль описывает преобразование и
 register для записи, но само по себе не означает готовность production runtime.
 Фактическая writable capability равна пересечению capability профиля, его
-`write` point и реализации драйвера. Сейчас подтверждённый write/FC03 read-back
+`write` point и реализации драйвера. Сейчас подтверждённый write/read-back
 реализован для `Power`, `Mode`, `FanSpeed` и `SetTemperature`. Каталог UI и
 scheduler разрешают только те из этих команд, для которых выбранный профиль
 содержит совместимые read/write points. `Blinds`, `Blocked` и любые будущие
@@ -98,6 +98,15 @@ Holding Register write по умолчанию использует FC10. Про
 Новый `thermostat` использует FC06 для всех четырёх writable points, а
 `vrf_add_controller` сохраняет FC10. В обоих случаях factual state обновляется
 только после FC03 read-back.
+
+`gw3_mod` использует FC02 для Power/Online, FC04 для factual state и FC16
+для семи общих параметров. Адрес блока `0..63` не является Slave ID: все
+запросы адресуются шлюзу Slave 1. `RegisterLocation.registerStride` позволяет
+использовать разные шаги 8/32/25; `writeTransform` отделяет формат записи от
+формата чтения. `writeBlock` сохраняет исходные соседние параметры из снимка,
+а `confirmationTimeoutMs` разрешает отложенное подтверждение обычным опросом
+без повторных записей из-за старого состояния. Веб и scheduler используют
+тот же срок. Подробности и ограничения: [GW3-MOD](modbus/GW3_MOD_PROTOCOL.md).
 
 Доступность Modbus определяется только полным обычным poll: presence probe и
 все semantic reads должны завершиться успешно. Для уже online-устройства первая
@@ -1671,7 +1680,7 @@ default, а canonical serializer всегда записывает эффект�
 
 ```text
 MDV:        0..63
-Modbus RTU: 1..63
+Modbus RTU: 0..63, дополнительно ограничено выбранным профилем
 ```
 
 Addresses уникальны внутри bus.

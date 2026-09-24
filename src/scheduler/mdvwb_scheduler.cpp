@@ -159,12 +159,13 @@ void ValidateSchedulerReferences(
     }
 }
 
-void ValidateScheduleModbusCapabilities(
+std::uint32_t ValidateScheduleModbusCapabilities(
     const ScheduleEntry& schedule,
     const BusesConfig& buses,
     const std::filesystem::path& profileDirectory)
 {
     std::optional<mdv::modbus::ProfileCatalog> catalog;
+    std::uint32_t confirmationTimeoutMs = 0;
 
     const auto requireAction = [&](const BusConfig& bus,
                                    std::string_view action,
@@ -188,6 +189,7 @@ void ValidateScheduleModbusCapabilities(
                 bus.modbus->profileId + "'");
         }
         mdv::modbus::ValidateModbusRuntimeProfile(*profile);
+        confirmationTimeoutMs = std::max(confirmationTimeoutMs, profile->confirmationTimeoutMs);
 
         bool capability = false;
         if (pointName == "power") {
@@ -230,6 +232,7 @@ void ValidateScheduleModbusCapabilities(
             schedule.actions.setTemp.has_value(),
             "setTemperature");
     }
+    return confirmationTimeoutMs;
 }
 
 void WriteStateAtomically(
@@ -794,7 +797,7 @@ bool SchedulerService::ReloadFromDisk(
     }
 }
 
-void SchedulerService::ValidateSelected(
+std::uint32_t SchedulerService::ValidateSelected(
     const ScheduleEntry& schedule) const
 {
     SchedulesConfig selected;
@@ -805,7 +808,7 @@ void SchedulerService::ValidateSelected(
         selected,
         buses,
         LoadDashboardCollection(paths_.dashboard));
-    ValidateScheduleModbusCapabilities(
+    return ValidateScheduleModbusCapabilities(
         schedule,
         buses,
         paths_.modbusProfiles);
@@ -944,8 +947,9 @@ void SchedulerService::StartNextRun()
         }
 
         candidate.schedule = *current;
+        std::uint32_t profileTimeoutMs = 0;
         try {
-            ValidateSelected(candidate.schedule);
+            profileTimeoutMs = ValidateSelected(candidate.schedule);
         }
         catch (const std::exception& error) {
             reject(
@@ -955,7 +959,8 @@ void SchedulerService::StartNextRun()
         }
 
         candidate.deadline = clock_.MonotonicNow() +
-            std::chrono::seconds(paths_.confirmationTimeoutSeconds);
+            std::chrono::milliseconds(std::max(
+                static_cast<std::uint32_t>(paths_.confirmationTimeoutSeconds * 1000), profileTimeoutMs));
         active_ = std::move(candidate);
 
         try {

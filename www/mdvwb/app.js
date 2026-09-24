@@ -12,6 +12,7 @@ import {
   configurationsEqual,
   discoveryLabel,
   formatAddresses,
+  incomingConfigurationAction,
   nextAvailableBusId,
   normalizeConfiguration,
   normalizeModbusProfileCatalog,
@@ -481,7 +482,7 @@ function sendBusCommand(busId, command) {
 
   if (command === "discovery") {
     const protocolNotice = bus.protocol === "modbus_rtu"
-      ? "Будут проверены логические адреса 1–63 только безопасным read-only probe выбранного профиля."
+      ? "Будут проверены логические адреса выбранного профиля только безопасным read-only запросом."
       : "Будет выполнен штатный поиск MDV-адресов 0–63.";
     const confirmed = window.confirm(
       `Запустить поиск на шине ${busId} (${bus.port})?\n\n` +
@@ -529,10 +530,24 @@ function handleMessage(topic, payload) {
 
     if (topic === "/mdvwb/config") {
       const incoming = normalizeConfiguration(parseJsonPayload(payload, "конфигурация"));
+      const action = incomingConfigurationAction({
+        current: state.config,
+        incoming,
+        received: state.receivedConfig,
+        dirty: state.dirty,
+        pending: state.pendingApply,
+      });
+
+      if (action === "ignore") {
+        markUpdated();
+        render();
+        return;
+      }
+
       state.config = cloneConfiguration(incoming);
       dashboardEditor.setBusConfiguration(incoming);
 
-      if (!state.dirty || state.pendingApply || !state.receivedConfig) {
+      if (action === "replace") {
         state.draft = cloneConfiguration(incoming);
         state.pendingApply = false;
         closeEditor();

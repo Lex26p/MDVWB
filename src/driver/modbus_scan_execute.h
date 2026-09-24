@@ -42,9 +42,7 @@ struct ScanResult {
     std::chrono::milliseconds elapsed{0};
 };
 
-using ScanReport = std::array<
-    ScanResult,
-    static_cast<std::size_t>(kMaxLogicalAddress)>;
+using ScanReport = std::vector<ScanResult>;
 
 // Executes one already-resolved read-only probe using the same transport,
 // response validation and profile presence rule as full discovery.
@@ -58,7 +56,7 @@ using ScanReport = std::array<
     const ScanPlan& plan,
     ITransactionTransport& transport);
 
-// Convenience wrapper that first builds the deterministic 1..63 plan.
+// Convenience wrapper that first builds the deterministic profile scan plan.
 [[nodiscard]] ScanReport ExecuteProfileScan(
     const ModbusProfile& profile,
     ITransactionTransport& transport);

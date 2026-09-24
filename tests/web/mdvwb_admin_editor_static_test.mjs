@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 const root = new URL("../../", import.meta.url);
 const html = await readFile(new URL("www/mdvwb/index.html", root), "utf8");
 const css = await readFile(new URL("www/mdvwb/styles.css", root), "utf8");
+const app = await readFile(new URL("www/mdvwb/app.js", root), "utf8");
 const placement = await readFile(new URL("www/mdvwb/dashboard-placement-editor.js", root), "utf8");
 const dashboardEditor = await readFile(new URL("www/mdvwb/dashboard-editor.js", root), "utf8");
 
@@ -64,5 +65,7 @@ assert.match(dashboardEditor, /createPanel\(\)/);
 assert.match(dashboardEditor, /duplicatePanel\(\)/);
 assert.match(dashboardEditor, /deletePanel\(\)/);
 assert.match(css, /\.dashboard-panel-switcher/);
+assert.match(app, /incomingConfigurationAction/);
+assert.match(app, /action === "ignore"/);
 
 console.log("MDVWB compact admin editor static tests: OK");

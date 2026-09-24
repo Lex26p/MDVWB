@@ -55,6 +55,47 @@ assert.equal(model.cloneConfiguration(config).revision, 17);
 assert.equal(JSON.parse(model.configurationToJson(config)).revision, 17);
 assert.equal(model.normalizeConfiguration({ version: 1, buses: [] }).revision, 17);
 
+const changedConfig = model.normalizeConfiguration({
+  version: 1,
+  revision: 18,
+  buses: [{ id: 1, enabled: true, port: "/dev/ttyUSB0", addresses: [1] }],
+});
+assert.equal(model.incomingConfigurationAction({
+  current: config,
+  incoming: model.cloneConfiguration(config),
+  received: true,
+  dirty: true,
+  pending: false,
+}), "ignore");
+assert.equal(model.incomingConfigurationAction({
+  current: config,
+  incoming: model.cloneConfiguration(config),
+  received: true,
+  dirty: true,
+  pending: true,
+}), "ignore");
+assert.equal(model.incomingConfigurationAction({
+  current: config,
+  incoming: changedConfig,
+  received: true,
+  dirty: false,
+  pending: false,
+}), "replace");
+assert.equal(model.incomingConfigurationAction({
+  current: config,
+  incoming: changedConfig,
+  received: true,
+  dirty: true,
+  pending: false,
+}), "conflict");
+assert.equal(model.incomingConfigurationAction({
+  current: config,
+  incoming: changedConfig,
+  received: true,
+  dirty: true,
+  pending: true,
+}), "replace");
+
 assert.throws(
   () => model.normalizeConfiguration({ version: 1, revision: -1, buses: [] }),
   /Ревизия/,

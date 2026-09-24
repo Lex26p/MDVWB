@@ -1,6 +1,7 @@
 #pragma once
 
 #include "serial_port.h"
+#include "modbus_rtu.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -94,7 +95,23 @@ struct RegisterLocation {
     std::uint16_t address = 0;
     std::optional<std::string> reference;
     WriteFunction writeFunction = WriteFunction::WriteMultipleRegisters;
+    // Override only for fixed_slave_stride addressing; anchor remains profile-defined.
+    std::optional<std::uint16_t> registerStride;
 };
+
+[[nodiscard]] inline bool IsReadableSpace(RegisterSpace space) noexcept
+{
+    return space == RegisterSpace::HoldingRegister || space == RegisterSpace::InputRegister ||
+        space == RegisterSpace::DiscreteInput;
+}
+
+[[nodiscard]] inline Function ReadFunction(RegisterSpace space)
+{
+    if (space == RegisterSpace::HoldingRegister) return Function::ReadHoldingRegisters;
+    if (space == RegisterSpace::InputRegister) return Function::ReadInputRegisters;
+    if (space == RegisterSpace::DiscreteInput) return Function::ReadDiscreteInputs;
+    throw std::invalid_argument("unsupported Modbus read data space");
+}
 
 struct NumericTransform {
     double scale = 1.0;
@@ -118,6 +135,7 @@ struct PointDefinition {
     std::optional<RegisterLocation> read;
     std::optional<RegisterLocation> write;
     std::optional<NumericTransform> transform;
+    std::optional<NumericTransform> writeTransform;
     std::optional<NumericLimits> limits;
     WriteRounding rounding = WriteRounding::Exact;
     EnumMappings enumMappings;
@@ -145,6 +163,20 @@ struct ProbeDefinition {
     ProbePresence presence = ProbePresence::AnyResponse;
 };
 
+// A snapshot-preserving FC16 write. All register knowledge stays in JSON.
+struct WriteBlockField {
+    std::uint16_t sourceOffset = 0;
+    bool tenthsBit7 = false;
+    std::map<std::uint16_t, std::uint16_t> rawMap;
+};
+
+struct WriteBlock {
+    RegisterLocation snapshot;
+    std::uint16_t snapshotQuantity = 1;
+    RegisterLocation write;
+    std::vector<WriteBlockField> fields;
+};
+
 struct ModbusProfile {
     int schemaVersion = kProfileSchemaVersion;
     std::string id;
@@ -160,6 +192,9 @@ struct ModbusProfile {
     ProfileCapabilities capabilities;
     ProbeDefinition probe;
     std::map<std::string, PointDefinition, std::less<>> points;
+    std::optional<WriteBlock> writeBlock;
+    // Zero preserves immediate read-back/retry behavior of existing profiles.
+    std::uint32_t confirmationTimeoutMs = 0;
 };
 
 struct ProfileLoadIssue {

@@ -103,7 +103,8 @@ install_modbus_payload()
     runtime_tmp=$lib_dir/.mdvwb-modbus.tmp.$$
     vrf_profile_tmp=$profile_dir/.vrf_add_controller.json.tmp.$$
     thermostat_profile_tmp=$profile_dir/.thermostat.json.tmp.$$
-    trap 'rm -f "$runtime_tmp" "$vrf_profile_tmp" "$thermostat_profile_tmp"' HUP INT TERM
+    gw3_profile_tmp=$profile_dir/.gw3_mod.json.tmp.$$
+    trap 'rm -f "$runtime_tmp" "$vrf_profile_tmp" "$thermostat_profile_tmp" "$gw3_profile_tmp"' HUP INT TERM
 
     install -m 0755 "$SCRIPT_DIR/mdvwb-modbus" "$runtime_tmp"
     mv -f "$runtime_tmp" "$lib_dir/mdvwb-modbus"
@@ -117,6 +118,12 @@ install_modbus_payload()
         "$SCRIPT_DIR/modbus-profiles/thermostat.json" \
         "$thermostat_profile_tmp"
     mv -f "$thermostat_profile_tmp" "$profile_dir/thermostat.json"
+
+    # Optional for compatibility with older format-2 rollback archives.
+    if [ -f "$SCRIPT_DIR/modbus-profiles/gw3_mod.json" ]; then
+        install -m 0644 "$SCRIPT_DIR/modbus-profiles/gw3_mod.json" "$gw3_profile_tmp"
+        mv -f "$gw3_profile_tmp" "$profile_dir/gw3_mod.json"
+    fi
 
     trap - HUP INT TERM
 }

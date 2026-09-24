@@ -27,8 +27,8 @@ struct ResolvedRegisterLocation {
     std::uint16_t address = 0;
 };
 
-// Invalid MDVWB logical addresses (outside 1..63) are errors.
-// A valid 1..63 candidate that is not supported by this profile returns nullopt.
+// Invalid MDVWB logical addresses (outside 0..63) are errors.
+// A valid candidate not supported by this profile returns nullopt.
 // For explicit addressing, a missing per-device entry therefore means
 // "unsupported candidate", which scan code can skip deterministically.
 [[nodiscard]] std::optional<ResolvedDeviceAddress> ResolveLogicalAddress(

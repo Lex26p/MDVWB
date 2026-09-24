@@ -18,10 +18,9 @@ namespace {
 
 void ValidateRequestedLogicalAddress(std::uint8_t logicalAddress)
 {
-    if (logicalAddress < kMinLogicalAddress ||
-        logicalAddress > kMaxLogicalAddress) {
+    if (logicalAddress > kMaxLogicalAddress) {
         Fail(
-            "MDVWB logical address must be in range 1..63, got " +
+            "MDVWB logical address must be in range 0..63, got " +
             std::to_string(logicalAddress));
     }
 }
@@ -31,12 +30,11 @@ void ValidateProfileLogicalRange(
     std::uint8_t logicalMax,
     std::string_view typeName)
 {
-    if (logicalMin < kMinLogicalAddress ||
-        logicalMax > kMaxLogicalAddress ||
+    if (logicalMax > kMaxLogicalAddress ||
         logicalMin > logicalMax) {
         Fail(
             "profile " + std::string(typeName) +
-            " logical range must be inside 1..63");
+            " logical range must be inside 0..63");
     }
 }
 
@@ -85,6 +83,7 @@ std::optional<ResolvedDeviceAddress> ResolveLogicalAddress(
                     addressing.logicalMin,
                     addressing.logicalMax,
                     "direct_slave");
+                if (addressing.logicalMin == 0) Fail("direct_slave range must be inside 1..63");
 
                 if (!InRange(
                         logicalAddress,
@@ -201,9 +200,15 @@ std::optional<ResolvedRegisterLocation> ResolveRegisterLocation(
         return std::nullopt;
     }
 
+    std::uint32_t offset = device->registerOffset;
+    if (baseLocation.registerStride) {
+        const auto* stride = std::get_if<FixedSlaveStrideAddressing>(&profile.addressing);
+        if (!stride) Fail("location registerStride requires fixed_slave_stride");
+        offset = static_cast<std::uint32_t>(logicalAddress - stride->firstLogicalAddress) * *baseLocation.registerStride;
+    }
     const auto effective =
         static_cast<std::uint32_t>(baseLocation.address) +
-        static_cast<std::uint32_t>(device->registerOffset);
+        offset;
 
     if (effective >
         std::numeric_limits<std::uint16_t>::max()) {

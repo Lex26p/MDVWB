@@ -82,10 +82,16 @@ inline void ValidateResolvedRegisterRange(
             std::string(description));
     }
 
+    auto maximumOffset = MaximumRegisterOffset(profile.addressing);
+    if (location.registerStride) {
+        const auto* stride = std::get_if<FixedSlaveStrideAddressing>(&profile.addressing);
+        if (!stride) throw std::invalid_argument("location registerStride requires fixed_slave_stride");
+        maximumOffset = static_cast<std::uint32_t>(stride->logicalMax - stride->firstLogicalAddress) * *location.registerStride;
+    }
     const auto lastAddress =
         static_cast<std::uint64_t>(location.address) +
         static_cast<std::uint64_t>(
-            MaximumRegisterOffset(profile.addressing)) +
+            maximumOffset) +
         static_cast<std::uint64_t>(quantity) - 1U;
 
     if (lastAddress >
@@ -125,7 +131,7 @@ inline void ValidateResolvedRegisterRange(
     const auto point = profile.points.find(pointName);
     return point != profile.points.end() &&
         point->second.read.has_value() &&
-        point->second.read->space == RegisterSpace::HoldingRegister &&
+        IsReadableSpace(point->second.read->space) &&
         point->second.write.has_value() &&
         point->second.write->space == RegisterSpace::HoldingRegister;
 }
@@ -136,11 +142,11 @@ inline void ValidateResolvedRegisterRange(
 // must call this boundary before exposing or accepting a profile.
 inline void ValidateModbusRuntimeProfile(const ModbusProfile& profile)
 {
-    if (profile.probe.read.space != RegisterSpace::HoldingRegister) {
+    if (!IsReadableSpace(profile.probe.read.space)) {
         throw std::invalid_argument(
             "profile '" + profile.id +
             "' uses an unsupported discovery probe data space; "
-            "only holding_register is supported");
+            "supported: holding_register, input_register, discrete_input");
     }
 
     runtime_profile_detail::ValidateResolvedRegisterRange(
@@ -170,8 +176,7 @@ inline void ValidateModbusRuntimeProfile(const ModbusProfile& profile)
                 std::string(descriptor.name) +
                 "' without a read location");
         }
-        if (iterator->second.read->space !=
-            RegisterSpace::HoldingRegister) {
+        if (!IsReadableSpace(iterator->second.read->space)) {
             throw std::invalid_argument(
                 "profile '" + profile.id +
                 "' uses an unsupported read data space for semantic point '" +
@@ -209,6 +214,37 @@ inline void ValidateModbusRuntimeProfile(const ModbusProfile& profile)
         throw std::invalid_argument(
             "profile '" + profile.id +
             "' exposes no readable semantic points");
+    }
+
+    if (profile.writeBlock) {
+        const auto& block = *profile.writeBlock;
+        if (!std::holds_alternative<FixedSlaveStrideAddressing>(profile.addressing) ||
+            block.snapshot.space != RegisterSpace::InputRegister ||
+            block.write.space != RegisterSpace::HoldingRegister ||
+            block.write.writeFunction != WriteFunction::WriteMultipleRegisters ||
+            block.fields.empty() || block.fields.size() > 123 ||
+            block.snapshotQuantity == 0 || block.snapshotQuantity > 125 ||
+            profile.confirmationTimeoutMs == 0) {
+            throw std::invalid_argument("invalid snapshot writeBlock configuration");
+        }
+        runtime_profile_detail::ValidateResolvedRegisterRange(profile, block.snapshot, block.snapshotQuantity, "write snapshot");
+        runtime_profile_detail::ValidateResolvedRegisterRange(profile, block.write, static_cast<std::uint16_t>(block.fields.size()), "write block");
+        for (const auto& field : block.fields) {
+            if (field.sourceOffset >= block.snapshotQuantity || field.tenthsBit7 == !field.rawMap.empty()) {
+                throw std::invalid_argument("invalid writeBlock source/encoding");
+            }
+        }
+        const auto& stride = std::get<FixedSlaveStrideAddressing>(profile.addressing);
+        for (const auto& [name, point] : profile.points) {
+            if (!IsModbusRuntimeWritablePoint(profile, name)) continue;
+            const auto& write = *point.write;
+            if (write.writeFunction != WriteFunction::WriteMultipleRegisters ||
+                write.registerStride.value_or(stride.registerStride) != block.write.registerStride.value_or(stride.registerStride) ||
+                write.address < block.write.address ||
+                write.address >= static_cast<std::uint32_t>(block.write.address) + block.fields.size()) {
+                throw std::invalid_argument("writable point is outside writeBlock");
+            }
+        }
     }
 
 }

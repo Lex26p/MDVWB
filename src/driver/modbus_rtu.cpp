@@ -99,6 +99,16 @@ RtuAdu BuildReadHoldingRegistersRequest(
     std::uint16_t startAddress,
     std::uint16_t quantity)
 {
+    return BuildReadRequest(Function::ReadHoldingRegisters, slaveId, startAddress, quantity);
+}
+
+RtuAdu BuildReadRequest(Function function, std::uint8_t slaveId,
+    std::uint16_t startAddress, std::uint16_t quantity)
+{
+    if (function != Function::ReadHoldingRegisters &&
+        function != Function::ReadInputRegisters && function != Function::ReadDiscreteInputs) {
+        throw std::invalid_argument("unsupported Modbus read function");
+    }
     ValidateSlaveId(slaveId);
     ValidateRegisterRange(startAddress, quantity);
     if (quantity > kMaxReadRegisters) {
@@ -108,7 +118,7 @@ RtuAdu BuildReadHoldingRegistersRequest(
     RtuAdu adu;
     adu.reserve(8);
     adu.push_back(slaveId);
-    adu.push_back(static_cast<std::uint8_t>(Function::ReadHoldingRegisters));
+    adu.push_back(static_cast<std::uint8_t>(function));
     AppendU16(adu, startAddress);
     AppendU16(adu, quantity);
     AppendCrc(adu);
@@ -209,7 +219,22 @@ ParsedResponse ParseResponse(
             "Modbus response function does not match request");
     }
 
-    if (expectedFunction == Function::ReadHoldingRegisters) {
+    if (expectedFunction == Function::ReadDiscreteInputs) {
+        const auto count = static_cast<std::size_t>(adu[2]);
+        if (count == 0 || count > 16U || adu.size() != count + 5U) {
+            return InvalidResponse(expectedSlaveId, expectedFunction, "invalid FC02 byte count");
+        }
+        ParsedResponse response;
+        response.status = ResponseStatus::Success;
+        response.slaveId = expectedSlaveId;
+        response.function = expectedFunction;
+        for (std::size_t i = 0; i < count * 8U; ++i) {
+            response.registers.push_back((adu[3U + i / 8U] >> (i % 8U)) & 1U);
+        }
+        return response;
+    }
+    if (expectedFunction == Function::ReadHoldingRegisters ||
+        expectedFunction == Function::ReadInputRegisters) {
         const auto byteCount = static_cast<std::size_t>(adu[2]);
         if (byteCount == 0 || (byteCount % 2U) != 0U) {
             return InvalidResponse(
@@ -294,10 +319,14 @@ std::optional<RtuAdu> ResponseCollector::Push(std::uint8_t byte)
     if (buffer_.size() == 2) {
         const auto function = buffer_[1];
         const auto normal =
+            function == static_cast<std::uint8_t>(Function::ReadDiscreteInputs) ||
+            function == static_cast<std::uint8_t>(Function::ReadInputRegisters) ||
             function == static_cast<std::uint8_t>(Function::ReadHoldingRegisters) ||
             function == static_cast<std::uint8_t>(Function::WriteSingleRegister) ||
             function == static_cast<std::uint8_t>(Function::WriteMultipleRegisters);
         const auto exception =
+            function == (static_cast<std::uint8_t>(Function::ReadDiscreteInputs) | 0x80U) ||
+            function == (static_cast<std::uint8_t>(Function::ReadInputRegisters) | 0x80U) ||
             function == (static_cast<std::uint8_t>(Function::ReadHoldingRegisters) | 0x80U) ||
             function == (static_cast<std::uint8_t>(Function::WriteSingleRegister) | 0x80U) ||
             function == (static_cast<std::uint8_t>(Function::WriteMultipleRegisters) | 0x80U);
@@ -342,7 +371,9 @@ std::optional<std::size_t> ResponseCollector::ExpectedSize() const noexcept
         function == static_cast<std::uint8_t>(Function::WriteMultipleRegisters)) {
         return 8U;
     }
-    if (function == static_cast<std::uint8_t>(Function::ReadHoldingRegisters)) {
+    if (function == static_cast<std::uint8_t>(Function::ReadHoldingRegisters) ||
+        function == static_cast<std::uint8_t>(Function::ReadInputRegisters) ||
+        function == static_cast<std::uint8_t>(Function::ReadDiscreteInputs)) {
         if (buffer_.size() < 3) {
             return std::nullopt;
         }

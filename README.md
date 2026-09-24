@@ -53,7 +53,8 @@ Important invariants:
 - one driver process owns exactly one serial port;
 - bus count is not hardcoded;
 - separate buses operate independently;
-- MDV uses individual addresses `0..63`; Modbus uses logical addresses `1..63`;
+- MDV uses individual addresses `0..63`; Modbus uses the selected profile's
+  logical range (`1..63` for existing profiles, `0..63` for GW3-MOD);
 - protocol broadcast is not used;
 - MDV factual controls are updated only from valid C0 reads;
 - the current Modbus runtime performs confirmed writes for `Power`, `Mode`,
@@ -70,7 +71,7 @@ Important invariants:
   `150..60000 ms`, while Modbus RTU defaults to `300 ms` and accepts
   `150..60000 ms`; the Modbus value also limits writes and confirmations.
 
-Two Modbus profiles are shipped:
+Three Modbus profiles are shipped:
 
 - `vrf_add_controller` uses a fixed Slave ID and repeated register blocks. Its
   table-derived Mode, FanSpeed, integer SetTemperature and RoomTemperature
@@ -81,6 +82,11 @@ Two Modbus profiles are shipped:
   raw tenths and whole-degree setpoints `16..34 °C`. Its exact register map is
   documented in `docs/modbus/THERMOSTAT_PROTOCOL.md` and still requires the
   listed Wiren Board hardware smoke test.
+- `gw3_mod` uses GW3-MOD gateway Slave 1, logical IDU addresses `0..63`,
+  FC02/FC04 factual reads and snapshot-preserving FC16 writes. Three UI speeds
+  write native 1/4/7; Auto remains available. See
+  [GW3-MOD protocol and field checks](docs/modbus/GW3_MOD_PROTOCOL.md), including
+  delayed confirmation and safe-write limitations. Hardware validation is pending.
 
 ## Runtime files
 

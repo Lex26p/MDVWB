@@ -31,6 +31,7 @@ constexpr std::array<std::string_view, 8> kSemanticPointNames{
 
 struct PhysicalReadKey {
     std::uint8_t slaveId = 1;
+    RegisterSpace space = RegisterSpace::HoldingRegister;
     std::uint16_t address = 0;
 
     auto operator<=>(const PhysicalReadKey&) const = default;
@@ -63,7 +64,7 @@ struct PhysicalReadKey {
             "' does not resolve semantic point '" + std::string(pointName) +
             "' for logical address " + std::to_string(logicalAddress));
     }
-    if (location->space != RegisterSpace::HoldingRegister) {
+    if (!IsReadableSpace(location->space)) {
         throw std::invalid_argument(
             "profile '" + profile.id +
             "' uses an unsupported read data space for semantic point '" +
@@ -82,6 +83,7 @@ void BuildSemanticBatches(ModbusDevicePollPlan& device)
         }
         uniqueLocations.push_back(PhysicalReadKey{
             .slaveId = read.location.slaveId,
+            .space = read.location.space,
             .address = read.location.address,
         });
     }
@@ -99,6 +101,7 @@ void BuildSemanticBatches(ModbusDevicePollPlan& device)
                 static_cast<std::uint32_t>(previous.startAddress) +
                 static_cast<std::uint32_t>(previous.quantity) - 1U;
             extend = previous.slaveId == location.slaveId &&
+                previous.space == location.space &&
                 previousLast < std::numeric_limits<std::uint16_t>::max() &&
                 location.address == previousLast + 1U &&
                 previous.quantity < 125U;
@@ -117,6 +120,7 @@ void BuildSemanticBatches(ModbusDevicePollPlan& device)
                 .slaveId = location.slaveId,
                 .startAddress = location.address,
                 .quantity = 1U,
+                .space = location.space,
             });
             placement.emplace(
                 location,
@@ -130,6 +134,7 @@ void BuildSemanticBatches(ModbusDevicePollPlan& device)
         }
         const auto iterator = placement.find(PhysicalReadKey{
             .slaveId = read.location.slaveId,
+            .space = read.location.space,
             .address = read.location.address,
         });
         if (iterator == placement.end()) {
@@ -167,10 +172,9 @@ ModbusPollPlan BuildModbusPollPlan(
     std::set<std::uint8_t> unique;
 
     for (const std::uint8_t logicalAddress : logicalAddresses) {
-        if (logicalAddress < kMinLogicalAddress ||
-            logicalAddress > kMaxLogicalAddress) {
+        if (logicalAddress > kMaxLogicalAddress) {
             throw std::invalid_argument(
-                "Modbus logical address must be in range 1..63");
+                "Modbus logical address must be in range 0..63");
         }
         if (!unique.insert(logicalAddress).second) {
             throw std::invalid_argument(
@@ -178,9 +182,10 @@ ModbusPollPlan BuildModbusPollPlan(
                 std::to_string(logicalAddress));
         }
 
-        const auto& candidate =
-            scanPlan[static_cast<std::size_t>(logicalAddress - 1U)];
-        if (!candidate.probe.has_value()) {
+        const auto candidate = std::find_if(scanPlan.begin(), scanPlan.end(), [logicalAddress](const auto& item) {
+            return item.logicalAddress == logicalAddress;
+        });
+        if (candidate == scanPlan.end() || !candidate->probe.has_value()) {
             throw std::invalid_argument(
                 "profile '" + profile.id +
                 "' does not support configured logical address " +
@@ -189,7 +194,7 @@ ModbusPollPlan BuildModbusPollPlan(
 
         ModbusDevicePollPlan device;
         device.logicalAddress = logicalAddress;
-        device.probe = *candidate.probe;
+        device.probe = *candidate->probe;
 
         for (const std::string_view pointName : kSemanticPointNames) {
             if (!IsSemanticPointEnabled(profile, pointName)) {

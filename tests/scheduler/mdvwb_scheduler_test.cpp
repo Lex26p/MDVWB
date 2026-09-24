@@ -614,6 +614,30 @@ void TestConfirmationTimeout()
         "result should report timeout");
 }
 
+void TestGatewayConfirmationTimeout()
+{
+    TestEnvironment environment;
+    environment.WriteBuses(R"json({"version":1,"buses":[{
+      "id":1,"enabled":true,"protocol":"modbus_rtu","port":"/dev/ttyMOD2",
+      "modbus":{"profileId":"gw3_mod","baudRate":9600,"dataBits":8,"parity":"none","stopBits":1},
+      "addresses":[1,2]}]})json");
+    FakeClock clock;
+    FakeMqttClient mqtt;
+    SchedulerService service(mqtt, environment.paths, clock);
+    service.Start();
+    service.Tick();
+    Require(service.HasActiveRun(), "GW3 schedule did not start");
+    clock.AdvanceSeconds(11);
+    service.Tick();
+    Require(service.HasActiveRun(), "GW3 schedule used the short default timeout");
+    clock.AdvanceSeconds(320);
+    service.Tick();
+    Require(!service.HasActiveRun(), "GW3 schedule exceeded profile timeout");
+    const auto* result = mqtt.LastTopic("/mdvwb/schedules/workday-start/result");
+    Require(result && result->payload.find("\"state\":\"timeout\"") != std::string::npos,
+            "GW3 confirmation timeout was not reported");
+}
+
 
 void TestConfigurationMessageReloadsDiskInsteadOfPayload()
 {
@@ -823,6 +847,7 @@ int main()
         TestTargetGoingOfflineFailsActiveRun();
         TestAutomaticRunIsNotRepeatedAfterRestart();
         TestConfirmationTimeout();
+        TestGatewayConfirmationTimeout();
         TestConfigurationMessageReloadsDiskInsteadOfPayload();
         TestInvalidReloadKeepsLastKnownGoodConfiguration();
         TestQueuedRunIsRejectedAfterConfigurationRevisionChanges();

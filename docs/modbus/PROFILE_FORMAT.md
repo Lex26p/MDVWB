@@ -18,12 +18,12 @@ A normal new Modbus air-conditioner should be added by creating and validating a
 A profile defines:
 
 - serial communication defaults;
-- how logical MDVWB addresses `1..63` map to Modbus Slave IDs and register offsets;
+- how logical MDVWB addresses within `0..63` map to Modbus Slave IDs and register offsets;
 - which Modbus points are read and written;
 - how raw values are converted to physical/semantic values;
 - Power/Mode/FanSpeed mappings;
 - supported capabilities;
-- a safe read-only probe used when scanning logical addresses `1..63`.
+- a safe read-only probe used when scanning logical addresses (including zero when allowed).
 
 Executable schema-v1 profiles are JSON files.
 
@@ -82,10 +82,12 @@ The same profile may be used by multiple buses.
 For Modbus air-conditioners, MDVWB uses an artificial logical address range:
 
 ```text
-1..63
+0..63
 ```
 
-This is not the Modbus protocol limit.
+This is not the Modbus protocol limit. `direct_slave` still requires `1..63`:
+Slave 0 broadcasts are forbidden. Fixed-slave and explicit mappings may expose
+logical zero while resolving it to a nonzero Slave ID.
 
 The selected profile must be able to resolve every candidate logical address from `1` through `63` during a scan, even if only a few devices are currently configured for normal polling.
 
@@ -98,7 +100,44 @@ Scan candidates:
 1, 2, 3, 4, 5, ... 63
 ```
 
-A profile therefore needs a deterministic address resolver for the whole `1..63` range.
+A profile therefore needs a deterministic resolver. The scan includes candidate
+0 if `logicalMin` is 0; candidates outside the profile range are skipped.
+
+### Implemented gateway extensions
+
+The optional schema-v1 fields below are implemented (not conceptual). Old
+profiles that omit them retain their previous behavior. Older binaries that
+do not recognize these fields must be upgraded together with the profile.
+
+- Reads: `holding_register` FC03, `input_register` FC04 and `discrete_input`
+  FC02. Runtime requests are bounded to 125 values, including discrete bits.
+  Batching never combines different data spaces. `coil` remains unsupported.
+- `RegisterLocation.registerStride`: uint16 override of the profile stride,
+  only with `fixed_slave_stride`; the profile's first-address anchor is unchanged.
+- Numeric point `writeTransform`: separate scale/offset for inverse write
+  conversion, defaulting to `transform`. Write limits do not clamp factual reads.
+- Mode/FanSpeed `readMap` may map a raw value to `unavailable`; optional retained
+  state is cleared. This token is not an allowed command or UI selection.
+- Root `confirmationTimeoutMs`: integer `0..600000`, default 0. Zero retains
+  immediate confirmation/retry. A positive value waits for ordinary factual
+  polls after ACK, without rewriting merely because the gateway still reports
+  old state. Manager exposes it in the UI catalog; operator UI and scheduler
+  extend their default confirmation deadline when needed.
+- Root `writeBlock`: fixed-slave snapshot-preserving FC16 write. Required keys:
+  `snapshot` (Input Register location), `snapshotQuantity` (1..125), `write`
+  (Holding Register location, FC16), `fields` (1..123 entries). Requires a positive
+  confirmation timeout. All enabled writable points must lie in this block
+  and use the same effective write stride.
+- Each block field has `sourceOffset` into the snapshot and exactly one of
+  `rawMap` (decimal raw keys to uint16 write values) or `encoding: "tenths_bit7"`.
+  The latter preserves 1..100 °C in 0.5-degree steps as integer low bits plus
+  half-degree bit 7. Unknown neighbor values reject the write, not default it.
+  Pending point values override their slots. An unchanged Power slot uses a
+  fresh power read to preserve Off even if the mode register retains an active mode.
+
+See [GW3-MOD](GW3_MOD_PROTOCOL.md) and `profiles/modbus/gw3_mod.json` for the
+concrete mapping. The older `1..63` examples below remain valid for profiles
+whose minimum is 1.
 
 ## 4. Register address notation
 
@@ -236,7 +275,8 @@ effective register = point address + registerOffset
 
 This simple model covers the two main equipment types already identified.
 
-Milestone 5 implements this resolver. Invalid MDVWB addresses outside `1..63` are errors. A valid `1..63` candidate that is outside the profile's declared logical range is treated as unsupported, not remapped.
+The resolver rejects logical addresses outside `0..63`. A candidate outside
+the profile's declared logical range is unsupported, not remapped.
 
 For effective point/probe locations the resolver checks:
 
@@ -475,7 +515,7 @@ field preserves `write_multiple_registers`.
 
 FC06 success must echo the requested Slave ID, register address and raw value.
 FC10 success must echo the requested start address and quantity. Neither write
-response is factual state; the runtime still requires a matching FC03
+response is factual state; the runtime still requires a matching profile-driven
 read-back.
 
 ## 15. Read-only point
@@ -1146,7 +1186,7 @@ Minimum checks:
 - supported `schemaVersion`;
 - unique valid `id`;
 - `registerAddressing == "pdu_zero_based"`;
-- logical range does not exceed `1..63`;
+- logical range does not exceed `0..63` (direct_slave excludes zero);
 - valid Slave IDs;
 - valid PDU register addresses;
 - known data spaces;

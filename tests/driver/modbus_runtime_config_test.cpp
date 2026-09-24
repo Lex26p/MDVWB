@@ -79,7 +79,7 @@ public:
         profile.replace(
             position,
             holding.size(),
-            R"json("space": "input_register")json");
+            R"json("space": "coil")json");
 
         std::ofstream output(
             path_ / "vrf_add_controller.json",
@@ -283,13 +283,13 @@ void TestPollPeriodIsGlobalOperationLowerBound()
 void TestInvalidEnvironmentRejected()
 {
     auto environment = ValidEnvironment();
-    environment["MDVWB_ADDRESSES"] = "0,1";
+    environment["MDVWB_ADDRESSES"] = "64,1";
     ExpectInvalid(
         [&] {
             static_cast<void>(mdv::modbus::ParseModbusRuntimeConfig(
                 Lookup(environment)));
         },
-        "range 1..63");
+        "range 0..63");
 
     environment = ValidEnvironment();
     environment["MDVWB_ADDRESSES"] = "1,1";

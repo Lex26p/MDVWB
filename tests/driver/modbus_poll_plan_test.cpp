@@ -205,7 +205,7 @@ void TestValidationRemainsTrafficIndependent()
 
     auto unsupported = profile;
     unsupported.points.at("power").read->space =
-        mdv::modbus::RegisterSpace::InputRegister;
+        mdv::modbus::RegisterSpace::Coil;
     RequireInvalid(
         [&] {
             static_cast<void>(

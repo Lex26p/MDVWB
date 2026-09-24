@@ -333,7 +333,8 @@ void ApplySemanticRead(
         if (text == nullptr) {
             Fail("mode must decode through an enum mapping");
         }
-        state.mode = ParseMode(*text);
+        if (*text == "unavailable") state.mode.reset();
+        else state.mode = ParseMode(*text);
         return;
     }
     if (pointName == "fanSpeed") {
@@ -341,7 +342,8 @@ void ApplySemanticRead(
         if (text == nullptr) {
             Fail("fanSpeed must decode through an enum mapping");
         }
-        state.fanSpeed = ParseFanSpeed(*text);
+        if (*text == "unavailable") state.fanSpeed.reset();
+        else state.fanSpeed = ParseFanSpeed(*text);
         return;
     }
     if (pointName == "setTemperature") {

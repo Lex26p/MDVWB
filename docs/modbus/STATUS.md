@@ -1,6 +1,6 @@
 # Modbus implementation status
 
-> Last updated: 2026-08-24
+> Last updated: 2026-09-24
 >
 > This file records what has actually been completed or prepared for the Modbus work.
 >
@@ -8,7 +8,12 @@
 
 ## Current stage
 
-**The first profile-driven Modbus RTU software stack is implemented and passes the complete local regression suite. Real-hardware release validation and a second independent equipment profile remain open.**
+**The profile-driven Modbus RTU stack includes VRF Add Controller, Thermostat
+and GW3-MOD. GW3-MOD adds FC02/FC04 reads, address zero, independent register
+strides and snapshot-preserving FC16 writes with delayed confirmation.
+Real-hardware validation of GW3-MOD remains open.**
+
+See [GW3-MOD protocol and limitations](GW3_MOD_PROTOCOL.md) before hardware testing.
 
 Modbus RTU framing/serial transport, strict schema-v1 profile loading, semantic conversion, logical-address resolution, the first production equipment profile, protocol-aware bus/service configuration, live polling, confirmed Power/Mode/FanSpeed/integer-SetTemperature writes, MQTT integration, retained UI profile catalog, capability-aware operator/schedule control, safe discovery of logical addresses `1..63`, resolved poll plans and conservative transaction optimization are implemented.
 
@@ -53,7 +58,7 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] Enum mapping
 - [x] Capabilities
 - [x] Logical address resolver
-- [x] Scan of logical addresses `1..63`
+- [x] Scan of logical addresses `1..63`, including `0` for profiles that allow it
 - [x] First production Modbus equipment profile
 - [x] Manager/bus configuration integration
 - [x] MQTT integration
@@ -65,7 +70,7 @@ The documentation baseline was committed and verified before runtime refactoring
 - [x] Web model tests in the validation workflow
 - [ ] Real hardware validation
 - [x] Modbus runtime packaging/deployment handoff
-- [ ] Second independent profile proving architecture reuse
+- [x] Additional independent profiles: Thermostat and GW3-MOD
 
 ## Decisions already agreed
 

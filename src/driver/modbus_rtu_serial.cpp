@@ -40,8 +40,10 @@ struct RequestMetadata {
 
     Function function;
     switch (request[1]) {
+    case static_cast<std::uint8_t>(Function::ReadDiscreteInputs):
+    case static_cast<std::uint8_t>(Function::ReadInputRegisters):
     case static_cast<std::uint8_t>(Function::ReadHoldingRegisters):
-        function = Function::ReadHoldingRegisters;
+        function = static_cast<Function>(request[1]);
         if (request.size() != 8) {
             error = "Modbus FC03 request must contain exactly 8 bytes";
             return std::nullopt;
